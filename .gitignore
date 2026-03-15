@@ -9,6 +9,9 @@ test-*.js
 .paperclip/
 .claude/
 
+# Screenshots (captured at runtime)
+.screenshots/
+
 # Node
 node_modules/
 

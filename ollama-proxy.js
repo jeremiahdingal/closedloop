@@ -491,30 +491,45 @@ async function createPullRequest(issueId) {
       console.error(`[proxy] Could not checkout ${branchName} to add screenshots`);
     }
 
-    // Commit screenshots to the branch if they exist
+    // Collect screenshots from the per-issue dir (outside workspace, git-safe)
     const screenshotFiles = [];
-    const screenshotDir = path.join(WORKSPACE, ".screenshots");
+    const screenshotDir = path.join(SCREENSHOT_BASE, issueId.slice(0, 8));
+    let pngs = [];
     if (fs.existsSync(screenshotDir)) {
-      const pngs = fs.readdirSync(screenshotDir).filter(f => f.endsWith(".png"));
-      if (pngs.length > 0) {
-        // Copy screenshots into a PR-visible directory
-        const prScreenshotDir = path.join(WORKSPACE, "docs", "screenshots", identifier.toLowerCase());
-        fs.mkdirSync(prScreenshotDir, { recursive: true });
-        for (const png of pngs) {
-          fs.copyFileSync(path.join(screenshotDir, png), path.join(prScreenshotDir, png));
-          screenshotFiles.push(`docs/screenshots/${identifier.toLowerCase()}/${png}`);
+      pngs = fs.readdirSync(screenshotDir).filter(f => f.endsWith(".png"));
+    }
+
+    // Fallback: if no screenshots exist, capture fresh ones now
+    if (pngs.length === 0) {
+      console.log(`[proxy] No existing screenshots for ${identifier} — capturing fresh ones for PR...`);
+      try {
+        await captureScreenshots(issueId);
+        if (fs.existsSync(screenshotDir)) {
+          pngs = fs.readdirSync(screenshotDir).filter(f => f.endsWith(".png"));
         }
-        // Stage and commit
-        for (const f of screenshotFiles) {
-          execSync(`git add "${f}"`, opts);
-        }
-        try {
-          execSync(`git commit -m "${identifier}: add Artist screenshots"`, opts);
-          execSync(`git push origin ${branchName}`, { ...opts, timeout: 60000 });
-          console.log(`[proxy] Committed ${screenshotFiles.length} screenshots to ${branchName}`);
-        } catch (err) {
-          console.log(`[proxy] Screenshot commit/push note: ${err.message}`);
-        }
+      } catch (err) {
+        console.error(`[proxy] Fallback screenshot capture failed:`, err.message);
+      }
+    }
+
+    if (pngs.length > 0) {
+      // Copy screenshots into a PR-visible directory on the branch
+      const prScreenshotDir = path.join(WORKSPACE, "docs", "screenshots", identifier.toLowerCase());
+      fs.mkdirSync(prScreenshotDir, { recursive: true });
+      for (const png of pngs) {
+        fs.copyFileSync(path.join(screenshotDir, png), path.join(prScreenshotDir, png));
+        screenshotFiles.push(`docs/screenshots/${identifier.toLowerCase()}/${png}`);
+      }
+      // Stage and commit
+      for (const f of screenshotFiles) {
+        execSync(`git add "${f}"`, opts);
+      }
+      try {
+        execSync(`git commit -m "${identifier}: add Artist screenshots"`, opts);
+        execSync(`git push origin ${branchName}`, { ...opts, timeout: 60000 });
+        console.log(`[proxy] Committed ${screenshotFiles.length} screenshots to ${branchName}`);
+      } catch (err) {
+        console.log(`[proxy] Screenshot commit/push note: ${err.message}`);
       }
     }
 
@@ -676,7 +691,9 @@ const SCREENSHOT_ROUTES = [
   "/users",
 ];
 
-const SCREENSHOT_DIR = path.join(WORKSPACE, ".screenshots");
+// Screenshots stored OUTSIDE workspace so git operations can't wipe them
+const SCREENSHOT_BASE = path.join(__dirname, ".screenshots");
+
 
 /**
  * Start the Next.js dev server, take screenshots of all routes, return base64 images.
@@ -684,7 +701,8 @@ const SCREENSHOT_DIR = path.join(WORKSPACE, ".screenshots");
 async function captureScreenshots(issueId) {
   const { spawn } = require("child_process");
 
-  // Ensure screenshot dir exists
+  // Per-issue screenshot dir (outside workspace, git-safe)
+  const SCREENSHOT_DIR = path.join(SCREENSHOT_BASE, issueId.slice(0, 8));
   fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
   // Check if dev server is already running on port 3000
@@ -1112,6 +1130,15 @@ function createProxy(proxyPort, ollamaPort) {
 
             // Artist: capture screenshots, run vision analysis, then send back to Local Builder
             if (agentId === AGENTS.artist) {
+              // Switch to feature branch so dev server runs the NEW code
+              try {
+                const artBranch = await getBranchName(issueId);
+                execSync(`git checkout ${artBranch}`, { cwd: WORKSPACE, stdio: "pipe" });
+                console.log(`[proxy] Artist: checked out ${artBranch} for screenshots`);
+              } catch (err) {
+                console.error(`[proxy] Artist: could not checkout feature branch:`, err.message);
+              }
+
               console.log(`[proxy] Artist triggered — capturing screenshots...`);
               const screenshots = await captureScreenshots(issueId);
               const validScreenshots = screenshots.filter(s => !s.error);
@@ -1146,6 +1173,9 @@ function createProxy(proxyPort, ollamaPort) {
                   });
                 } catch {}
               }
+
+              // Switch back to master after Artist is done
+              try { execSync("git checkout master", { cwd: WORKSPACE, stdio: "pipe" }); } catch {}
             }
           } else {
             await postComment(
