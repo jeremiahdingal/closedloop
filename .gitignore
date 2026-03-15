@@ -1,0 +1,17 @@
+# Logs
+*.log
+proxy.log
+
+# Test files
+test-*.js
+
+# Paperclip local data
+.paperclip/
+.claude/
+
+# Node
+node_modules/
+
+# OS
+Thumbs.db
+.DS_Store
