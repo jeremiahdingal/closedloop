@@ -1,5 +1,6 @@
 /**
- * HTTP Proxy Server for Ollama
+ * ClosedLoop HTTP Server
+ * Handles communication between Paperclip agents and Ollama
  */
 
 import * as http from 'http';
@@ -54,7 +55,7 @@ export function createProxy(): http.Server {
       const assignedIssueId = await findAssignedIssue(agentId);
       if (assignedIssueId) {
         issueId = assignedIssueId;
-        console.log(`[proxy] Auto-resolved issue for ${agentName}: ${issueId.slice(0, 8)}`);
+        console.log(`[closedloop] Auto-resolved issue for ${agentName}: ${issueId.slice(0, 8)}`);
       }
     }
 
@@ -77,7 +78,7 @@ export function createProxy(): http.Server {
     if (issueId) {
       const issueState = await getIssueDetails(issueId);
       if (issueState && (issueState.status === 'in_review' || issueState.status === 'done' || issueState.status === 'cancelled')) {
-        console.log(`[proxy] Skipping ${agentName} — issue ${issueId.slice(0, 8)} is ${issueState.status}`);
+        console.log(`[closedloop] Skipping ${agentName} — issue ${issueId.slice(0, 8)} is ${issueState.status}`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -167,7 +168,7 @@ export function createProxy(): http.Server {
             // Local Builder: extract code blocks, write files, commit (no PR yet)
             if (agentId === AGENTS['local builder']) {
               if (issueProcessingLock[issueId]) {
-                console.log(`[proxy] Skipping duplicate Local Builder run for ${issueId.slice(0, 8)} (already processing)`);
+                console.log(`[closedloop] Skipping duplicate Local Builder run for ${issueId.slice(0, 8)} (already processing)`);
               } else {
                 issueProcessingLock[issueId] = true;
                 try {
@@ -190,18 +191,18 @@ export function createProxy(): http.Server {
                     }
                     issueBuilderPasses[issueId]++;
                     const pass = issueBuilderPasses[issueId];
-                    console.log(`[proxy] Local Builder wrote ${writtenFiles.length} files (pass ${pass})`);
+                    console.log(`[closedloop] Local Builder wrote ${writtenFiles.length} files (pass ${pass})`);
 
                     // Commit and push (no PR)
                     await commitAndPush(issueId, writtenFiles, fileContents);
 
                     // Send to Reviewer
-                    console.log(`[proxy] Pass ${pass}: Sending to Reviewer...`);
+                    console.log(`[closedloop] Pass ${pass}: Sending to Reviewer...`);
                     try {
                       await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
-                      console.log(`[proxy] Auto-assigned to Reviewer`);
+                      console.log(`[closedloop] Auto-assigned to Reviewer`);
                     } catch (err: any) {
-                      console.error(`[proxy] Failed to trigger Reviewer:`, err.message);
+                      console.error(`[closedloop] Failed to trigger Reviewer:`, err.message);
                     }
                   }
                 } finally {
@@ -216,16 +217,16 @@ export function createProxy(): http.Server {
 
               // After executing bash commands, re-prompt the agent
               if (commandsWereExecuted && agentId !== AGENTS['local builder']) {
-                console.log(`[proxy] Commands executed - re-assigning to ${AGENT_NAMES[agentId] || 'agent'} for follow-up...`);
+                console.log(`[closedloop] Commands executed - re-assigning to ${AGENT_NAMES[agentId] || 'agent'} for follow-up...`);
                 try {
                   const currentIssue = await getIssueDetails(issueId);
                   await patchIssue(issueId, {
                     assigneeAgentId: agentId,
                     description: currentIssue?.description || '',
                   });
-                  console.log(`[proxy] Re-assigned issue ${issueId.slice(0, 8)} to ${AGENT_NAMES[agentId]} for follow-up`);
+                  console.log(`[closedloop] Re-assigned issue ${issueId.slice(0, 8)} to ${AGENT_NAMES[agentId]} for follow-up`);
                 } catch (err: any) {
-                  console.error(`[proxy] Failed to re-assign for follow-up:`, err.message);
+                  console.error(`[closedloop] Failed to re-assign for follow-up:`, err.message);
                 }
               }
             }
@@ -240,31 +241,31 @@ export function createProxy(): http.Server {
                 content.toLowerCase().includes('ready for pr');
 
               if (reviewApproved) {
-                console.log(`[proxy] Reviewer APPROVED changes for ${issueId.slice(0, 8)}`);
+                console.log(`[closedloop] Reviewer APPROVED changes for ${issueId.slice(0, 8)}`);
 
                 // Create PR after reviewer approval
                 try {
                   await createPullRequest(issueId);
-                  console.log(`[proxy] PR created after Reviewer approval`);
+                  console.log(`[closedloop] PR created after Reviewer approval`);
                 } catch (prErr: any) {
-                  console.error(`[proxy] Failed to create PR:`, prErr.message);
+                  console.error(`[closedloop] Failed to create PR:`, prErr.message);
                   await postComment(issueId, null, `_Reviewer approved but PR creation failed: ${prErr.message}_`);
                 }
 
                 // Trigger Artist for visual audit after PR creation
                 try {
                   await patchIssue(issueId, { assigneeAgentId: AGENTS.artist });
-                  console.log(`[proxy] Auto-assigned to Artist for feature recording`);
+                  console.log(`[closedloop] Auto-assigned to Artist for feature recording`);
                 } catch (err: any) {
-                  console.error(`[proxy] Failed to trigger Artist:`, err.message);
+                  console.error(`[closedloop] Failed to trigger Artist:`, err.message);
                 }
               } else {
-                console.log(`[proxy] Reviewer found issues - sending back to Local Builder`);
+                console.log(`[closedloop] Reviewer found issues - sending back to Local Builder`);
                 try {
                   await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
-                  console.log(`[proxy] Sent back to Local Builder for fixes`);
+                  console.log(`[closedloop] Sent back to Local Builder for fixes`);
                 } catch (err: any) {
-                  console.error(`[proxy] Failed to send back to Local Builder:`, err.message);
+                  console.error(`[closedloop] Failed to send back to Local Builder:`, err.message);
                 }
               }
             }
@@ -286,7 +287,7 @@ export function createProxy(): http.Server {
   });
 
   server.listen(proxyPort, '127.0.0.1', () => {
-    console.log(`[proxy] :${proxyPort} -> ollama:${ollamaPort}`);
+    console.log(`[closedloop] :${proxyPort} -> ollama:${ollamaPort}`);
   });
 
   return server;
@@ -340,7 +341,7 @@ export async function checkAssignedIssues(): Promise<void> {
         if (Date.now() - lastRun < DELEGATION_COOLDOWN_MS) continue;
       }
 
-      console.log(`[proxy] Background check: ${agentName} has assigned issue ${issue.identifier || issue.id.slice(0, 8)}`);
+      console.log(`[closedloop] Background check: ${agentName} has assigned issue ${issue.identifier || issue.id.slice(0, 8)}`);
 
       try {
         await patchIssue(issue.id, {
@@ -348,9 +349,9 @@ export async function checkAssignedIssues(): Promise<void> {
           priority: issue.priority || 'medium',
         });
         recentAgentRuns.set(recentRunKey, Date.now());
-        console.log(`[proxy] Triggered wakeup for ${agentName} on ${issue.identifier || issue.id.slice(0, 8)}`);
+        console.log(`[closedloop] Triggered wakeup for ${agentName} on ${issue.identifier || issue.id.slice(0, 8)}`);
       } catch (err: any) {
-        console.log(`[proxy] Failed to trigger ${agentName}: ${err.message}`);
+        console.log(`[closedloop] Failed to trigger ${agentName}: ${err.message}`);
       }
     }
   } catch (err: any) {
@@ -362,5 +363,5 @@ export async function checkAssignedIssues(): Promise<void> {
 export async function initializeRAG(): Promise<void> {
   await ragIndexer.initialize();
   setRAGIndexer(ragIndexer);
-  console.log('[proxy] RAG index initialized');
+  console.log('[closedloop] RAG index initialized');
 }

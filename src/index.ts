@@ -1,7 +1,7 @@
 /**
- * Ollama Proxy for Paperclip (v5) - TypeScript Refactored Version
+ * ClosedLoop - Autonomous AI Agent Loop
  *
- * Main entry point. Initializes RAG indexer and starts the proxy server.
+ * Main entry point. Initializes RAG indexer and starts the ClosedLoop server.
  */
 
 import { createProxy, checkAssignedIssues, initializeRAG } from './proxy-server';
@@ -10,11 +10,11 @@ import { getConfig } from './config';
 
 // Load configuration
 const config = getConfig();
-console.log(`[proxy] Starting Ollama Proxy for ${config.project.name}`);
+console.log(`[closedloop] Starting ClosedLoop for ${config.project.name}`);
 
 // Initialize RAG indexer
 initializeRAG().catch((err) => {
-  console.error('[proxy] Failed to initialize RAG:', err.message);
+  console.error('[closedloop] Failed to initialize RAG:', err.message);
 });
 
 // Start the proxy server
@@ -30,4 +30,4 @@ setTimeout(() => {
   checkAssignedIssues().catch(() => {});
 }, 5000);
 
-console.log('[proxy] All proxies started.');
+console.log('[closedloop] ClosedLoop started.');

@@ -1,11 +1,18 @@
-# TypeScript Refactoring Summary
+# ClosedLoop - TypeScript Refactoring Summary
 
 **Date:** March 17, 2026
 **Status:** Complete ✓
 
 ## Overview
 
-The monolithic `ollama-proxy.js` (2,437 lines) has been successfully refactored into a modular TypeScript codebase with the RAG (Retrieval-Augmented Generation) layer integrated.
+The monolithic `ollama-proxy.js` (2,437 lines) has been successfully refactored into a modular TypeScript codebase named **ClosedLoop** with the RAG (Retrieval-Augmented Generation) layer integrated.
+
+## Project Name
+
+**ClosedLoop** - Named for the closed-loop autonomous AI agent workflow that:
+1. Plans → Builds → Reviews → Deploys → Audits
+2. Automatically loops on feedback
+3. Uses RAG to ground decisions in existing codebase
 
 ## New File Structure
 
@@ -24,7 +31,7 @@ src/
 ├── bash-executor.ts      # Bash command execution (111 lines)
 ├── delegation.ts         # Delegation detection (84 lines)
 ├── artist-recorder.ts    # Playwright feature recorder (920 lines)
-└── proxy-server.ts       # HTTP proxy server (367 lines)
+└── proxy-server.ts       # HTTP server (367 lines)
 
 Total: ~3,014 lines (but properly partitioned!)
 ```
@@ -46,7 +53,7 @@ Total: ~3,014 lines (but properly partitioned!)
 The RAG layer is now fully integrated:
 
 **`rag-indexer.ts`** - ChromaDB vector indexing:
--Indexes entire codebase structure
+- Indexes entire codebase structure
 - Extracts exports, purposes, and content
 - Supports semantic search
 
@@ -60,7 +67,7 @@ The RAG layer is now fully integrated:
 # Build the RAG index (run once or when codebase changes)
 npm run rag-index
 
-# Start the proxy (RAG auto-initializes)
+# Start ClosedLoop
 npm start
 ```
 
@@ -83,7 +90,7 @@ npm run rag-index
 
 | Module | Purpose |
 |--------|---------|
-| `index.ts` | Entry point, initializes RAG, starts proxy |
+| `index.ts` | Entry point, initializes RAG, starts ClosedLoop |
 | `types.ts` | All TypeScript interfaces |
 | `config.ts` | Configuration loading from `.paperclip/project.json` |
 | `paperclip-api.ts` | Paperclip HTTP API client functions |
@@ -96,7 +103,7 @@ npm run rag-index
 | `bash-executor.ts` | Execute bash commands from agents |
 | `delegation.ts` | Detect and handle agent delegation |
 | `artist-recorder.ts` | Playwright feature recording |
-| `proxy-server.ts` | HTTP proxy server logic |
+| `proxy-server.ts` | HTTP server logic |
 
 ## RAG Implementation Details
 
@@ -133,7 +140,7 @@ When Local Builder receives an issue:
 ## Migration Notes
 
 ### Backwards Compatibility
-- The old `ollama-proxy.js` is still present (not deleted)
+- The old `ollama-proxy.js` is preserved as `ollama-proxy-backup.js`
 - New TypeScript version compiles to `dist/`
 - To switch: stop old proxy, start new one
 
@@ -143,6 +150,8 @@ No changes needed - uses existing `.paperclip/project.json`
 ### Dependencies
 ```json
 {
+  "name": "closedloop",
+  "version": "1.0.0",
   "dependencies": {
     "chromadb": "^1.9.4"
   },
@@ -191,12 +200,12 @@ npm run rag-index
 # [RAG] Indexed XXX files total
 ```
 
-### Proxy Test
+### ClosedLoop Start Test
 ```bash
 npm start
-# [proxy] RAG index initialized
-# [proxy] :3201 -> ollama:11434
-# [proxy] All proxies started.
+# [closedloop] RAG index initialized
+# [closedloop] :3201 -> ollama:11434
+# [closedloop] ClosedLoop started.
 ```
 
 ## Code Quality Metrics
@@ -223,3 +232,4 @@ npm start
 
 **Document Version:** 1.0
 **Last Updated:** March 17, 2026
+**Project Name:** ClosedLoop

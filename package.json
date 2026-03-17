@@ -1,7 +1,7 @@
 {
-  "name": "ollama-proxy",
-  "version": "5.0.0",
-  "description": "Ollama proxy for Paperclip agents with RAG support",
+  "name": "closedloop",
+  "version": "1.0.0",
+  "description": "ClosedLoop - Autonomous AI agent loop with RAG-powered code generation",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
