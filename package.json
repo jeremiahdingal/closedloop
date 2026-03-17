@@ -1,0 +1,19 @@
+{
+  "name": "ollama-proxy",
+  "version": "5.0.0",
+  "description": "Ollama proxy for Paperclip agents with RAG support",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "rag-index": "node dist/rag-indexer.js"
+  },
+  "dependencies": {
+    "chromadb": "^1.9.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}
