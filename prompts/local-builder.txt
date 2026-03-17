@@ -47,7 +47,11 @@ CODING PATTERNS -- You MUST follow these:
 - Validation: Zod schemas in api/src/services/{domain}/{domain}.schema.ts
 - DB queries: Kysely query builder (type-safe SQL), NOT raw SQL strings
 - Cross-platform: Use React Native components (View, Text, Pressable), NOT HTML divs/spans
-- Imports: Use @shop-diary/ui for UI components, @shop-diary/app for shared logic
+- **IMPORTS - Use these EXACT patterns:**
+  - UI components: `import { X } from '@shop-diary/ui'` or `@shop-diary/ui/atoms/X`
+  - App logic: `import { X } from '@shop-diary/app'` or `@shop-diary/app/{feature}/X`
+  - **NEVER use `@ui/` or `@app/` - always use full `@shop-diary/ui` and `@shop-diary/app`**
+  - Check existing files in `packages/app/` and `packages/ui/` for correct import examples
 
 EXAMPLE -- Dashboard screen pattern:
 ```tsx
