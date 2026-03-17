@@ -1,19 +1,20 @@
 @echo off
-title Shop Agents Control Panel
+setlocal enabledelayedexpansion
+title ClosedLoop Control Panel
 color 0A
 
 :MENU
 cls
 echo.
 echo  ============================================
-echo    SHOP DIARY v2 - AI Agent Control Panel
+echo    ClosedLoop - AI Agent Control Panel
 echo  ============================================
 echo.
-echo    [1] Start All   (Ollama + Paperclip + Proxy)
+echo    [1] Start All   (Ollama + Paperclip + ClosedLoop)
 echo    [2] Stop All
 echo    [3] Restart All
 echo    [4] Status Check
-echo    [5] View Proxy Logs (live)
+echo    [5] View ClosedLoop Logs (live)
 echo    [6] Wake Agent Manually
 echo    [7] Exit
 echo.
@@ -31,7 +32,7 @@ goto MENU
 :START
 cls
 echo.
-echo  [*] Starting Shop Agents...
+echo  [*] Starting ClosedLoop...
 echo.
 
 :: 1. Ollama
@@ -47,23 +48,25 @@ if %errorlevel%==0 (
 
 :: 2. Paperclip
 echo  [2/3] Starting Paperclip...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":3100 " 2^>nul') do set PPC_PID=%%a
+set PPC_PID=
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3100 "') do set PPC_PID=%%a
 if defined PPC_PID (
-    echo        Already running on :3100 (PID %PPC_PID%).
+    echo        Already running on :3100 ^(PID %PPC_PID%^).
 ) else (
-    start "" /B cmd /c "paperclipai run >C:\Users\dinga\Projects\paperclip\paperclip-out.log 2>&1"
+    start "Paperclip" /MIN cmd /c paperclipai run ^>C:\Users\dinga\Projects\paperclip\paperclip-out.log 2^>^&1
     timeout /t 15 /nobreak >nul
     echo        Started on :3100.
 )
 set PPC_PID=
 
-:: 3. Proxy
-echo  [3/3] Starting Ollama Proxy...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":3201 " 2^>nul') do set PROXY_PID=%%a
+:: 3. ClosedLoop
+echo  [3/3] Starting ClosedLoop...
+set PROXY_PID=
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3201 "') do set PROXY_PID=%%a
 if defined PROXY_PID (
-    echo        Already running on :3201 (PID %PROXY_PID%).
+    echo        Already running on :3201 ^(PID %PROXY_PID%^).
 ) else (
-    powershell -Command "Start-Process -FilePath 'node' -ArgumentList 'ollama-proxy.js' -WorkingDirectory 'C:\Users\dinga\Projects\paperclip' -WindowStyle Hidden -RedirectStandardOutput 'proxy-out.log' -RedirectStandardError 'proxy-err.log'"
+    powershell -Command "Start-Process -FilePath 'node' -ArgumentList 'dist/index.js' -WorkingDirectory 'C:\Users\dinga\Projects\paperclip' -WindowStyle Hidden -RedirectStandardOutput 'closedloop-out.log' -RedirectStandardError 'closedloop-err.log'"
     timeout /t 2 /nobreak >nul
     echo        Started on :3201.
 )
@@ -78,16 +81,16 @@ goto MENU
 :STOP
 cls
 echo.
-echo  [*] Stopping Shop Agents...
+echo  [*] Stopping ClosedLoop...
 echo.
 
-:: Stop Proxy
-echo  [1/3] Stopping Proxy...
+:: Stop ClosedLoop
+echo  [1/3] Stopping ClosedLoop...
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":3201 " 2^>nul') do (
     taskkill /PID %%a /F >nul 2>&1
     echo        Killed PID %%a
 )
-echo        Proxy stopped.
+echo        ClosedLoop stopped.
 
 :: Stop Paperclip
 echo  [2/3] Stopping Paperclip...
@@ -119,15 +122,15 @@ echo.
 echo  [*] Restarting...
 echo.
 
-:: Stop proxy
+:: Stop ClosedLoop
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":3201 " 2^>nul') do taskkill /PID %%a /F >nul 2>&1
-echo  Proxy stopped.
+echo  ClosedLoop stopped.
 timeout /t 2 /nobreak >nul
 
-:: Start proxy
-powershell -Command "Start-Process -FilePath 'node' -ArgumentList 'ollama-proxy.js' -WorkingDirectory 'C:\Users\dinga\Projects\paperclip' -WindowStyle Hidden -RedirectStandardOutput 'proxy-out.log' -RedirectStandardError 'proxy-err.log'"
+:: Start ClosedLoop
+powershell -Command "Start-Process -FilePath 'node' -ArgumentList 'dist/index.js' -WorkingDirectory 'C:\Users\dinga\Projects\paperclip' -WindowStyle Hidden -RedirectStandardOutput 'closedloop-out.log' -RedirectStandardError 'closedloop-err.log'"
 timeout /t 2 /nobreak >nul
-echo  Proxy restarted on :3201.
+echo  ClosedLoop restarted on :3201.
 
 :: Verify all
 echo.
@@ -167,13 +170,13 @@ if %PPC_FOUND%==1 (
     echo    Paperclip  :3100     [STOPPED]
 )
 
-:: Proxy
+:: ClosedLoop
 set PRX_FOUND=0
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":3201 " 2^>nul') do set PRX_FOUND=1
 if %PRX_FOUND%==1 (
-    echo    Proxy      :3201     [RUNNING]
+    echo    ClosedLoop :3201     [RUNNING]
 ) else (
-    echo    Proxy      :3201     [STOPPED]
+    echo    ClosedLoop :3201     [STOPPED]
 )
 
 echo.
@@ -182,7 +185,7 @@ curl -s http://localhost:11434/api/ps 2>nul | node -e "const c=[];process.stdin.
 
 echo.
 echo  ----------- Active Agents ----------
-curl -s "http://127.0.0.1:3100/api/companies/ac5c469b-1f81-4f1f-9061-1dd9033ec831/agents" 2>nul | node -e "const c=[];process.stdin.on('data',d=>c.push(d));process.stdin.on('end',()=>{try{const d=JSON.parse(Buffer.concat(c));const agents=d.agents||d.data||d||[];agents.forEach(a=>{const s=a.status||'idle';const hb=a.runtimeConfig?.heartbeat?.intervalSec||'?';console.log('    '+a.name.padEnd(16)+' ['+s+']  hb:'+hb+'s');});}catch{console.log('    (paperclip down)');}});" 2>nul
+curl -s "http://127.0.0.1:3100/api/companies/ac5c469b-1f81-4f1f-9061-1dd9033ec831/agents" 2>nul | node -e "const c=[];process.stdin.on('data',d=>c.push(d));process.stdin.on('end',()=>{try{const d=JSON.parse(Buffer.concat(c));const agents=d.agents||d.data||d||[];agents.forEach(a=>{const s=a.status||'idle';const hb=a.runtimeConfig?.heartbeat?.heartbeatSec||'?';console.log('    '+a.name.padEnd(16)+' ['+s+']  hb:'+hb+'s');});}catch{console.log('    (paperclip down)');}});" 2>nul
 
 echo.
 echo  ----------- Open Issues ------------
@@ -193,10 +196,10 @@ goto :eof
 :LOGS
 cls
 echo.
-echo  [*] Proxy logs (Ctrl+C to stop)
+echo  [*] ClosedLoop logs (Ctrl+C to stop)
 echo  ============================================
 echo.
-powershell -Command "Get-Content 'C:\Users\dinga\Projects\paperclip\proxy-out.log' -Wait -Tail 50"
+powershell -Command "Get-Content 'C:\Users\dinga\Projects\paperclip\closedloop-out.log' -Wait -Tail 50"
 goto MENU
 
 :WAKE

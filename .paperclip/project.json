@@ -1,0 +1,140 @@
+{
+  "_comment": "Paperclip Project Configuration - Edit this file to adapt for new projects",
+  "_updatedBy": "Manual configuration",
+  "_lastUpdated": "2026-03-16",
+  
+  "project": {
+    "name": "Shop Diary V2",
+    "slug": "shop-diary-v2",
+    "description": "Cross-platform POS (point-of-sale) and shop management app",
+    "githubRepo": "jeremiahdingal/shop-diary-v2",
+    "workspace": "C:\\Users\\dinga\\Projects\\shop-diary-v2"
+  },
+  
+  "techStack": {
+    "monorepo": "Turborepo + Yarn workspaces",
+    "web": "Next.js 14 + React 18",
+    "mobile": "React Native 0.76 + Expo 52",
+    "api": "Cloudflare Workers + itty-router + Kysely + D1",
+    "state": "Zustand + TanStack React Query",
+    "forms": "React Hook Form + Zod",
+    "styling": "React Native StyleSheet.create() - NO Tailwind, NO CSS modules",
+    "theme": "Custom theme using @radix-ui/colors (28 built-in themes)",
+    "icons": "lucide-react-native",
+    "testing": "Vitest (API), Jest (apps)",
+    "language": "TypeScript strict mode - ALL files .ts/.tsx"
+  },
+  
+  "structure": {
+    "apps": {
+      "dashboard-web": "Next.js web dashboard",
+      "cashier-web": "Next.js web cashier",
+      "dashboard-mobile": "Expo mobile dashboard",
+      "cashier-mobile": "Expo mobile cashier"
+    },
+    "packages": {
+      "app": "Shared screens, hooks, stores, types",
+      "ui": "Shared UI components and theme"
+    },
+    "api": "api/src/services - Cloudflare Workers",
+    "screens": "packages/app/{feature}/screen.tsx",
+    "hooks": "packages/app/apiHooks/",
+    "stores": "packages/app/store/",
+    "components": "packages/ui/src/"
+  },
+  
+  "packages": {
+    "scope": "@shop-diary",
+    "names": ["app", "ui"]
+  },
+  
+  "imports": {
+    "ui": "@shop-diary/ui",
+    "app": "@shop-diary/app"
+  },
+  
+  "commands": {
+    "build": "yarn build",
+    "build:web": "yarn build --filter=*-web",
+    "build:mobile": "yarn build --filter=*-mobile",
+    "test": "yarn test",
+    "test:api": "cd api && npx vitest run",
+    "dev": "yarn dev",
+    "dev:web": "yarn dev:web",
+    "dev:mobile": "yarn dev:mobile",
+    "dev:api": "cd api && npx wrangler dev"
+  },
+  
+  "patterns": {
+    "screens": "packages/app/{feature}/screen.tsx - shared cross-platform",
+    "pages": "apps/*/pages/ - thin wrappers importing screens",
+    "hooks": "packages/app/apiHooks/ - TanStack Query hooks",
+    "apiRoutes": "api/src/services/{domain}/{domain}.routes.ts - itty-router",
+    "validation": "api/src/services/{domain}/{domain}.schema.ts - Zod",
+    "components": "React Native (View, Text, Pressable) - NO HTML",
+    "styling": "StyleSheet.create() + useTheme() hook"
+  },
+  
+  "paperclip": {
+    "companyId": "ac5c469b-1f81-4f1f-9061-1dd9033ec831",
+    "agents": {
+      "strategist": "a90b07a4-f18c-4509-9d7b-b9f16eb098d6",
+      "tech lead": "dad994d7-5d3e-4101-ae57-82c7be9b778b",
+      "local builder": "caf931bf-516a-409f-813e-a29e14decb10",
+      "coder remote": "954ce225-6dc8-4df7-8917-b597afbae60b",
+      "reviewer": "eace3a19-bded-4b90-827e-cfc00f3900bd",
+      "sentinel": "c7fb4dae-8ac3-4795-b1f6-d14db2021035",
+      "deployer": "5e234916-47ef-41a2-8c07-e9376ee6aa9c",
+      "artist": "787cbd9e-d10b-4bca-b486-e7f5fd99d184"
+    },
+    "agentKeys": {
+      "a90b07a4-f18c-4509-9d7b-b9f16eb098d6": "pcp_48d784f6edd3a907e7700cda9f93e36fc0d1030f4a6b6d04",
+      "dad994d7-5d3e-4101-ae57-82c7be9b778b": "pcp_ef721504b998e79742f272ad196be3952c28d5921dc4ba9a",
+      "caf931bf-516a-409f-813e-a29e14decb10": "pcp_0fbcdff3e8a50df48ab7c94cd3f4409cd492b6eb84c683d8",
+      "954ce225-6dc8-4df7-8917-b597afbae60b": "",
+      "eace3a19-bded-4b90-827e-cfc00f3900bd": "pcp_650990c0932107838084b2adaf47fdbfb9407c649243211e",
+      "c7fb4dae-8ac3-4795-b1f6-d14db2021035": "pcp_268a568963f01698e27a232c9b911d96fa3504b214232b97",
+      "5e234916-47ef-41a2-8c07-e9376ee6aa9c": "pcp_ad33d0ec65c082f7b46feef3233872548ac64b606e0e7541",
+      "787cbd9e-d10b-4bca-b486-e7f5fd99d184": "pcp_6b6711a3a014c59c92416ec479077557a021087ba08bc280"
+    },
+    "blockedAgents": ["954ce225-6dc8-4df7-8917-b597afbae60b"],
+    "apiUrl": "http://127.0.0.1:3100"
+  },
+  
+  "ollama": {
+    "proxyPort": 3201,
+    "ollamaPort": 11434,
+    "models": {
+      "strategist": "qwen3-coder:30b",
+      "tech lead": "qwen3-coder:30b",
+      "local builder": "qwen3-coder:30b",
+      "reviewer": "deepseek-r1:14b",
+      "sentinel": "deepseek-r1:8b",
+      "deployer": "qwen3:8b",
+      "artist": "llama3.2-vision:11b"
+    },
+    "timeouts": {
+      "strategist": 900,
+      "tech lead": 900,
+      "local builder": 3600,
+      "reviewer": 900,
+      "sentinel": 600,
+      "deployer": 600,
+      "artist": 900
+    }
+  },
+  
+  "artist": {
+    "devServerPort": 3000,
+    "viewport": { "width": 1280, "height": 800 },
+    "stepTimeoutMs": 15000,
+    "screenshotDir": ".screenshots"
+  },
+  
+  "delegationRules": {
+    "strategist": ["tech lead", "reviewer", "sentinel", "artist"],
+    "tech lead": ["local builder"],
+    "reviewer": ["artist"],
+    "sentinel": ["deployer"]
+  }
+}
