@@ -235,51 +235,70 @@ export function createProxy(): http.Server {
                     const pass = issueBuilderPasses[issueId];
                     console.log(`[closedloop] Local Builder wrote ${writtenFiles.length} files (pass ${pass})`);
 
-                    // Commit and push (no PR)
-                    await commitAndPush(issueId, writtenFiles, fileContents);
+                    // Commit, push, and check build result
+                    const buildResult = await commitAndPush(issueId, writtenFiles, fileContents);
 
                     // Track Reviewer ↔ Local Builder loops
                     const loopStatus = trackLoop(issueId, agentId);
                     console.log(`[closedloop] Loop count: ${loopStatus.count}/${MAX_LOOP_PASSES}`);
 
-                    // Check if loop exceeded - auto create PR for human intervention
-                    if (loopStatus.exceeded) {
-                      console.log(`[closedloop] LOOP EXCEEDED (${loopStatus.count}) - Creating PR for human intervention`);
+                    // If build failed, send back to Local Builder to fix FIRST
+                    if (!buildResult.success) {
+                      console.log(`[closedloop] Build FAILED - sending back to Local Builder to fix before Reviewer`);
                       await postComment(
                         issueId,
-                        null,
-                        `⚠️ **Auto-PR Created: Review Loop Exceeded**\n\n` +
-                        `This issue has gone through ${loopStatus.count} Reviewer ↔ Local Builder cycles.\n` +
-                        `A human developer should now review the changes.\n\n` +
-                        `**What happened:**\n` +
-                        `- Local Builder and Reviewer couldn't reach agreement after ${loopStatus.count} passes\n` +
-                        `- This may indicate:\n` +
-                        `  - Complex requirements needing clarification\n` +
-                        `  - Conflicting feedback between agents\n` +
-                        `  - Technical debt in existing codebase\n\n` +
-                        `**Next steps:**\n` +
-                        `1. Review the PR and comment history\n` +
-                        `2. Manually resolve any remaining issues\n` +
-                        `3. Merge when ready\n`
+                        AGENTS['local builder'],
+                        `⚠️ **Build Failed - Fix Before Review**\n\n` +
+                        `Your code committed successfully but the build failed. Please fix the build errors before sending to Reviewer.\n\n` +
+                        `\`\`\`\n${buildResult.output || 'Build error output not available'}\n\`\`\`\n\n` +
+                        `**Action required:**\n` +
+                        `1. Run \`yarn build\` locally to see full errors\n` +
+                        `2. Fix the build errors in the files you just wrote\n` +
+                        `3. Re-commit and the build will be verified again`
                       );
-                      try {
-                        await createPullRequest(issueId);
-                        resetLoopCounter(issueId);
-                        console.log(`[closedloop] PR created for human intervention`);
-                        // Still send to Reviewer for final approval
-                        await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
-                      } catch (prErr: any) {
-                        console.error(`[closedloop] Failed to create PR:`, prErr.message);
-                      }
-                      // Skip normal flow - already sent to Reviewer
+                      await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+                      console.log(`[closedloop] Sent back to Local Builder for build fixes`);
                     } else {
-                      // Normal flow: Send to Reviewer
-                      console.log(`[closedloop] Pass ${pass}: Sending to Reviewer...`);
-                      try {
-                        await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
-                        console.log(`[closedloop] Auto-assigned to Reviewer`);
-                      } catch (err: any) {
-                        console.error(`[closedloop] Failed to trigger Reviewer:`, err.message);
+                      // Build passed - continue with normal flow
+                      // Check if loop exceeded - auto create PR for human intervention
+                      if (loopStatus.exceeded) {
+                        console.log(`[closedloop] LOOP EXCEEDED (${loopStatus.count}) - Creating PR for human intervention`);
+                        await postComment(
+                          issueId,
+                          null,
+                          `⚠️ **Auto-PR Created: Review Loop Exceeded**\n\n` +
+                          `This issue has gone through ${loopStatus.count} Reviewer ↔ Local Builder cycles.\n` +
+                          `A human developer should now review the changes.\n\n` +
+                          `**What happened:**\n` +
+                          `- Local Builder and Reviewer couldn't reach agreement after ${loopStatus.count} passes\n` +
+                          `- This may indicate:\n` +
+                          `  - Complex requirements needing clarification\n` +
+                          `  - Conflicting feedback between agents\n` +
+                          `  - Technical debt in existing codebase\n\n` +
+                          `**Next steps:**\n` +
+                          `1. Review the PR and comment history\n` +
+                          `2. Manually resolve any remaining issues\n` +
+                          `3. Merge when ready\n`
+                        );
+                        try {
+                          await createPullRequest(issueId);
+                          resetLoopCounter(issueId);
+                          console.log(`[closedloop] PR created for human intervention`);
+                          // Still send to Reviewer for final approval
+                          await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                        } catch (prErr: any) {
+                          console.error(`[closedloop] Failed to create PR:`, prErr.message);
+                        }
+                        // Skip normal flow - already sent to Reviewer
+                      } else {
+                        // Normal flow: Send to Reviewer
+                        console.log(`[closedloop] Pass ${pass}: Sending to Reviewer...`);
+                        try {
+                          await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                          console.log(`[closedloop] Auto-assigned to Reviewer`);
+                        } catch (err: any) {
+                          console.error(`[closedloop] Failed to trigger Reviewer:`, err.message);
+                        }
                       }
                     }
                   }
