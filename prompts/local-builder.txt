@@ -119,6 +119,7 @@ IMPORTANT RULES:
 - Use React Native components (View, Text, Pressable), not HTML elements.
 - **ENSURE BUILD SUCCEEDS**: Before finishing, verify your code will compile:
   - Check imports are correct and modules exist
+  - **DO NOT import packages that aren't already in package.json** - check existing imports in similar files
   - Ensure all types are defined or imported
   - Verify no syntax errors in your code
   - If build fails, fix errors immediately when notified
