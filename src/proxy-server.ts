@@ -1,6 +1,9 @@
 /**
  * ClosedLoop HTTP Server
- * Handles communication between Paperclip agents and Ollama
+ * 
+ * Local-first, Ollama-powered proxy for Paperclip AI agents.
+ * Handles communication between Paperclip agents and local Ollama instances.
+ * Uses RAG for grounded, reliable code generation.
  */
 
 import * as http from 'http';

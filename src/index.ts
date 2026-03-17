@@ -1,6 +1,7 @@
 /**
- * ClosedLoop - Autonomous AI Agent Loop
+ * ClosedLoop - Local-First Autonomous Coding Agent
  *
+ * Powered by Ollama + Paperclip AI with RAG for reliable offline code generation.
  * Main entry point. Initializes RAG indexer and starts the ClosedLoop server.
  */
 

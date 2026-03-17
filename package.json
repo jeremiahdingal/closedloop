@@ -1,7 +1,7 @@
 {
   "name": "closedloop",
   "version": "1.0.0",
-  "description": "ClosedLoop - Autonomous AI agent loop with RAG-powered code generation",
+  "description": "ClosedLoop - Local-first, Ollama-powered autonomous coding agent with Paperclip AI and RAG for reliable offline code generation",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -15,5 +15,14 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "typescript": "^5.3.3"
-  }
+  },
+  "keywords": [
+    "local-first",
+    "ollama",
+    "paperclip-ai",
+    "rag",
+    "autonomous-agent",
+    "code-generation",
+    "offline-ai"
+  ]
 }
