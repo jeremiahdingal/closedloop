@@ -1,145 +1,221 @@
-# Shop Diary AI Agent Orchestration
+# ClosedLoop
 
-A fully autonomous, local AI software company powered by [Paperclip AI](https://paperclipai.dev) and [Ollama](https://ollama.ai) local LLMs. Manages the [shop-diary-v2](https://github.com/jeremiahdingal/shop-diary-v2) project through an automated pipeline of specialized AI agents.
+**Local-First, Ollama-Powered Autonomous Coding Agent**
+
+ClosedLoop is a reliable, offline-capable AI agent system that automates your software development workflow using local LLMs (Ollama), Paperclip AI, and RAG (Retrieval-Augmented Generation) for grounded code generation.
+
+## Features
+
+- 🏠 **Local-First**: Runs entirely on your machine with Ollama - no cloud APIs required
+- 🤖 **Ollama-Powered**: Supports 30B+ parameter models for high-quality code generation
+- 📎 **Paperclip AI Integration**: Leverages Paperclip's agent orchestration system
+- 🧠 **RAG-Enhanced**: Retrieves relevant codebase context to prevent hallucination
+- ♾️ **Closed-Loop Workflow**: Plans → Builds → Reviews → Deploys → Audits → Repeats
+- 🔒 **Privacy-Preserving**: Your code never leaves your machine
 
 ## Architecture
 
 ```
-                    Paperclip AI (:3100)
-                         |
-                   ollama-proxy (:3201)
-                         |
-                    Ollama GPU (:11434)
-                   RTX 5070 Ti 16GB VRAM
+┌─────────────────────────────────────────────────────────────┐
+│ ClosedLoop Architecture                                     │
+├─────────────────────────────────────────────────────────────┤
+│ Paperclip AI Agents                                         │
+│   Strategist → Tech Lead → Local Builder → Reviewer        │
+│                          ↓                                  │
+│   ┌─────────────────────────────────────────────┐          │
+│   │ ClosedLoop (This Project)                   │          │
+│   │  - RAG Context Builder (ChromaDB)           │          │
+│   │  - Code Extraction & Validation             │          │
+│   │  - Git Operations (branch, commit, PR)      │          │
+│   │  - Bash Command Execution                   │          │
+│   │  - Delegation Detection                     │          │
+│   └─────────────────────────────────────────────┘          │
+│                          ↓                                  │
+│   Local Ollama Instance (qwen3-coder:30b, etc.)            │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Pipeline Flow
-
-```
-Issue Created
-     |
-     v
-Local Builder (pass 1) --> commit + push (NO PR yet)
-     |                          |
-     |                    build validation
-     v
-  Reviewer (code review)
-     |
-     v
-  Artist (visual audit)
-     |-- start Next.js dev server
-     |-- Playwright screenshots (6 routes)
-     |-- inject auth into localStorage
-     |-- llama3.2-vision:11b analyzes each screen
-     |
-     v
-Local Builder (pass 2) --> commit + push --> PR created
-     |                                        |
-     |                                  screenshots in PR body
-     v
-  Issue moved to in_review (pipeline complete)
-```
-
-## Agents
-
-| Agent | Model | Role |
-|-------|-------|------|
-| **Strategist** | glm-4.7-flash | CTO-level planning and delegation |
-| **Tech Lead** | qwen3:14b | Architecture decisions, task breakdown |
-| **Local Builder** | qwen3:14b | Code generation, file writing, git workflow |
-| **Reviewer** | qwen2.5-coder:14b | Code review against standards |
-| **Artist** | llama3.2-vision:11b | Visual audit with Playwright screenshots |
-| **Sentinel** | deepseek-r1:8b | Security and monitoring |
-| **Deployer** | qwen3:8b | Deployment automation |
-
-## Files
-
-```
-ollama-proxy.js      # Core proxy middleware (all automation logic)
-shop-agents.cmd      # Windows control panel (Start/Stop/Status/Wake)
-prompts/             # Agent system prompts
-  strategist.txt
-  tech-lead.txt
-  local-builder.txt
-  reviewer.txt
-  artist.txt
-  sentinel.txt
-  deployer.txt
-  coder-remote.txt
-```
-
-## Key Features
-
-### ollama-proxy.js
-- Sits between Paperclip and Ollama, enriching LLM calls with issue context
-- Extracts code blocks from LLM output and writes files to disk
-- Git workflow: branch creation, commit, push, build validation, PR creation
-- Agent delegation detection and auto-reassignment
-- Artist pipeline: Playwright screenshots + vision model analysis
-- Auth injection for headless screenshot capture (bypasses login screen)
-- Issue status guard (skips processing for completed issues)
-- Concurrent processing lock (prevents duplicate Local Builder runs)
-- Comment retry with backoff (handles transient fetch failures)
-- Screenshots committed to PR branch and embedded in PR body
-
-### shop-agents.cmd
-- One-click Windows control panel
-- Start/Stop/Restart all services (Ollama, Paperclip, Proxy)
-- Live status dashboard with loaded models and active agents
-- Manual agent wakeup with reason
-- Live proxy log viewer
-
-## Setup
+## Quick Start
 
 ### Prerequisites
-- [Ollama](https://ollama.ai) with GPU support
-- [Node.js](https://nodejs.org) 20+
-- [Paperclip AI](https://paperclipai.dev) CLI (`npm i -g paperclipai`)
-- [Playwright](https://playwright.dev) (installed in target workspace)
-- [GitHub CLI](https://cli.github.com) (`gh`) authenticated
 
-### Required Ollama Models
+1. **Node.js 18+**
+2. **Ollama** - Install from [ollama.ai](https://ollama.ai)
+3. **Paperclip AI** - Install from [paperclip.ai](https://paperclip.ai)
+4. **Git** - For version control operations
+
+### Installation
+
 ```bash
-ollama pull qwen3:14b
-ollama pull qwen2.5-coder:14b
-ollama pull llama3.2-vision:11b
-ollama pull deepseek-r1:8b
-ollama pull qwen3:8b
-ollama pull glm-4.7-flash
+# 1. Clone the repository
+git clone https://github.com/jeremiahdingal/closedloop.git
+cd closedloop
+
+# 2. Install dependencies
+npm install
+
+# 3. Pull required Ollama models
+ollama pull qwen3-coder:30b
+ollama pull deepseek-r1:14b  # For reviewer
+ollama pull nomic-embed-text  # For RAG embeddings
+
+# 4. Build TypeScript
+npm run build
+
+# 5. Build RAG index (indexes your codebase)
+npm run rag-index
+
+# 6. Start ClosedLoop
+npm start
 ```
 
 ### Configuration
-1. Update `WORKSPACE` in `ollama-proxy.js` to point to your project
-2. Update `COMPANY_ID` and `AGENTS` with your Paperclip company/agent IDs
-3. Update `AGENT_KEYS` with your agent API keys
-4. Copy prompts to `~/.paperclip/prompts/` (or configure in Paperclip UI)
 
-### Running
-```cmd
-shop-agents.cmd
+ClosedLoop uses Paperclip's configuration format. Edit `.paperclip/project.json`:
+
+```json
+{
+  "project": {
+    "name": "Your Project",
+    "workspace": "C:\\path\\to\\your\\project"
+  },
+  "paperclip": {
+    "companyId": "your-company-id",
+    "agents": {
+      "strategist": "...",
+      "tech lead": "...",
+      "local builder": "...",
+      "reviewer": "..."
+    }
+  },
+  "ollama": {
+    "proxyPort": 3201,
+    "ollamaPort": 11434,
+    "models": {
+      "local builder": "qwen3-coder:30b",
+      "reviewer": "deepseek-r1:14b"
+    }
+  }
+}
 ```
-Or manually:
+
+## How It Works
+
+### 1. RAG Indexing
+
+Before generating code, ClosedLoop indexes your entire codebase:
+
 ```bash
-# Terminal 1: Ollama
-ollama serve
-
-# Terminal 2: Paperclip
-paperclipai run
-
-# Terminal 3: Proxy
-node ollama-proxy.js
+npm run rag-index
 ```
 
-## Ports
+This creates a ChromaDB vector index containing:
+- All TypeScript/JavaScript files
+- Exported symbols (functions, classes, interfaces)
+- File purposes (from JSDoc comments)
+- Code patterns and structure
 
-| Service | Port |
-|---------|------|
-| Paperclip UI & API | 3100 |
-| Ollama Proxy | 3201 |
-| Ollama GPU | 11434 |
-| Dev Server (screenshots) | 3000 |
+### 2. Context-Aware Code Generation
 
-## Company
+When Local Builder receives a task:
 
-- **Company**: Shop (`ac5c469b-1f81-4f1f-9061-1dd9033ec831`)
-- **Project**: shop-diary-v2 (TypeScript, Turborepo, Next.js 14, React Native, Cloudflare Workers)
+1. **Extract keywords** from the issue title/description
+2. **Query RAG index** for top 10 relevant files
+3. **Inject context** showing:
+   - Existing file structure
+   - Current exports (to avoid breaking changes)
+   - Code patterns to follow
+4. **Generate code** with full awareness of the codebase
+
+### 3. Closed-Loop Workflow
+
+```
+Issue → Strategist → Tech Lead → Local Builder
+                              ↓
+                        RAG Context
+                              ↓
+                    Code Generation
+                              ↓
+    ┌──────────────────── Reviewer ────────────────────┐
+    │                                                  │
+    ├─→ Approved → Create PR → Artist Audit → Done    │
+    │                                                  │
+    └─→ Issues Found → Send Back to Local Builder ────┘
+```
+
+## Module Structure
+
+| Module | Purpose |
+|--------|---------|
+| `index.ts` | Entry point, initializes RAG |
+| `rag-indexer.ts` | ChromaDB vector indexing |
+| `context-builder.ts` | RAG-enhanced issue context |
+| `code-extractor.ts` | Extract code blocks from LLM output |
+| `git-ops.ts` | Git branch, commit, PR creation |
+| `proxy-server.ts` | HTTP server for Paperclip agents |
+| `paperclip-api.ts` | Paperclip API client |
+| `agent-types.ts` | Agent IDs and delegation rules |
+| `bash-executor.ts` | Execute shell commands |
+| `delegation.ts` | Detect agent delegation |
+| `artist-recorder.ts` | Playwright UI testing |
+
+## Commands
+
+```bash
+# Build TypeScript
+npm run build
+
+# Start ClosedLoop
+npm start
+
+# Development mode (build + start)
+npm run dev
+
+# Build RAG index
+npm run rag-index
+```
+
+## Why ClosedLoop?
+
+### Problem: AI Code Generation is Unreliable
+
+LLMs hallucinate because they lack context about your existing codebase. They:
+- Create duplicate files
+- Delete existing exports
+- Break established patterns
+- Ignore project conventions
+
+### Solution: RAG + Local LLMs
+
+ClosedLoop solves this with:
+
+1. **RAG Grounding**: Retrieves relevant files before generation
+2. **Local Models**: Run 30B+ parameter models offline
+3. **Validation**: Checks for destructive changes before committing
+4. **Closed Loop**: Automatic feedback and revision
+
+## Tech Stack
+
+- **Runtime**: Node.js 18+
+- **Language**: TypeScript (strict mode)
+- **Vector DB**: ChromaDB
+- **LLM Backend**: Ollama
+- **Agent Framework**: Paperclip AI
+- **Testing**: Playwright (Artist agent)
+
+## License
+
+MIT
+
+## Contributing
+
+ClosedLoop is open source! Contributions welcome:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a PR
+
+---
+
+**Built with ❤️ for local-first AI development**

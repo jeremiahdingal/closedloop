@@ -1,0 +1,28 @@
+{
+  "name": "closedloop",
+  "version": "1.0.0",
+  "description": "ClosedLoop - Local-first, Ollama-powered autonomous coding agent with Paperclip AI and RAG for reliable offline code generation",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "rag-index": "node dist/rag-indexer.js"
+  },
+  "dependencies": {
+    "chromadb": "^1.9.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  },
+  "keywords": [
+    "local-first",
+    "ollama",
+    "paperclip-ai",
+    "rag",
+    "autonomous-agent",
+    "code-generation",
+    "offline-ai"
+  ]
+}

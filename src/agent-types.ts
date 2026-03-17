@@ -1,0 +1,73 @@
+/**
+ * Agent IDs, names, and delegation rules
+ */
+
+import { getAgents, getBlockedAgents, getDelegationRules } from './config';
+
+// Agent ID constants
+export const AGENTS = getAgents();
+
+// Reverse lookup: ID -> name
+export const AGENT_NAMES: Record<string, string> = {};
+for (const [name, id] of Object.entries(AGENTS)) {
+  AGENT_NAMES[id] = name;
+}
+
+// Blocked agents set
+export const BLOCKED_AGENTS = new Set(getBlockedAgents());
+
+// Delegation rules (org chart)
+export const DELEGATION_RULES: Record<string, string[]> = {};
+const rawRules = getDelegationRules();
+for (const [role, targets] of Object.entries(rawRules)) {
+  const agentId = AGENTS[role] || role;
+  DELEGATION_RULES[agentId] = targets.map((t) => AGENTS[t] || t);
+}
+
+// Agent aliases for delegation detection (lowercase -> ID)
+export const AGENT_ALIASES: Record<string, string> = {
+  'tech lead': AGENTS['tech lead'],
+  'tech lead (engineering)': AGENTS['tech lead'],
+  'local builder': AGENTS['local builder'],
+  'local builder (engineer)': AGENTS['local builder'],
+  reviewer: AGENTS.reviewer,
+  sentinel: AGENTS.sentinel,
+  deployer: AGENTS.deployer,
+  artist: AGENTS.artist,
+  'artist (ui/ux)': AGENTS.artist,
+};
+
+// Agents allowed to execute bash commands
+export const BASH_AGENTS = new Set([
+  AGENTS.strategist,
+  AGENTS.sentinel,
+  AGENTS.deployer,
+  AGENTS.reviewer,
+]);
+
+// Dangerous command patterns to block
+export const BLOCKED_COMMANDS = [
+  /rm\s+-rf\s+\//i,
+  /del\s+\/s/i,
+  /format\s+[a-z]:/i,
+  /mkfs/i,
+  /dd\s+if=/i,
+  />\s*\/dev\/sd/i,
+  /shutdown/i,
+  /reboot/i,
+];
+
+// Delegation cooldown (5 minutes)
+export const DELEGATION_COOLDOWN_MS = 5 * 60 * 1000;
+
+// Track recent delegations to prevent duplicates
+export const recentDelegations: Record<string, number> = {};
+
+// Track how many times Local Builder has run on an issue
+export const issueBuilderPasses: Record<string, number> = {};
+
+// Lock per issue to prevent concurrent Local Builder processing
+export const issueProcessingLock: Record<string, boolean> = {};
+
+// Lock per issue to prevent concurrent Artist processing
+export const artistProcessingLock: Record<string, boolean> = {};
