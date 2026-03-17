@@ -16,7 +16,9 @@ echo    [3] Restart All
 echo    [4] Status Check
 echo    [5] View ClosedLoop Logs (live)
 echo    [6] Wake Agent Manually
-echo    [7] Exit
+echo    [7] Build RAG Index
+echo    [8] Start ClosedLoop Only (npm start)
+echo    [9] Exit
 echo.
 set /p choice="  Select: "
 
@@ -26,7 +28,9 @@ if "%choice%"=="3" goto RESTART
 if "%choice%"=="4" goto STATUS
 if "%choice%"=="5" goto LOGS
 if "%choice%"=="6" goto WAKE
-if "%choice%"=="7" exit
+if "%choice%"=="7" goto RAG
+if "%choice%"=="8" goto START_CLOSEDLOOP
+if "%choice%"=="9" exit
 goto MENU
 
 :START
@@ -242,6 +246,67 @@ if "%reason%"=="" set reason=Manual wakeup
 echo.
 echo  Waking %AGENT_NAME%...
 curl -s -X POST "http://127.0.0.1:3100/api/agents/%AGENT_ID%/wakeup" -H "Content-Type: application/json" -d "{\"reason\":\"%reason%\"}" | node -e "const c=[];process.stdin.on('data',d=>c.push(d));process.stdin.on('end',()=>{const d=JSON.parse(Buffer.concat(c));console.log('  Run: '+(d.id||'?').slice(0,8)+' | Status: '+(d.status||'?'));});"
+echo.
+pause
+goto MENU
+
+:RAG
+cls
+echo.
+echo  ============================================
+echo    Build RAG Index
+echo  ============================================
+echo.
+echo  This will scan your codebase and build the RAG index.
+echo  Run this when you add/modify files in your project.
+echo.
+pause
+echo.
+echo  Building RAG index...
+echo.
+call npm run rag-index
+echo.
+echo  [OK] RAG index built.
+echo.
+pause
+goto MENU
+
+:START_CLOSEDLOOP
+cls
+echo.
+echo  ============================================
+echo    Start ClosedLoop (npm start)
+echo  ============================================
+echo.
+echo  Starting ClosedLoop server on :3201...
+echo.
+
+:: Check if already running
+set PROXY_PID=
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3201 "') do set PROXY_PID=%%a
+if defined PROXY_PID (
+    echo  ClosedLoop already running on :3201 ^(PID %PROXY_PID%^).
+    pause
+    goto MENU
+)
+
+:: Start ClosedLoop
+echo  Starting ClosedLoop...
+start "ClosedLoop" /MIN cmd /c npm start ^>C:\Users\dinga\Projects\paperclip\closedloop-out.log 2^>^&1
+timeout /t 3 /nobreak >nul
+
+:: Verify it started
+set PROXY_PID=
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3201 "') do set PROXY_PID=%%a
+if defined PROXY_PID (
+    echo  ClosedLoop started on :3201 ^(PID %PROXY_PID%^).
+) else (
+    echo  Waiting for ClosedLoop to start...
+    timeout /t 5 /nobreak >nul
+)
+
+echo.
+echo  [OK] ClosedLoop started.
 echo.
 pause
 goto MENU
