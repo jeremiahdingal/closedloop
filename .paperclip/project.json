@@ -83,6 +83,7 @@
       "local builder": "caf931bf-516a-409f-813e-a29e14decb10",
       "coder remote": "954ce225-6dc8-4df7-8917-b597afbae60b",
       "reviewer": "eace3a19-bded-4b90-827e-cfc00f3900bd",
+      "diff guardian": "f8a2c4e6-9b1d-4f3a-8e5c-2d7b6a9c0e1f",
       "sentinel": "c7fb4dae-8ac3-4795-b1f6-d14db2021035",
       "deployer": "5e234916-47ef-41a2-8c07-e9376ee6aa9c",
       "artist": "787cbd9e-d10b-4bca-b486-e7f5fd99d184"
@@ -93,6 +94,7 @@
       "caf931bf-516a-409f-813e-a29e14decb10": "pcp_0fbcdff3e8a50df48ab7c94cd3f4409cd492b6eb84c683d8",
       "954ce225-6dc8-4df7-8917-b597afbae60b": "",
       "eace3a19-bded-4b90-827e-cfc00f3900bd": "pcp_650990c0932107838084b2adaf47fdbfb9407c649243211e",
+      "f8a2c4e6-9b1d-4f3a-8e5c-2d7b6a9c0e1f": "pcp_diff_guardian_agent_key_placeholder",
       "c7fb4dae-8ac3-4795-b1f6-d14db2021035": "pcp_268a568963f01698e27a232c9b911d96fa3504b214232b97",
       "5e234916-47ef-41a2-8c07-e9376ee6aa9c": "pcp_ad33d0ec65c082f7b46feef3233872548ac64b606e0e7541",
       "787cbd9e-d10b-4bca-b486-e7f5fd99d184": "pcp_6b6711a3a014c59c92416ec479077557a021087ba08bc280"
@@ -136,7 +138,8 @@
   "delegationRules": {
     "strategist": ["tech lead", "reviewer", "sentinel", "artist"],
     "tech lead": ["local builder"],
-    "reviewer": ["artist"],
+    "reviewer": ["diff guardian", "artist"],
+    "diff guardian": ["local builder", "artist"],
     "sentinel": ["deployer"]
   }
 }

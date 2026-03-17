@@ -247,34 +247,19 @@ export function createProxy(): http.Server {
               if (reviewApproved) {
                 console.log(`[closedloop] Reviewer APPROVED changes for ${issueId.slice(0, 8)}`);
 
-                // Run Diff Guardian before PR creation
-                const diffResult = await runDiffGuardian(issueId);
-
-                if (diffResult.approved) {
-                  // Create PR after reviewer + diff guardian approval
-                  try {
+                // Send to Diff Guardian for final validation before PR
+                console.log(`[closedloop] Sending to Diff Guardian for final validation...`);
+                try {
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS['diff guardian'] });
+                  console.log(`[closedloop] Auto-assigned to Diff Guardian`);
+                } catch (err: any) {
+                  console.error(`[closedloop] Failed to trigger Diff Guardian:`, err.message);
+                  // Fallback: run Diff Guardian mechanically
+                  const diffResult = await runDiffGuardian(issueId);
+                  if (diffResult.approved) {
                     await createPullRequest(issueId);
-                    console.log(`[closedloop] PR created after Reviewer + DiffGuardian approval`);
-                  } catch (prErr: any) {
-                    console.error(`[closedloop] Failed to create PR:`, prErr.message);
-                    await postComment(issueId, null, `_Reviewer approved but PR creation failed: ${prErr.message}_`);
-                  }
-
-                  // Trigger Artist for visual audit after PR creation
-                  try {
-                    await patchIssue(issueId, { assigneeAgentId: AGENTS.artist });
-                    console.log(`[closedloop] Auto-assigned to Artist for feature recording`);
-                  } catch (err: any) {
-                    console.error(`[closedloop] Failed to trigger Artist:`, err.message);
-                  }
-                } else {
-                  // Diff Guardian found issues - send back to Local Builder
-                  console.log(`[closedloop] DiffGuardian found issues - sending back to Local Builder`);
-                  try {
+                  } else {
                     await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
-                    console.log(`[closedloop] Sent back to Local Builder for fixes`);
-                  } catch (err: any) {
-                    console.error(`[closedloop] Failed to send back to Local Builder:`, err.message);
                   }
                 }
               } else {
@@ -285,6 +270,31 @@ export function createProxy(): http.Server {
                 } catch (err: any) {
                   console.error(`[closedloop] Failed to send back to Local Builder:`, err.message);
                 }
+              }
+            }
+
+            // Diff Guardian: final validation before PR creation
+            if (agentId === AGENTS['diff guardian']) {
+              const diffResult = await runDiffGuardian(issueId);
+
+              if (diffResult.approved) {
+                // Create PR after diff guardian approval
+                try {
+                  await createPullRequest(issueId);
+                  console.log(`[closedloop] PR created after DiffGuardian approval`);
+
+                  // Trigger Artist for visual audit
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS.artist });
+                  console.log(`[closedloop] Auto-assigned to Artist for feature recording`);
+                } catch (prErr: any) {
+                  console.error(`[closedloop] Failed to create PR:`, prErr.message);
+                  await postComment(issueId, null, `_DiffGuardian approved but PR creation failed: ${prErr.message}_`);
+                }
+              } else {
+                // Diff Guardian found issues - send back to Local Builder
+                console.log(`[closedloop] DiffGuardian found issues - sending back to Local Builder`);
+                await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+                console.log(`[closedloop] Sent back to Local Builder for fixes`);
               }
             }
           } else {

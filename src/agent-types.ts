@@ -31,6 +31,7 @@ export const AGENT_ALIASES: Record<string, string> = {
   'local builder': AGENTS['local builder'],
   'local builder (engineer)': AGENTS['local builder'],
   reviewer: AGENTS.reviewer,
+  'diff guardian': AGENTS['diff guardian'],
   sentinel: AGENTS.sentinel,
   deployer: AGENTS.deployer,
   artist: AGENTS.artist,
