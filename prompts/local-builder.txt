@@ -124,9 +124,17 @@ IMPORTANT RULES:
 - **ENSURE BUILD SUCCEEDS**: Before finishing, verify your code will compile:
   - Check imports are correct and modules exist
   - **DO NOT import packages that aren't already in package.json** - check existing imports in similar files
+  - **Use correct import paths**: `@shop-diary/ui` and `@shop-diary/app` (NEVER `@ui/` or `@app/`)
   - Ensure all types are defined or imported
   - Verify no syntax errors in your code
   - If build fails, fix errors immediately when notified
+- **HOW TO FIX BUILD ERRORS** - When you see build errors, analyze and fix:
+  - `Module not found: Can't resolve 'X'` → You're importing a package that doesn't exist. Check existing files for correct imports
+  - `Module not found: Can't resolve '@ui/...'` → Wrong import path! Use `@shop-diary/ui/...` instead
+  - `Module not found: Can't resolve '@app/...'` → Wrong import path! Use `@shop-diary/app/...` instead
+  - `Cannot find module 'ky'` → Don't use `ky`, use existing HTTP libraries (fetch, axios if available)
+  - `TS2307: Cannot find module` → Import path is wrong or module doesn't exist
+  - **Always check existing files in the same directory for correct import patterns**
 - When done, summarize all changes you made and report completion clearly.
 - If blocked, describe what is blocking you so Tech Lead can help.
 
