@@ -17,6 +17,7 @@ import { buildIssueContext, buildLocalBuilderContext, setRAGIndexer, getRAGIndex
 import { executeBashBlocks } from './bash-executor';
 import { detectAndDelegate } from './delegation';
 import { runArtistStage } from './artist-recorder';
+import { runDiffGuardian } from './diff-guardian';
 import { ragIndexer } from './rag-indexer';
 import { OllamaRequest, OllamaResponse } from './types';
 
@@ -246,21 +247,35 @@ export function createProxy(): http.Server {
               if (reviewApproved) {
                 console.log(`[closedloop] Reviewer APPROVED changes for ${issueId.slice(0, 8)}`);
 
-                // Create PR after reviewer approval
-                try {
-                  await createPullRequest(issueId);
-                  console.log(`[closedloop] PR created after Reviewer approval`);
-                } catch (prErr: any) {
-                  console.error(`[closedloop] Failed to create PR:`, prErr.message);
-                  await postComment(issueId, null, `_Reviewer approved but PR creation failed: ${prErr.message}_`);
-                }
+                // Run Diff Guardian before PR creation
+                const diffResult = await runDiffGuardian(issueId);
 
-                // Trigger Artist for visual audit after PR creation
-                try {
-                  await patchIssue(issueId, { assigneeAgentId: AGENTS.artist });
-                  console.log(`[closedloop] Auto-assigned to Artist for feature recording`);
-                } catch (err: any) {
-                  console.error(`[closedloop] Failed to trigger Artist:`, err.message);
+                if (diffResult.approved) {
+                  // Create PR after reviewer + diff guardian approval
+                  try {
+                    await createPullRequest(issueId);
+                    console.log(`[closedloop] PR created after Reviewer + DiffGuardian approval`);
+                  } catch (prErr: any) {
+                    console.error(`[closedloop] Failed to create PR:`, prErr.message);
+                    await postComment(issueId, null, `_Reviewer approved but PR creation failed: ${prErr.message}_`);
+                  }
+
+                  // Trigger Artist for visual audit after PR creation
+                  try {
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS.artist });
+                    console.log(`[closedloop] Auto-assigned to Artist for feature recording`);
+                  } catch (err: any) {
+                    console.error(`[closedloop] Failed to trigger Artist:`, err.message);
+                  }
+                } else {
+                  // Diff Guardian found issues - send back to Local Builder
+                  console.log(`[closedloop] DiffGuardian found issues - sending back to Local Builder`);
+                  try {
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+                    console.log(`[closedloop] Sent back to Local Builder for fixes`);
+                  } catch (err: any) {
+                    console.error(`[closedloop] Failed to send back to Local Builder:`, err.message);
+                  }
                 }
               } else {
                 console.log(`[closedloop] Reviewer found issues - sending back to Local Builder`);

@@ -109,6 +109,7 @@
       "tech lead": "qwen3-coder:30b",
       "local builder": "qwen3-coder:30b",
       "reviewer": "deepseek-r1:14b",
+      "diff guardian": "qwen2.5:7b",
       "sentinel": "deepseek-r1:8b",
       "deployer": "qwen3:8b",
       "artist": "llama3.2-vision:11b"
@@ -118,6 +119,7 @@
       "tech lead": 900,
       "local builder": 3600,
       "reviewer": 900,
+      "diff guardian": 60,
       "sentinel": 600,
       "deployer": 600,
       "artist": 900
