@@ -29,6 +29,44 @@ const COMPANY_ID = getCompanyId();
 const recentAgentRuns = new Map<string, number>();
 const DELEGATION_COOLDOWN_MS = 5 * 60 * 1000;
 
+// Track Reviewer ↔ Local Builder loops to prevent infinite cycles
+// Key: issueId, Value: { count: number, lastReset: number }
+const issueLoopCounts = new Map<string, { count: number; lastReset: number }>();
+const MAX_LOOP_PASSES = 20; // Auto-create PR after 20 passes for human intervention
+const LOOP_RESET_WINDOW_MS = 60 * 60 * 1000; // Reset count after 1 hour of no activity
+
+/**
+ * Track and detect Reviewer ↔ Local Builder loops
+ * Returns true if loop exceeds MAX_LOOP_PASSES
+ */
+function trackLoop(issueId: string, agentId: string): { count: number; exceeded: boolean } {
+  const now = Date.now();
+  let loopData = issueLoopCounts.get(issueId);
+
+  // Initialize or reset if window expired
+  if (!loopData || now - loopData.lastReset > LOOP_RESET_WINDOW_MS) {
+    loopData = { count: 0, lastReset: now };
+  }
+
+  // Increment on Reviewer → Local Builder handoff
+  if (agentId === AGENTS.reviewer || agentId === AGENTS['local builder']) {
+    loopData.count++;
+    issueLoopCounts.set(issueId, loopData);
+  }
+
+  return {
+    count: loopData.count,
+    exceeded: loopData.count >= MAX_LOOP_PASSES,
+  };
+}
+
+/**
+ * Reset loop counter for an issue (e.g., after successful PR)
+ */
+function resetLoopCounter(issueId: string): void {
+  issueLoopCounts.delete(issueId);
+}
+
 export function createProxy(): http.Server {
   const server = http.createServer(async (req, res) => {
     if (req.method !== 'POST') {
@@ -200,13 +238,49 @@ export function createProxy(): http.Server {
                     // Commit and push (no PR)
                     await commitAndPush(issueId, writtenFiles, fileContents);
 
-                    // Send to Reviewer
-                    console.log(`[closedloop] Pass ${pass}: Sending to Reviewer...`);
-                    try {
-                      await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
-                      console.log(`[closedloop] Auto-assigned to Reviewer`);
-                    } catch (err: any) {
-                      console.error(`[closedloop] Failed to trigger Reviewer:`, err.message);
+                    // Track Reviewer ↔ Local Builder loops
+                    const loopStatus = trackLoop(issueId, agentId);
+                    console.log(`[closedloop] Loop count: ${loopStatus.count}/${MAX_LOOP_PASSES}`);
+
+                    // Check if loop exceeded - auto create PR for human intervention
+                    if (loopStatus.exceeded) {
+                      console.log(`[closedloop] LOOP EXCEEDED (${loopStatus.count}) - Creating PR for human intervention`);
+                      await postComment(
+                        issueId,
+                        null,
+                        `⚠️ **Auto-PR Created: Review Loop Exceeded**\n\n` +
+                        `This issue has gone through ${loopStatus.count} Reviewer ↔ Local Builder cycles.\n` +
+                        `A human developer should now review the changes.\n\n` +
+                        `**What happened:**\n` +
+                        `- Local Builder and Reviewer couldn't reach agreement after ${loopStatus.count} passes\n` +
+                        `- This may indicate:\n` +
+                        `  - Complex requirements needing clarification\n` +
+                        `  - Conflicting feedback between agents\n` +
+                        `  - Technical debt in existing codebase\n\n` +
+                        `**Next steps:**\n` +
+                        `1. Review the PR and comment history\n` +
+                        `2. Manually resolve any remaining issues\n` +
+                        `3. Merge when ready\n`
+                      );
+                      try {
+                        await createPullRequest(issueId);
+                        resetLoopCounter(issueId);
+                        console.log(`[closedloop] PR created for human intervention`);
+                        // Still send to Reviewer for final approval
+                        await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                      } catch (prErr: any) {
+                        console.error(`[closedloop] Failed to create PR:`, prErr.message);
+                      }
+                      // Skip normal flow - already sent to Reviewer
+                    } else {
+                      // Normal flow: Send to Reviewer
+                      console.log(`[closedloop] Pass ${pass}: Sending to Reviewer...`);
+                      try {
+                        await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                        console.log(`[closedloop] Auto-assigned to Reviewer`);
+                      } catch (err: any) {
+                        console.error(`[closedloop] Failed to trigger Reviewer:`, err.message);
+                      }
                     }
                   }
                 } finally {
@@ -247,6 +321,9 @@ export function createProxy(): http.Server {
               if (reviewApproved) {
                 console.log(`[closedloop] Reviewer APPROVED changes for ${issueId.slice(0, 8)}`);
 
+                // Reset loop counter on successful approval
+                resetLoopCounter(issueId);
+
                 // Send to Diff Guardian for final validation before PR
                 console.log(`[closedloop] Sending to Diff Guardian for final validation...`);
                 try {
@@ -258,12 +335,29 @@ export function createProxy(): http.Server {
                   const diffResult = await runDiffGuardian(issueId);
                   if (diffResult.approved) {
                     await createPullRequest(issueId);
+                    resetLoopCounter(issueId);
                   } else {
                     await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
                   }
                 }
               } else {
-                console.log(`[closedloop] Reviewer found issues - sending back to Local Builder`);
+                // Reviewer rejected - track loop
+                const loopStatus = trackLoop(issueId, agentId);
+                console.log(`[closedloop] Reviewer found issues - sending back to Local Builder (loop: ${loopStatus.count}/${MAX_LOOP_PASSES})`);
+                
+                // Check if loop exceeded
+                if (loopStatus.exceeded) {
+                  console.log(`[closedloop] LOOP EXCEEDED (${loopStatus.count}) during Reviewer rejection`);
+                  await postComment(
+                    issueId,
+                    null,
+                    `⚠️ **Review Loop Exceeded - Manual Review Required**\n\n` +
+                    `This issue has been rejected by Reviewer ${loopStatus.count} times.\n` +
+                    `Please review the feedback and provide clearer guidance.\n\n` +
+                    `**Recent Reviewer feedback:**\n${content.slice(0, 500)}...`
+                  );
+                }
+                
                 try {
                   await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
                   console.log(`[closedloop] Sent back to Local Builder for fixes`);
@@ -282,6 +376,9 @@ export function createProxy(): http.Server {
                 try {
                   await createPullRequest(issueId);
                   console.log(`[closedloop] PR created after DiffGuardian approval`);
+                  
+                  // Reset loop counter on successful PR
+                  resetLoopCounter(issueId);
 
                   // Trigger Artist for visual audit
                   await patchIssue(issueId, { assigneeAgentId: AGENTS.artist });
@@ -291,8 +388,11 @@ export function createProxy(): http.Server {
                   await postComment(issueId, null, `_DiffGuardian approved but PR creation failed: ${prErr.message}_`);
                 }
               } else {
-                // Diff Guardian found issues - send back to Local Builder
-                console.log(`[closedloop] DiffGuardian found issues - sending back to Local Builder`);
+                // Diff Guardian rejected - track loop
+                const loopStatus = trackLoop(issueId, agentId);
+                console.log(`[closedloop] DiffGuardian found issues (loop: ${loopStatus.count}/${MAX_LOOP_PASSES})`);
+                
+                // Diff Guardian sends back to Local Builder
                 await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
                 console.log(`[closedloop] Sent back to Local Builder for fixes`);
               }
