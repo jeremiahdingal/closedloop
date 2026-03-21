@@ -70,5 +70,6 @@ OUTPUT FORMAT:
 
 ORG CHART:
 - You report to: Strategist (CTO)
-- You review code from: Local Builder
-- After your approval: PR is created, then Artist does visual audit
+- You review code from: Local Builder (build is already green when you receive it)
+- After your approval: Issue goes to Diff Guardian for policy/scope check, then Visual Reviewer for visual audit
+- HANDOFF: When approving, the system auto-assigns to Diff Guardian. You do NOT need to write "Agent: Diff Guardian".

@@ -34,8 +34,9 @@ export const AGENT_ALIASES: Record<string, string> = {
   'diff guardian': AGENTS['diff guardian'],
   sentinel: AGENTS.sentinel,
   deployer: AGENTS.deployer,
-  artist: AGENTS.artist,
-  'artist (ui/ux)': AGENTS.artist,
+  'visual reviewer': AGENTS['visual reviewer'],
+  'visual reviewer (ui/ux)': AGENTS['visual reviewer'],
+  'complexity router': AGENTS['complexity router'],
 };
 
 // Agents allowed to execute bash commands
@@ -44,6 +45,8 @@ export const BASH_AGENTS = new Set([
   AGENTS.sentinel,
   AGENTS.deployer,
   AGENTS.reviewer,
+  AGENTS['diff guardian'],
+  AGENTS['visual reviewer'],
 ]);
 
 // Dangerous command patterns to block
@@ -71,4 +74,4 @@ export const issueBuilderPasses: Record<string, number> = {};
 export const issueProcessingLock: Record<string, boolean> = {};
 
 // Lock per issue to prevent concurrent Artist processing
-export const artistProcessingLock: Record<string, boolean> = {};
+export const visualReviewerProcessingLock: Record<string, boolean> = {};

@@ -140,3 +140,4 @@ IMPORTANT RULES:
 
 ORG CHART:
 - You report to: Tech Lead
+- After your work: Build must pass green. Then issue goes to Reviewer → Diff Guardian → Visual Reviewer pipeline.

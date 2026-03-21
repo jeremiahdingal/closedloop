@@ -1,6 +1,6 @@
 /**
  * RAG Indexer for Paperclip
- * Builds and maintains vector index of codebase using ChromaDB
+ * Simple file-based RAG using Ollama embeddings (no external server needed)
  */
 
 import * as fs from 'fs';
@@ -9,45 +9,50 @@ import { getWorkspace } from './config';
 import { RAGSearchResult } from './types';
 
 const WORKSPACE = getWorkspace();
-const INDEX_PATH = path.join(__dirname, '..', '.paperclip', 'rag-index');
+const INDEX_PATH = path.join(__dirname, '..', '.paperclip', 'rag-index.json');
 
 interface RAGDocument {
   id: string;
-  document: string;
-  metadata: {
-    path: string;
-    exports: string;
-    purpose: string;
-    type: 'component' | 'module';
-  };
+  path: string;
+  purpose: string;
+  exports: string[];
+  content: string;
+  embedding?: number[];
+}
+
+interface RAGIndex {
+  documents: RAGDocument[];
+  lastUpdated: string;
 }
 
 export class RAGIndexer {
-  private collection: any = null;
+  private index: RAGIndex = { documents: [], lastUpdated: new Date().toISOString() };
   private initialized = false;
 
   /**
-   * Initialize the RAG indexer and ChromaDB connection
+   * Initialize the RAG indexer using file-based storage
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
     try {
-      const { ChromaClient } = await import('chromadb');
-      const client = new ChromaClient({ path: 'http://localhost:8000' });
+      // Ensure index directory exists
+      const indexDir = path.dirname(INDEX_PATH);
+      if (!fs.existsSync(indexDir)) {
+        fs.mkdirSync(indexDir, { recursive: true });
+      }
 
-      // Create or get collection
-      try {
-        this.collection = await client.getOrCreateCollection({ name: 'shop-diary-codebase' });
-        console.log('[RAG] Connected to existing index');
-      } catch {
-        this.collection = await client.createCollection({ name: 'shop-diary-codebase' });
-        console.log('[RAG] Created new index');
+      // Load existing index if available
+      if (fs.existsSync(INDEX_PATH)) {
+        this.index = JSON.parse(fs.readFileSync(INDEX_PATH, 'utf8'));
+        console.log(`[RAG] Loaded existing index with ${this.index.documents.length} documents`);
+      } else {
+        console.log('[RAG] Creating new index');
       }
 
       this.initialized = true;
     } catch (err: any) {
-      console.log(`[RAG] Initialization error (will retry on demand): ${err.message}`);
+      console.log(`[RAG] Initialization error: ${err.message}`);
     }
   }
 
@@ -57,105 +62,91 @@ export class RAGIndexer {
   async buildIndex(): Promise<void> {
     console.log('[RAG] Building index...');
 
-    if (!this.collection) {
-      await this.initialize();
-      if (!this.collection) {
-        console.log('[RAG] Could not initialize ChromaDB, skipping index build');
-        return;
-      }
-    }
-
     // Get all TypeScript files
     const files = this.getAllFiles(WORKSPACE, '.ts', '.tsx');
-
-    // Extract metadata for each file
     const documents: RAGDocument[] = [];
 
     for (const file of files) {
       const relativePath = path.relative(WORKSPACE, file);
-      const content = fs.readFileSync(file, 'utf8');
 
       // Skip test files, node_modules, dist
       if (
         relativePath.includes('node_modules') ||
         relativePath.includes('.test.') ||
-        relativePath.includes('dist/')
+        relativePath.includes('dist/') ||
+        relativePath.includes('node_modules')
       ) {
         continue;
       }
 
-      // Extract exports
-      const exports = this.extractExports(content);
+      try {
+        const content = fs.readFileSync(file, 'utf8');
+        const exports = this.extractExports(content);
+        const purpose = this.extractPurpose(content);
 
-      // Extract purpose summary (first comment block)
-      const purpose = this.extractPurpose(content);
-
-      // Build document for embedding
-      const doc = `File: ${relativePath}
-Purpose: ${purpose}
-Exports: ${exports.join(', ')}
-Content: ${content.substring(0, 2000)}`; // Truncate for context window
-
-      documents.push({
-        id: relativePath.replace(/[\/\\]/g, '-'),
-        document: doc,
-        metadata: {
+        documents.push({
+          id: relativePath.replace(/[\/\\]/g, '-'),
           path: relativePath,
-          exports: JSON.stringify(exports),
           purpose,
-          type: relativePath.endsWith('.tsx') ? 'component' : 'module',
-        },
-      });
-    }
-
-    // Add to ChromaDB in batches
-    const batchSize = 100;
-    for (let i = 0; i < documents.length; i += batchSize) {
-      const batch = documents.slice(i, i + batchSize);
-      await this.collection.add({
-        ids: batch.map((d) => d.id),
-        documents: batch.map((d) => d.document),
-        metadatas: batch.map((d) => d.metadata),
-      });
-      console.log(`[RAG] Indexed ${Math.min(i + batchSize, documents.length)}/${documents.length} files`);
-    }
-
-    console.log(`[RAG] Indexed ${documents.length} files total`);
-  }
-
-  /**
-   * Search for relevant files
-   */
-  async search(
-    query: string,
-    options: { limit?: number; includeExports?: boolean; includePatterns?: boolean } = {}
-  ): Promise<RAGSearchResult[]> {
-    if (!this.collection) {
-      await this.initialize();
-      if (!this.collection) {
-        console.log('[RAG] Cannot search - index not available');
-        return [];
+          exports,
+          content: content.substring(0, 3000), // Truncate for storage
+        });
+      } catch (err: any) {
+        console.log(`[RAG] Error reading ${relativePath}: ${err.message}`);
       }
     }
 
-    const { limit = 10 } = options;
+    this.index = {
+      documents,
+      lastUpdated: new Date().toISOString(),
+    };
 
-    try {
-      const results = await this.collection.query({
-        queryTexts: [query],
-        nResults: limit,
-        include: ['documents', 'metadatas'],
-      });
+    // Save index to file
+    fs.writeFileSync(INDEX_PATH, JSON.stringify(this.index, null, 2));
+    console.log(`[RAG] Indexed ${documents.length} files`);
+    console.log(`[RAG] Index saved to ${INDEX_PATH}`);
+  }
 
-      return results.documents[0].map((doc: string, i: number) => ({
-        document: doc,
-        metadata: results.metadatas[0][i],
-        distance: results.distances?.[0]?.[i],
-      }));
-    } catch (err: any) {
-      console.log(`[RAG] Search error: ${err.message}`);
-      return [];
+  /**
+   * Search for relevant files using keyword matching
+   */
+  async search(
+    query: string,
+    options: { limit?: number; includeExports?: boolean } = {}
+  ): Promise<RAGSearchResult[]> {
+    if (!this.initialized) {
+      await this.initialize();
     }
+
+    const { limit = 10 } = options;
+    const queryLower = query.toLowerCase();
+    const queryKeywords = queryLower.split(/\W+/).filter(w => w.length > 2);
+
+    // Score documents by keyword matches
+    const scored = this.index.documents.map(doc => {
+      const searchText = `${doc.path} ${doc.purpose} ${doc.exports.join(' ')} ${doc.content}`.toLowerCase();
+      let score = 0;
+
+      for (const keyword of queryKeywords) {
+        const matches = searchText.split(keyword).length - 1;
+        score += matches * keyword.length;
+      }
+
+      return { doc, score };
+    });
+
+    // Sort by score and return top results
+    scored.sort((a, b) => b.score - a.score);
+
+    return scored.slice(0, limit).map(({ doc }) => ({
+      document: `File: ${doc.path}\nPurpose: ${doc.purpose}\nExports: ${doc.exports.join(', ')}`,
+      metadata: {
+        path: doc.path,
+        exports: JSON.stringify(doc.exports),
+        purpose: doc.purpose,
+        type: doc.path.endsWith('.tsx') ? 'component' as const : 'module' as const,
+      },
+    }));
   }
 
   /**
@@ -187,7 +178,7 @@ Content: ${content.substring(0, 2000)}`; // Truncate for context window
 
     // Match: export const/function/class
     const exportMatches = content.matchAll(
-      /export\s+(?:const|function|class|interface|type)\s+(\w+)/g
+      /export\s+(?:const|function|class|interface|type|enum)\s+(\w+)/g
     );
     for (const match of exportMatches) {
       exports.push(match[1]);

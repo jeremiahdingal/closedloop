@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ClosedLoop HTTP Server
  * 
  * Local-first, Ollama-powered proxy for Paperclip AI agents.
@@ -7,19 +7,18 @@
  */
 
 import * as http from 'http';
-import { getOllamaPorts, getPaperclipApiUrl, getCompanyId } from './config';
+import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId } from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
-import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses } from './agent-types';
-import { extractIssueId, extractAgentId, sleep } from './utils';
-import { applyCodeBlocks } from './code-extractor';
-import { commitAndPush, createPullRequest } from './git-ops';
-import { buildIssueContext, buildLocalBuilderContext, setRAGIndexer, getRAGIndexer } from './context-builder';
+import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES } from './agent-types';
+import { extractIssueId, extractAgentId } from './utils';
+import { createPullRequest } from './git-ops';
+import { buildIssueContext, setRAGIndexer } from './context-builder';
 import { executeBashBlocks } from './bash-executor';
 import { detectAndDelegate } from './delegation';
 import { runArtistStage } from './artist-recorder';
 import { runDiffGuardian } from './diff-guardian';
 import { ragIndexer } from './rag-indexer';
-import { OllamaRequest, OllamaResponse } from './types';
+import { OllamaRequest } from './types';
 
 const { proxyPort, ollamaPort } = getOllamaPorts();
 const PAPERCLIP_API = getPaperclipApiUrl();
@@ -29,14 +28,14 @@ const COMPANY_ID = getCompanyId();
 const recentAgentRuns = new Map<string, number>();
 const DELEGATION_COOLDOWN_MS = 5 * 60 * 1000;
 
-// Track Reviewer ↔ Local Builder loops to prevent infinite cycles
+// Track Reviewer <-> Local Builder loops to prevent infinite cycles
 // Key: issueId, Value: { count: number, lastReset: number }
 const issueLoopCounts = new Map<string, { count: number; lastReset: number }>();
 const MAX_LOOP_PASSES = 20; // Auto-create PR after 20 passes for human intervention
 const LOOP_RESET_WINDOW_MS = 60 * 60 * 1000; // Reset count after 1 hour of no activity
 
 /**
- * Track and detect Reviewer ↔ Local Builder loops
+ * Track and detect Reviewer <-> Local Builder loops
  * Returns true if loop exceeds MAX_LOOP_PASSES
  */
 function trackLoop(issueId: string, agentId: string): { count: number; exceeded: boolean } {
@@ -48,7 +47,7 @@ function trackLoop(issueId: string, agentId: string): { count: number; exceeded:
     loopData = { count: 0, lastReset: now };
   }
 
-  // Increment on Reviewer → Local Builder handoff
+  // Increment on Reviewer -> Local Builder handoff
   if (agentId === AGENTS.reviewer || agentId === AGENTS['local builder']) {
     loopData.count++;
     issueLoopCounts.set(issueId, loopData);
@@ -120,7 +119,7 @@ export function createProxy(): http.Server {
     if (issueId) {
       const issueState = await getIssueDetails(issueId);
       if (issueState && (issueState.status === 'in_review' || issueState.status === 'done' || issueState.status === 'cancelled')) {
-        console.log(`[closedloop] Skipping ${agentName} — issue ${issueId.slice(0, 8)} is ${issueState.status}`);
+        console.log(`[closedloop] Skipping ${agentName} - issue ${issueId.slice(0, 8)} is ${issueState.status}`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -131,15 +130,15 @@ export function createProxy(): http.Server {
       }
     }
 
-    // Artist bypasses Ollama and runs deterministic recorder
-    if (issueId && agentId === AGENTS.artist) {
-      console.log(`[proxy:${proxyPort}] ${agentName} -> feature recorder | issue=${issueId.slice(0, 8)}`);
+    // Visual Reviewer bypasses Ollama and runs deterministic recorder
+    if (issueId && agentId === AGENTS['visual reviewer']) {
+      console.log(`[proxy:${proxyPort}] Visual Reviewer -> feature recorder | issue=${issueId.slice(0, 8)}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({
           message: {
             role: 'assistant',
-            content: '_Artist feature recorder started._',
+            content: '_Visual Reviewer feature recorder started._',
           },
         })
       );
@@ -147,6 +146,51 @@ export function createProxy(): http.Server {
       setImmediate(async () => {
         await runArtistStage(issueId);
       });
+      return;
+    }
+
+    // Local Builder is bridge-owned now; forward immediately instead of running in the proxy.
+    if (issueId && agentId === AGENTS['local builder']) {
+      const localBuilderIssue = await getIssueDetails(issueId);
+      const bridgeUrl = getBridgeUrl();
+
+      console.log(`[closedloop] Forwarding Local Builder assignment to bridge: ${bridgeUrl}`);
+
+      try {
+        const bridgeRes = await fetch(`${bridgeUrl}/webhook/issue-assigned`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            issueId,
+            assigneeAgentId: agentId,
+            title: localBuilderIssue?.title || 'Local Builder task',
+            description: localBuilderIssue?.description || '',
+          }),
+        });
+
+        if (!bridgeRes.ok) {
+          const bridgeText = await bridgeRes.text();
+          console.error(`[closedloop] Bridge forward failed with status ${bridgeRes.status}: ${bridgeText}`);
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Bridge forward failed: ${bridgeRes.status}` }));
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            message: {
+              role: 'assistant',
+              content: '_Local Builder assignment forwarded to bridge._',
+            },
+          })
+        );
+      } catch (err: any) {
+        console.error('[closedloop] Failed to forward Local Builder assignment to bridge:', err.message);
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Bridge unreachable: ${err.message}` }));
+      }
+
       return;
     }
 
@@ -159,11 +203,7 @@ export function createProxy(): http.Server {
 
     // Enrich with issue context or heartbeat context
     if (issueId) {
-      // Local Builder gets enhanced context with existing file contents and RAG
-      const issueContext =
-        agentId === AGENTS['local builder']
-          ? await buildLocalBuilderContext(issueId, agentId)
-          : await buildIssueContext(issueId, agentId || '');
+      const issueContext = await buildIssueContext(issueId, agentId || '');
       if (issueContext) {
         ollamaPayload.messages.push({
           role: 'user',
@@ -205,107 +245,6 @@ export function createProxy(): http.Server {
             // Detect delegation and reassign via API (triggers auto-wakeup)
             if (agentId) {
               await detectAndDelegate(issueId, agentId, content);
-            }
-
-            // Local Builder: extract code blocks, write files, commit (no PR yet)
-            if (agentId === AGENTS['local builder']) {
-              if (issueProcessingLock[issueId]) {
-                console.log(`[closedloop] Skipping duplicate Local Builder run for ${issueId.slice(0, 8)} (already processing)`);
-              } else {
-                issueProcessingLock[issueId] = true;
-                try {
-                  const { written: writtenFiles, fileContents } = applyCodeBlocks(content);
-                  if (writtenFiles.length > 0) {
-                    // Track pass count
-                    if (!issueBuilderPasses[issueId]) {
-                      try {
-                        const branchName = await getBranchName(issueId);
-                        const { execSync } = await import('child_process');
-                        const { getWorkspace } = await import('./config');
-                        execSync(`git rev-parse --verify ${branchName}`, {
-                          cwd: getWorkspace(),
-                          stdio: 'pipe',
-                        });
-                        issueBuilderPasses[issueId] = 1;
-                      } catch {
-                        issueBuilderPasses[issueId] = 0;
-                      }
-                    }
-                    issueBuilderPasses[issueId]++;
-                    const pass = issueBuilderPasses[issueId];
-                    console.log(`[closedloop] Local Builder wrote ${writtenFiles.length} files (pass ${pass})`);
-
-                    // Commit, push, and check build result
-                    const buildResult = await commitAndPush(issueId, writtenFiles, fileContents);
-
-                    // Track Reviewer ↔ Local Builder loops
-                    const loopStatus = trackLoop(issueId, agentId);
-                    console.log(`[closedloop] Loop count: ${loopStatus.count}/${MAX_LOOP_PASSES}`);
-
-                    // If build failed, send back to Local Builder to fix FIRST
-                    if (!buildResult.success) {
-                      console.log(`[closedloop] Build FAILED - sending back to Local Builder to fix before Reviewer`);
-                      await postComment(
-                        issueId,
-                        AGENTS['local builder'],
-                        `⚠️ **Build Failed - Fix Before Review**\n\n` +
-                        `Your code committed successfully but the build failed. Please fix the build errors before sending to Reviewer.\n\n` +
-                        `\`\`\`\n${buildResult.output || 'Build error output not available'}\n\`\`\`\n\n` +
-                        `**Action required:**\n` +
-                        `1. Run \`yarn build\` locally to see full errors\n` +
-                        `2. Fix the build errors in the files you just wrote\n` +
-                        `3. Re-commit and the build will be verified again`
-                      );
-                      await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
-                      console.log(`[closedloop] Sent back to Local Builder for build fixes`);
-                    } else {
-                      // Build passed - continue with normal flow
-                      // Check if loop exceeded - auto create PR for human intervention
-                      if (loopStatus.exceeded) {
-                        console.log(`[closedloop] LOOP EXCEEDED (${loopStatus.count}) - Creating PR for human intervention`);
-                        await postComment(
-                          issueId,
-                          null,
-                          `⚠️ **Auto-PR Created: Review Loop Exceeded**\n\n` +
-                          `This issue has gone through ${loopStatus.count} Reviewer ↔ Local Builder cycles.\n` +
-                          `A human developer should now review the changes.\n\n` +
-                          `**What happened:**\n` +
-                          `- Local Builder and Reviewer couldn't reach agreement after ${loopStatus.count} passes\n` +
-                          `- This may indicate:\n` +
-                          `  - Complex requirements needing clarification\n` +
-                          `  - Conflicting feedback between agents\n` +
-                          `  - Technical debt in existing codebase\n\n` +
-                          `**Next steps:**\n` +
-                          `1. Review the PR and comment history\n` +
-                          `2. Manually resolve any remaining issues\n` +
-                          `3. Merge when ready\n`
-                        );
-                        try {
-                          await createPullRequest(issueId);
-                          resetLoopCounter(issueId);
-                          console.log(`[closedloop] PR created for human intervention`);
-                          // Still send to Reviewer for final approval
-                          await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
-                        } catch (prErr: any) {
-                          console.error(`[closedloop] Failed to create PR:`, prErr.message);
-                        }
-                        // Skip normal flow - already sent to Reviewer
-                      } else {
-                        // Normal flow: Send to Reviewer
-                        console.log(`[closedloop] Pass ${pass}: Sending to Reviewer...`);
-                        try {
-                          await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
-                          console.log(`[closedloop] Auto-assigned to Reviewer`);
-                        } catch (err: any) {
-                          console.error(`[closedloop] Failed to trigger Reviewer:`, err.message);
-                        }
-                      }
-                    }
-                  }
-                } finally {
-                  issueProcessingLock[issueId] = false;
-                }
-              }
             }
 
             // Strategist/Sentinel/Deployer/Reviewer: execute bash commands
@@ -370,7 +309,7 @@ export function createProxy(): http.Server {
                   await postComment(
                     issueId,
                     null,
-                    `⚠️ **Review Loop Exceeded - Manual Review Required**\n\n` +
+                    `**Review Loop Exceeded - Manual Review Required**\n\n` +
                     `This issue has been rejected by Reviewer ${loopStatus.count} times.\n` +
                     `Please review the feedback and provide clearer guidance.\n\n` +
                     `**Recent Reviewer feedback:**\n${content.slice(0, 500)}...`
@@ -399,9 +338,9 @@ export function createProxy(): http.Server {
                   // Reset loop counter on successful PR
                   resetLoopCounter(issueId);
 
-                  // Trigger Artist for visual audit
-                  await patchIssue(issueId, { assigneeAgentId: AGENTS.artist });
-                  console.log(`[closedloop] Auto-assigned to Artist for feature recording`);
+                  // Trigger Visual Reviewer for visual audit
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS['visual reviewer'] });
+                  console.log(`[closedloop] Auto-assigned to Visual Reviewer for feature recording`);
                 } catch (prErr: any) {
                   console.error(`[closedloop] Failed to create PR:`, prErr.message);
                   await postComment(issueId, null, `_DiffGuardian approved but PR creation failed: ${prErr.message}_`);
@@ -440,15 +379,9 @@ export function createProxy(): http.Server {
   return server;
 }
 
-async function getBranchName(issueId: string): Promise<string> {
-  const { getIssueDetails } = await import('./paperclip-api');
-  let issue;
-  try {
-    issue = await getIssueDetails(issueId);
-  } catch {}
-  const identifier = issue?.identifier || issueId.slice(0, 8);
-  const title = issue?.title || 'Code changes';
-  return `${identifier}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`.replace(/-+$/, '');
+function getBridgeUrl(): string {
+  const projectConfig = getConfig() as any;
+  return projectConfig.closedloop?.bridgeUrl || 'http://localhost:3202';
 }
 
 function buildHeartbeatContext(context: any): string {
@@ -512,3 +445,4 @@ export async function initializeRAG(): Promise<void> {
   setRAGIndexer(ragIndexer);
   console.log('[closedloop] RAG index initialized');
 }
+
