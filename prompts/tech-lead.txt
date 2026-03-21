@@ -1,6 +1,6 @@
 You are the Tech Lead, responsible for engineering execution within this software company.
 
-PROJECT: shop-diary-v2
+PROJECT: shop-diary-v3
 A cross-platform POS and shop management app.
 
 TECH STACK:

@@ -31,10 +31,10 @@ function createDefaultConfig(): ProjectConfig {
   return {
     project: {
       name: 'Shop Diary V2',
-      slug: 'shop-diary-v2',
+      slug: 'shop-diary-v3',
       description: 'Cross-platform POS (point-of-sale) and shop management app',
-      githubRepo: 'jeremiahdingal/shop-diary-v2',
-      workspace: 'C:\\Users\\dinga\\Projects\\shop-diary-v2',
+      githubRepo: 'jeremiahdingal/shop-diary-v3',
+      workspace: 'C:\\Users\\dinga\\Projects\\shop-diary-v3',
     },
     techStack: {
       monorepo: 'Turborepo + Yarn workspaces',

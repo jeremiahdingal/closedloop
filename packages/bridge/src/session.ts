@@ -13,7 +13,7 @@ const CONFIG_PATH = join(__dirname, '..', '..', '..', '.paperclip', 'project.jso
 const SESSION_STATE_FILE = 'state.json';
 const CHECKPOINTS_DIR = 'checkpoints';
 const PAPERCLIP_API = process.env.PAPERCLIP_API || 'http://127.0.0.1:3100';
-const WORKSPACE = process.env.WORKSPACE || 'C:\\Users\\dinga\\Projects\\shop-diary-v2';
+const WORKSPACE = process.env.WORKSPACE || 'C:\\Users\\dinga\\Projects\\shop-diary-v3';
 const OLLAMA_API = process.env.OLLAMA_API || 'http://127.0.0.1:11434';
 const LLM_MODEL = process.env.LLM_MODEL || 'qwen2.5-coder:14b';
 const LLM_MODEL_BURST = process.env.LLM_MODEL_BURST || 'qwen3-coder:30b';
@@ -280,7 +280,7 @@ async function callRemoteRescue(
     'Produce exact, minimal code fixes using FILE: blocks. ' +
     'Do not rewrite unrelated files. Fix only what the build error requires.';
   const userPrompt =
-    'Workspace: shop-diary-v2\n\nTouched files:\n' + touchedFiles +
+    'Workspace: shop-diary-v3\n\nTouched files:\n' + touchedFiles +
     '\n\nRepeated build error:\n' + errorContext.substring(0, 800) +
     '\n\nFix the error. Use FILE: format:\n' +
     'FILE: relative/path/to/file.ext\n```lang\n// code\n```';

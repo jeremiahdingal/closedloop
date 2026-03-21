@@ -238,7 +238,7 @@ export async function createPullRequest(issueId: string): Promise<void> {
     } catch {}
 
     // Build PR body with screenshot images
-    const GITHUB_REPO = 'jeremiahdingal/shop-diary-v2';
+    const GITHUB_REPO = 'jeremiahdingal/shop-diary-v3';
     let prBody = `Auto-generated from issue ${identifier}\n\n`;
     prBody += `## Changes\n(see commits on branch)\n\n`;
 

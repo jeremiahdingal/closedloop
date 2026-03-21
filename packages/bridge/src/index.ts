@@ -91,7 +91,7 @@ app.post('/webhook/issue-assigned', async (req, res) => {
       issueId: issueId,
       title: title || 'Untitled',
       description: description || '',
-      workspace: process.env.WORKSPACE || 'C:\\Users\\dinga\\Projects\\shop-diary-v2',
+      workspace: process.env.WORKSPACE || 'C:\\Users\\dinga\\Projects\\shop-diary-v3',
       role: role,
     });
     
