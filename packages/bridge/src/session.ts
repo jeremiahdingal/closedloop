@@ -870,8 +870,19 @@ function parseFileMarkers(output: string): Array<{ path: string; content: string
 }
 
 function runBuild(workspace: string, logPath: string, callback: (error: any, result: any) => void): void {
-  const build = spawn('yarn', ['build'], {
-    cwd: workspace,
+  // Configurable build command via env vars.
+  // Default: wrangler dry-run (esbuild compile check for Cloudflare Workers).
+  // Override with BUILD_CMD + BUILD_ARGS for other project types.
+  const buildCmd = process.env.BUILD_CMD || 'npx';
+  const buildArgs = process.env.BUILD_ARGS
+    ? process.env.BUILD_ARGS.split(' ')
+    : ['wrangler', 'deploy', 'src/index.ts', '--dry-run', '--outdir', '.wrangler/tmp-build'];
+  // BUILD_CWD overrides the build working directory (e.g. "api" subdir for Workers)
+  const buildCwd = process.env.BUILD_CWD
+    ? join(workspace, process.env.BUILD_CWD)
+    : join(workspace, 'api');
+  const build = spawn(buildCmd, buildArgs, {
+    cwd: buildCwd,
     shell: true,
     stdio: ['pipe', 'pipe', 'pipe'],
   });

@@ -41,6 +41,12 @@ export async function detectAndDelegate(
     }
   }
 
+  // Fallback: if Strategist mentions "local builder" directly, reroute to Tech Lead
+  if (found.length === 0 && clean.includes('local builder') && allowedTargets.includes(AGENTS['tech lead'])) {
+    console.log(`[delegation] Rerouting: Strategist mentioned "local builder" — delegating to Tech Lead instead`);
+    found.push({ name: 'tech lead', id: AGENTS['tech lead'] });
+  }
+
   console.log(`[delegation] Found ${found.length} targets`, found.map((f) => f.name));
 
   if (found.length === 0) {
