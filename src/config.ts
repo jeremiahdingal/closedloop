@@ -132,6 +132,7 @@ function createDefaultConfig(): ProjectConfig {
         strategist: 'qwen3:8b',
         'tech lead': 'deepcoder:14b',
         'local builder': 'deepcoder:14b',
+        'local builder burst': 'qwen3-coder:30b',
         reviewer: 'rnj-1:8b',
         'diff guardian': 'qwen3:4b',
         'visual reviewer': 'qwen3-vl:8b',
@@ -205,6 +206,14 @@ export function getOllamaPorts(): { proxyPort: number; ollamaPort: number } {
     proxyPort: config.ollama.proxyPort,
     ollamaPort: config.ollama.ollamaPort,
   };
+}
+
+export function getAgentModel(agentName: string): string | undefined {
+  return loadConfig().ollama.models[agentName];
+}
+
+export function getBurstModel(): string | undefined {
+  return loadConfig().ollama.models['local builder burst'];
 }
 
 export function getArtistConfig() {

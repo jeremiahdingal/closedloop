@@ -60,7 +60,7 @@ app.get('/health', (_req, res) => {
 app.post('/webhook/issue-assigned', async (req, res) => {
   console.log('[webhook] === REQUEST START ===');
   try {
-    const { issueId, assigneeAgentId, title, description } = req.body;
+    const { issueId, assigneeAgentId, title, description, modelOverride } = req.body;
     console.log('[webhook] Parsed body: issue=' + issueId);
 
     console.log('[webhook] Received: issue=' + issueId + ', agent=' + assigneeAgentId);
@@ -93,6 +93,7 @@ app.post('/webhook/issue-assigned', async (req, res) => {
       description: description || '',
       workspace: process.env.WORKSPACE || 'C:\\Users\\dinga\\Projects\\shop-diary-v3',
       role: role,
+      modelOverride: modelOverride,
     });
     
     console.log('[webhook] Session spawned for ' + issueId + ' (' + role + ')');

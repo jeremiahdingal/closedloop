@@ -24,6 +24,9 @@ const Z_AI_API_BASE = 'https://open.bigmodel.cn/api/paas/v4';
 const REMOTE_RESCUE_MODEL = process.env.REMOTE_RESCUE_MODEL || 'glm-5';
 const REMOTE_RESCUE_THRESHOLD = 3; // same-fingerprint repeat count before rescue fires
 
+// Burst model: one-shot override for first build pass (greenfield scaffold)
+const issueBurstModel = new Map<string, string>();
+
 interface ProjectConfig {
   paperclip?: {
     apiUrl?: string;
@@ -344,14 +347,14 @@ export async function spawnSession(config: any): Promise<void> {
 
     console.log('[spawnSession] Creating ' + role + ' session for ' + config.issueId + ' in ' + sessionDir);
 
-    await spawnPiMono(config, sessionDir, logPath, role, sessionState);
+    await spawnPiMono(config, sessionDir, logPath, role, sessionState, config.modelOverride);
   } catch (err: any) {
     console.error('[spawnSession] Error:', err.message);
     throw err;
   }
 }
 
-async function spawnPiMono(config: any, sessionDir: string, logPath: string, role: string, state: SessionState): Promise<void> {
+async function spawnPiMono(config: any, sessionDir: string, logPath: string, role: string, state: SessionState, modelOverride?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     console.log('[llm] Starting LLM session for ' + config.issueId + ' (' + role + ')');
     appendFileSync(logPath, '\n[LLM STARTING]\n');
@@ -359,6 +362,11 @@ async function spawnPiMono(config: any, sessionDir: string, logPath: string, rol
 
     const taskPrompt = buildTaskPrompt(config, role);
     appendFileSync(logPath, '[TASK PROMPT]\n' + taskPrompt + '\n\n');
+
+    if (modelOverride) {
+      issueBurstModel.set(config.issueId, modelOverride);
+      appendFileSync(logPath, '[BURST MODEL] ' + modelOverride + '\n');
+    }
 
     runLlmIteration(config.issueId, taskPrompt, role, config.workspace || WORKSPACE, sessionDir, logPath, state, (finalError, completion) => {
       if (finalError && completion.reason === 'max-passes') {
@@ -404,7 +412,14 @@ function runLlmIteration(
   appendFileSync(logPath, '\n[PASS ' + state.attemptCount + '/' + state.maxPasses + ']\n');
   appendFileSync(logPath, '[STATE] mode=' + state.mode + ' repeated=' + state.repeatedErrorCount + '\n');
 
-  callOllama(prompt, role, workspace, logPath, (error, result) => {
+  // Check for burst model override (one-shot, first pass only)
+  const burstOverride = issueBurstModel.get(issueId);
+  if (burstOverride) {
+    issueBurstModel.delete(issueId);
+    appendFileSync(logPath, '[BURST] Using ' + burstOverride + ' for this pass\n');
+  }
+
+  const ollamaCallback = (error: any, result: any) => {
     if (error) {
       callback(error, {
         escalated: false,
@@ -481,7 +496,9 @@ function runLlmIteration(
     } else if (role === 'reviewer' || role === 'diff-guardian') {
       handleValidationWork(role, workspace, sessionDir, logPath, state, callback);
     }
-  });
+  };
+
+  callOllama(prompt, role, workspace, logPath, ollamaCallback, burstOverride);
 }
 
 function handleValidationWork(
@@ -910,6 +927,9 @@ function runBuild(workspace: string, logPath: string, callback: (error: any, res
 
 function callOllama(prompt: string, role: string, workspace: string, logPath: string, callback: (error: any, result: any) => void, modelOverride?: string): void {
   const model = modelOverride || LLM_MODEL;
+  if (modelOverride) {
+    appendFileSync(logPath, '[MODEL OVERRIDE] Using ' + modelOverride + '\n');
+  }
   const data = JSON.stringify({
     model: model,
     prompt: prompt,

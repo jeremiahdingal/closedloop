@@ -7,7 +7,7 @@
  */
 
 import * as http from 'http';
-import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId } from './config';
+import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getBurstModel } from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
 import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES } from './agent-types';
 import { extractIssueId, extractAgentId } from './utils';
@@ -33,6 +33,9 @@ const DELEGATION_COOLDOWN_MS = 5 * 60 * 1000;
 const issueLoopCounts = new Map<string, { count: number; lastReset: number }>();
 const MAX_LOOP_PASSES = 20; // Auto-create PR after 20 passes for human intervention
 const LOOP_RESET_WINDOW_MS = 60 * 60 * 1000; // Reset count after 1 hour of no activity
+
+// Track issues that should use burst model (greenfield first pass)
+const issueBuilderBurstMode = new Set<string>();
 
 /**
  * Track and detect Reviewer <-> Local Builder loops
@@ -154,6 +157,14 @@ export function createProxy(): http.Server {
       const localBuilderIssue = await getIssueDetails(issueId);
       const bridgeUrl = getBridgeUrl();
 
+      // Determine if burst mode should be used (greenfield first pass)
+      const useBurst = issueBuilderBurstMode.has(issueId);
+      const burstModel = useBurst ? getBurstModel() : undefined;
+      if (useBurst) {
+        console.log(`[closedloop] Burst mode active for ${issueId.slice(0, 8)} — using ${burstModel}`);
+        issueBuilderBurstMode.delete(issueId); // One-shot: only first pass uses burst
+      }
+
       console.log(`[closedloop] Forwarding Local Builder assignment to bridge: ${bridgeUrl}`);
 
       try {
@@ -165,6 +176,7 @@ export function createProxy(): http.Server {
             assigneeAgentId: agentId,
             title: localBuilderIssue?.title || 'Local Builder task',
             description: localBuilderIssue?.description || '',
+            ...(burstModel ? { modelOverride: burstModel } : {}),
           }),
         });
 
@@ -244,6 +256,11 @@ export function createProxy(): http.Server {
 
             // Detect delegation and reassign via API (triggers auto-wakeup)
             if (agentId) {
+              // Tech Lead → Local Builder: activate burst mode for greenfield scaffold
+              if (agentId === AGENTS['tech lead'] && content.toLowerCase().includes('local builder')) {
+                issueBuilderBurstMode.add(issueId);
+                console.log(`[closedloop] Burst mode activated for ${issueId.slice(0, 8)} (first pass from Tech Lead)`);
+              }
               await detectAndDelegate(issueId, agentId, content);
             }
 
