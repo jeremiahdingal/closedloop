@@ -269,12 +269,16 @@ export function createProxy(): http.Server {
 
             // Reviewer: validate changes and approve/reject before PR creation
             if (agentId === AGENTS.reviewer) {
+              const lower = content.toLowerCase();
               const reviewApproved =
-                content.toLowerCase().includes('approved') ||
-                content.toLowerCase().includes('looks good') ||
-                content.toLowerCase().includes('lgtm') ||
-                content.toLowerCase().includes('no issues') ||
-                content.toLowerCase().includes('ready for pr');
+                lower.includes('approved') ||
+                lower.includes('looks good') ||
+                lower.includes('lgtm') ||
+                lower.includes('no issues') ||
+                lower.includes('ready for pr') ||
+                lower.includes('meet the project standards') ||
+                lower.includes('meets the project standards') ||
+                (lower.includes('result') && lower.includes('pass') && !lower.includes('send back'));
 
               if (reviewApproved) {
                 console.log(`[closedloop] Reviewer APPROVED changes for ${issueId.slice(0, 8)}`);

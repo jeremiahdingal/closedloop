@@ -15,7 +15,7 @@ const CHECKPOINTS_DIR = 'checkpoints';
 const PAPERCLIP_API = process.env.PAPERCLIP_API || 'http://127.0.0.1:3100';
 const WORKSPACE = process.env.WORKSPACE || 'C:\\Users\\dinga\\Projects\\shop-diary-v2';
 const OLLAMA_API = process.env.OLLAMA_API || 'http://127.0.0.1:11434';
-const LLM_MODEL = process.env.LLM_MODEL || 'qwen3.5:latest';
+const LLM_MODEL = process.env.LLM_MODEL || 'qwen2.5-coder:14b';
 const LLM_MODEL_BURST = process.env.LLM_MODEL_BURST || 'qwen3-coder:30b';
 
 // Remote rescue via z.ai (GLM-5)
@@ -925,7 +925,7 @@ function callOllama(prompt: string, role: string, workspace: string, logPath: st
       'Content-Type': 'application/json',
       'Content-Length': data.length,
     },
-    timeout: 120000,
+    timeout: 600000,
   };
 
   const req = http.request(options, (res: http.IncomingMessage) => {
