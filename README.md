@@ -1,221 +1,258 @@
 # ClosedLoop
 
-**Local-First, Ollama-Powered Autonomous Coding Agent**
+ClosedLoop is a local-first autonomous coding system built around Paperclip, Ollama, and a bridge runtime that keeps Local Builder in a build-fix loop until code is green.
 
-ClosedLoop is a reliable, offline-capable AI agent system that automates your software development workflow using local LLMs (Ollama), Paperclip AI, and RAG (Retrieval-Augmented Generation) for grounded code generation.
+The important current story is not just "generate code locally." It is "make weaker local models reliable by giving them continuous execution, build feedback, and bounded handoff rules."
 
-## Features
+## Current Status
 
-- 🏠 **Local-First**: Runs entirely on your machine with Ollama - no cloud APIs required
-- 🤖 **Ollama-Powered**: Supports 30B+ parameter models for high-quality code generation
-- 📎 **Paperclip AI Integration**: Leverages Paperclip's agent orchestration system
-- 🧠 **RAG-Enhanced**: Retrieves relevant codebase context to prevent hallucination
-- ♾️ **Closed-Loop Workflow**: Plans → Builds → Reviews → Deploys → Audits → Repeats
-- 🔒 **Privacy-Preserving**: Your code never leaves your machine
+This repository is in an active transition from the older `src/` ClosedLoop orchestration path to the newer `packages/bridge/` control plane.
+
+What is true today:
+
+- `packages/bridge` is the intended owner of the Local Builder lifecycle.
+- Local Builder is expected to edit, build, and repair until the workspace is green before handing off.
+- Reviewer and Diff Guardian should only see build-green work.
+- The bridge already posts real Paperclip comments and reassignments.
+- A live Paperclip issue has already reached the bridge-owned Builder green-handoff point.
+
+What is not fully finished:
+
+- The bridge still talks to Ollama directly over HTTP instead of using a true persistent CLI worker like pi-mono.
+- Reviewer and Diff Guardian validation are real, but still heuristic-heavy and not yet deeply project-aware.
+- The full live Paperclip path still needs continued end-to-end verification across Reviewer, Diff Guardian, and final PR/human-review handoff.
+
+## Why This Exists
+
+The main problem being solved is a failure mode common with smaller local coding models:
+
+1. Builder writes code that does not compile.
+2. Builder hands off anyway.
+3. Reviewer becomes the first place where the broken build is discovered.
+4. The system loops between Builder and Reviewer without ever enforcing a green build.
+
+ClosedLoop is being reshaped around one core invariant:
+
+- Local Builder must not hand off on a red build.
+
+That invariant is the reason the bridge exists.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ ClosedLoop Architecture                                     │
-├─────────────────────────────────────────────────────────────┤
-│ Paperclip AI Agents                                         │
-│   Strategist → Tech Lead → Local Builder → Reviewer        │
-│                          ↓                                  │
-│   ┌─────────────────────────────────────────────┐          │
-│   │ ClosedLoop (This Project)                   │          │
-│   │  - RAG Context Builder (ChromaDB)           │          │
-│   │  - Code Extraction & Validation             │          │
-│   │  - Git Operations (branch, commit, PR)      │          │
-│   │  - Bash Command Execution                   │          │
-│   │  - Delegation Detection                     │          │
-│   └─────────────────────────────────────────────┘          │
-│                          ↓                                  │
-│   Local Ollama Instance (qwen3-coder:30b, etc.)            │
-└─────────────────────────────────────────────────────────────┘
-```
+There are currently two important layers:
+
+### `packages/bridge`
+
+This is the reliability-first runtime and the long-term control plane for Local Builder.
+
+It currently handles:
+
+- webhook intake
+- role routing
+- per-issue session directories
+- builder retry loop
+- build execution and log capture
+- per-attempt state persistence
+- checkpoints before builder writes
+- Paperclip comments and reassignment
+- Reviewer and Diff Guardian validation flow
+
+### `src/`
+
+This is the older ClosedLoop integration layer.
+
+It still matters for:
+
+- shared config loading
+- Paperclip API integration
+- RAG/context plumbing
+- other shared agent logic
+
+But it is no longer supposed to own the Local Builder lifecycle. That responsibility is being moved behind the bridge boundary.
+
+## Agent Flow
+
+The intended Paperclip flow is:
+
+`Strategist -> Tech Lead -> Local Builder -> Reviewer -> Diff Guardian -> Human review / PR creation`
+
+Supporting and side-path agents:
+
+- `Sentinel`
+  - used for deployment-oriented or safety-oriented follow-up work
+- `Artist`
+  - used for UI inspection, screenshots, and visual checks
+- `Coder Remote`
+  - configured but currently blocked in this project
+
+The most important runtime rule is:
+
+- Local Builder must stay in the bridge-owned edit -> build -> fix loop until green before Reviewer or Diff Guardian see the issue.
+
+## Agent Roles
+
+### `Strategist`
+
+Turns a high-level request into a clearer implementation direction. This agent is for planning, scoping, and deciding what kind of work should happen next.
+
+### `Tech Lead`
+
+Translates the strategy into a concrete build task for Local Builder. This role is the planning-to-execution handoff point.
+
+### `Local Builder`
+
+Implements code changes in the target workspace. In the current architecture, this role is the most important one: it should write code, run the build, repair errors, and only hand off after the workspace is green.
+
+### `Reviewer`
+
+Performs semantic and code-quality review after Builder is green. Reviewer should not be the first place broken builds are discovered.
+
+### `Diff Guardian`
+
+Performs post-build mechanical validation on the resulting diff. This is where suspicious changes, risky diff patterns, or policy failures should be caught after the build already passes.
+
+### `Sentinel`
+
+Handles safety- or deploy-adjacent follow-up paths. It is part of the broader workflow, but not the current center of the bridge effort.
+
+### `Deployer`
+
+Owns deployment-oriented actions after the code path is considered ready.
+
+### `Artist`
+
+Handles visual verification, UI inspection, and screenshot-driven review. This is especially useful for frontend tasks and presentation checks.
+
+## Repository Guide
+
+Top-level areas that matter most:
+
+- `packages/bridge/`
+  - current control plane for Local Builder build-fix-handoff flow
+- `src/`
+  - older ClosedLoop integration path and supporting infrastructure
+- `.paperclip/project.json`
+  - project, workspace, Paperclip, and model configuration
+- `LOCAL_BUILDER_BRIDGE_HANDOFF.md`
+  - short canonical handoff for the next coding model
+- `LOCAL_BUILDER_BRIDGE_AUDIT.md`
+  - deeper reasoning and audit context
+- `CONFIG_SUMMARY.md`
+  - configuration overview
+
+## What Has Been Proven
+
+The bridge is already more than a plan.
+
+Confirmed in this repo:
+
+- root TypeScript build passes with `npm run build`
+- bridge build passes with `npm --prefix packages/bridge run build`
+- bridge sessions persist attempt state and logs on disk
+- builder retries against real build failures are happening in practice
+- Paperclip comments and reassignment paths are wired in the bridge
+- a live Paperclip Builder run reached a build-green handoff and posted the ready-for-review comment
+
+This means the repo already proves the key idea: weaker local models do better when they are kept inside a continuous execution loop with immediate feedback.
+
+## What Still Needs Work
+
+The remaining problems are mostly about reliability and refinement, not direction.
+
+Main gaps:
+
+- retries are still too prompt-driven
+- targeted repair mode should be stricter
+- repeated identical failures should trigger narrower repair logic faster
+- checkpoint-based recovery can become more selective
+- Reviewer and Diff Guardian need richer project-aware validation
+- the Ollama backend should eventually be replaced by a true persistent worker process
+
+## Planned Direction
+
+The intended next shape of the system is:
+
+1. Builder owns edit -> build -> fix until green.
+2. Reviewer only handles semantic and quality review after green.
+3. Diff Guardian only handles post-build mechanical validation.
+4. Human review / PR creation only happens after those gates pass.
+
+Longer-term technical direction:
+
+- keep `packages/bridge` as the only owner of Local Builder orchestration
+- move more runtime enforcement out of prompts and into deterministic checks
+- tighten targeted repair mode around touched files and exact diagnostics
+- use checkpoints and fingerprints to avoid repeating the same bad loop
+- evolve the bridge into a true persistent local worker backend
 
 ## Quick Start
 
 ### Prerequisites
 
-1. **Node.js 18+**
-2. **Ollama** - Install from [ollama.ai](https://ollama.ai)
-3. **Paperclip AI** - Install from [paperclip.ai](https://paperclip.ai)
-4. **Git** - For version control operations
+- Node.js 18+
+- Ollama
+- Paperclip
+- Git
 
-### Installation
+### Install
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/jeremiahdingal/closedloop.git
-cd closedloop
-
-# 2. Install dependencies
 npm install
-
-# 3. Pull required Ollama models
-ollama pull qwen3-coder:30b
-ollama pull deepseek-r1:14b  # For reviewer
-ollama pull nomic-embed-text  # For RAG embeddings
-
-# 4. Build TypeScript
 npm run build
+npm --prefix packages/bridge run build
+```
 
-# 5. Build RAG index (indexes your codebase)
-npm run rag-index
+### Run
 
-# 6. Start ClosedLoop
+Main project:
+
+```bash
 npm start
+```
+
+Bridge:
+
+```bash
+npm --prefix packages/bridge run build
+node packages/bridge/dist/index.js
 ```
 
 ### Configuration
 
-ClosedLoop uses Paperclip's configuration format. Edit `.paperclip/project.json`:
+The main configuration lives in `.paperclip/project.json`.
 
-```json
-{
-  "project": {
-    "name": "Your Project",
-    "workspace": "C:\\path\\to\\your\\project"
-  },
-  "paperclip": {
-    "companyId": "your-company-id",
-    "agents": {
-      "strategist": "...",
-      "tech lead": "...",
-      "local builder": "...",
-      "reviewer": "..."
-    }
-  },
-  "ollama": {
-    "proxyPort": 3201,
-    "ollamaPort": 11434,
-    "models": {
-      "local builder": "qwen3-coder:30b",
-      "reviewer": "deepseek-r1:14b"
-    }
-  }
-}
-```
+At minimum, make sure these are correct:
 
-## How It Works
+- workspace path
+- Paperclip API URL
+- company ID
+- agent IDs
+- Ollama model names and ports
 
-### 1. RAG Indexing
+## Recommended Reading Order For Another AI
 
-Before generating code, ClosedLoop indexes your entire codebase:
+If another model needs to get productive quickly, read in this order:
 
-```bash
-npm run rag-index
-```
+1. `README.md`
+2. `LOCAL_BUILDER_BRIDGE_HANDOFF.md`
+3. `LOCAL_BUILDER_BRIDGE_AUDIT.md`
+4. `.paperclip/project.json`
+5. `packages/bridge/src/index.ts`
+6. `packages/bridge/src/session.ts`
+7. `src/proxy-server.ts`
 
-This creates a ChromaDB vector index containing:
-- All TypeScript/JavaScript files
-- Exported symbols (functions, classes, interfaces)
-- File purposes (from JSDoc comments)
-- Code patterns and structure
+## Working Assumptions
 
-### 2. Context-Aware Code Generation
+When continuing this project, assume:
 
-When Local Builder receives a task:
+- the bridge direction is correct
+- overlapping builder orchestration should not be reintroduced
+- build-green gating is non-negotiable
+- prompt-only repair is not enough
+- reliability matters more than elegance in the autonomous lane
 
-1. **Extract keywords** from the issue title/description
-2. **Query RAG index** for top 10 relevant files
-3. **Inject context** showing:
-   - Existing file structure
-   - Current exports (to avoid breaking changes)
-   - Code patterns to follow
-4. **Generate code** with full awareness of the codebase
+## Short Version
 
-### 3. Closed-Loop Workflow
+If you only remember one thing, remember this:
 
-```
-Issue → Strategist → Tech Lead → Local Builder
-                              ↓
-                        RAG Context
-                              ↓
-                    Code Generation
-                              ↓
-    ┌──────────────────── Reviewer ────────────────────┐
-    │                                                  │
-    ├─→ Approved → Create PR → Artist Audit → Done    │
-    │                                                  │
-    └─→ Issues Found → Send Back to Local Builder ────┘
-```
-
-## Module Structure
-
-| Module | Purpose |
-|--------|---------|
-| `index.ts` | Entry point, initializes RAG |
-| `rag-indexer.ts` | ChromaDB vector indexing |
-| `context-builder.ts` | RAG-enhanced issue context |
-| `code-extractor.ts` | Extract code blocks from LLM output |
-| `git-ops.ts` | Git branch, commit, PR creation |
-| `proxy-server.ts` | HTTP server for Paperclip agents |
-| `paperclip-api.ts` | Paperclip API client |
-| `agent-types.ts` | Agent IDs and delegation rules |
-| `bash-executor.ts` | Execute shell commands |
-| `delegation.ts` | Detect agent delegation |
-| `artist-recorder.ts` | Playwright UI testing |
-
-## Commands
-
-```bash
-# Build TypeScript
-npm run build
-
-# Start ClosedLoop
-npm start
-
-# Development mode (build + start)
-npm run dev
-
-# Build RAG index
-npm run rag-index
-```
-
-## Why ClosedLoop?
-
-### Problem: AI Code Generation is Unreliable
-
-LLMs hallucinate because they lack context about your existing codebase. They:
-- Create duplicate files
-- Delete existing exports
-- Break established patterns
-- Ignore project conventions
-
-### Solution: RAG + Local LLMs
-
-ClosedLoop solves this with:
-
-1. **RAG Grounding**: Retrieves relevant files before generation
-2. **Local Models**: Run 30B+ parameter models offline
-3. **Validation**: Checks for destructive changes before committing
-4. **Closed Loop**: Automatic feedback and revision
-
-## Tech Stack
-
-- **Runtime**: Node.js 18+
-- **Language**: TypeScript (strict mode)
-- **Vector DB**: ChromaDB
-- **LLM Backend**: Ollama
-- **Agent Framework**: Paperclip AI
-- **Testing**: Playwright (Artist agent)
-
-## License
-
-MIT
-
-## Contributing
-
-ClosedLoop is open source! Contributions welcome:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a PR
-
----
-
-**Built with ❤️ for local-first AI development**
+ClosedLoop is becoming a bridge-driven local coding system where Local Builder must keep repairing until the code builds cleanly, and only then can the rest of the Paperclip workflow continue.

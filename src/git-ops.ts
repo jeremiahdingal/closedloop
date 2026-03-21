@@ -25,12 +25,23 @@ export async function getBranchName(issueId: string): Promise<string> {
   return `${identifier}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`.replace(/-+$/, '');
 }
 
+export interface BuildResult {
+  success: boolean;
+  output?: string;
+}
+
+/**
+ * Commit changed files to a branch, push, and run build validation.
+ * Returns build result so caller can verify before handoff.
+ */
 export async function commitAndPush(
   issueId: string,
   files: string[],
   fileContents: Record<string, string>
-): Promise<void> {
-  if (files.length === 0) return;
+): Promise<BuildResult> {
+  const buildResult: BuildResult = { success: false };
+  
+  if (files.length === 0) return { success: true };
 
   const branchName = await getBranchName(issueId);
   let issue;
@@ -99,7 +110,7 @@ export async function commitAndPush(
         `_Code committed to branch \`${branchName}\` (${files.length} files). Push failed: ${err.message}_`
       );
       execSync('git checkout master', opts);
-      return;
+      return buildResult;
     }
 
     await postComment(
@@ -120,12 +131,14 @@ export async function commitAndPush(
       execSync('yarn build --force', { ...opts, timeout: 120000 });
       console.log(`[git] Build PASSED on ${branchName}`);
       await postComment(issueId, null, '_Build validation: PASSED_');
+      buildResult.success = true;
     } catch (buildErr: any) {
       const buildStdout = buildErr.stdout?.toString() || '';
       const buildStderr = buildErr.stderr?.toString() || '';
       const buildOutput = truncate((buildStdout + '\n' + buildStderr).trim(), 3000);
 
       console.error(`[git] Build FAILED on ${branchName}`);
+      buildResult.output = buildOutput;
       await postComment(
         issueId,
         null,
@@ -141,7 +154,10 @@ export async function commitAndPush(
       execSync('git checkout master', opts);
     } catch {}
     await postComment(issueId, null, `_Git workflow error: ${err.message}_`);
+    buildResult.output = err.message;
   }
+  
+  return buildResult;
 }
 
 export async function createPullRequest(issueId: string): Promise<void> {

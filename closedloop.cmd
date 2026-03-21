@@ -16,7 +16,9 @@ echo    [3] Restart All
 echo    [4] Status Check
 echo    [5] View ClosedLoop Logs (live)
 echo    [6] Wake Agent Manually
-echo    [7] Exit
+echo    [7] Build RAG Index
+echo    [8] Start ClosedLoop Only (npm start)
+echo    [9] Exit
 echo.
 set /p choice="  Select: "
 
@@ -26,7 +28,9 @@ if "%choice%"=="3" goto RESTART
 if "%choice%"=="4" goto STATUS
 if "%choice%"=="5" goto LOGS
 if "%choice%"=="6" goto WAKE
-if "%choice%"=="7" exit
+if "%choice%"=="7" goto RAG
+if "%choice%"=="8" goto START_CLOSEDLOOP
+if "%choice%"=="9" exit
 goto MENU
 
 :START
@@ -34,6 +38,14 @@ cls
 echo.
 echo  [*] Starting ClosedLoop...
 echo.
+
+:: Load environment
+if exist "%~dp0.env" (
+    for /f "usebackq tokens=1,* delims==" %%a in ("%~dp0.env") do (
+        set "%%a=%%b"
+    )
+    echo        Environment loaded from .env
+)
 
 :: 1. Ollama
 echo  [1/3] Starting Ollama...
@@ -213,10 +225,12 @@ echo    [1] Strategist (CTO)
 echo    [2] Tech Lead
 echo    [3] Local Builder
 echo    [4] Reviewer
-echo    [5] Artist (UI/UX)
+echo    [5] Visual Reviewer (UI/UX)
 echo    [6] Sentinel
 echo    [7] Deployer
-echo    [8] Back
+echo    [8] Diff Guardian
+echo    [9] Complexity Router
+echo    [10] Back
 echo.
 set /p agent="  Select agent: "
 
@@ -225,10 +239,12 @@ if "%agent%"=="1" set AGENT_ID=a90b07a4-f18c-4509-9d7b-b9f16eb098d6&set AGENT_NA
 if "%agent%"=="2" set AGENT_ID=dad994d7-5d3e-4101-ae57-82c7be9b778b&set AGENT_NAME=Tech Lead
 if "%agent%"=="3" set AGENT_ID=caf931bf-516a-409f-813e-a29e14decb10&set AGENT_NAME=Local Builder
 if "%agent%"=="4" set AGENT_ID=eace3a19-bded-4b90-827e-cfc00f3900bd&set AGENT_NAME=Reviewer
-if "%agent%"=="5" set AGENT_ID=787cbd9e-d10b-4bca-b486-e7f5fd99d184&set AGENT_NAME=Artist
+if "%agent%"=="5" set AGENT_ID=787cbd9e-d10b-4bca-b486-e7f5fd99d184&set AGENT_NAME=Visual Reviewer
 if "%agent%"=="6" set AGENT_ID=c7fb4dae-8ac3-4795-b1f6-d14db2021035&set AGENT_NAME=Sentinel
 if "%agent%"=="7" set AGENT_ID=5e234916-47ef-41a2-8c07-e9376ee6aa9c&set AGENT_NAME=Deployer
-if "%agent%"=="8" goto MENU
+if "%agent%"=="8" set AGENT_ID=79641900-921d-400f-8eba-63373f5c0e17&set AGENT_NAME=Diff Guardian
+if "%agent%"=="9" set AGENT_ID=093ee390-cfbf-4129-81d6-aeeb638c7d71&set AGENT_NAME=Complexity Router
+if "%agent%"=="10" goto MENU
 
 if not defined AGENT_ID (
     echo  Invalid selection.
@@ -242,6 +258,67 @@ if "%reason%"=="" set reason=Manual wakeup
 echo.
 echo  Waking %AGENT_NAME%...
 curl -s -X POST "http://127.0.0.1:3100/api/agents/%AGENT_ID%/wakeup" -H "Content-Type: application/json" -d "{\"reason\":\"%reason%\"}" | node -e "const c=[];process.stdin.on('data',d=>c.push(d));process.stdin.on('end',()=>{const d=JSON.parse(Buffer.concat(c));console.log('  Run: '+(d.id||'?').slice(0,8)+' | Status: '+(d.status||'?'));});"
+echo.
+pause
+goto MENU
+
+:RAG
+cls
+echo.
+echo  ============================================
+echo    Build RAG Index
+echo  ============================================
+echo.
+echo  This will scan your codebase and build the RAG index.
+echo  Run this when you add/modify files in your project.
+echo.
+pause
+echo.
+echo  Building RAG index...
+echo.
+call npm run rag-index
+echo.
+echo  [OK] RAG index built.
+echo.
+pause
+goto MENU
+
+:START_CLOSEDLOOP
+cls
+echo.
+echo  ============================================
+echo    Start ClosedLoop (npm start)
+echo  ============================================
+echo.
+echo  Starting ClosedLoop server on :3201...
+echo.
+
+:: Check if already running
+set PROXY_PID=
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3201 "') do set PROXY_PID=%%a
+if defined PROXY_PID (
+    echo  ClosedLoop already running on :3201 ^(PID %PROXY_PID%^).
+    pause
+    goto MENU
+)
+
+:: Start ClosedLoop
+echo  Starting ClosedLoop...
+start "ClosedLoop" /MIN cmd /c npm start ^>C:\Users\dinga\Projects\paperclip\closedloop-out.log 2^>^&1
+timeout /t 3 /nobreak >nul
+
+:: Verify it started
+set PROXY_PID=
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3201 "') do set PROXY_PID=%%a
+if defined PROXY_PID (
+    echo  ClosedLoop started on :3201 ^(PID %PROXY_PID%^).
+) else (
+    echo  Waiting for ClosedLoop to start...
+    timeout /t 5 /nobreak >nul
+)
+
+echo.
+echo  [OK] ClosedLoop started.
 echo.
 pause
 goto MENU

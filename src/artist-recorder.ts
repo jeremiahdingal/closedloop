@@ -242,7 +242,7 @@ async function startArtistDevServer(issueId: string): Promise<any> {
     console.error(`[artist] Dev server failed to start within 60s: ${errMsg}`);
     await postComment(
       issueId,
-      AGENTS.artist,
+      AGENTS['visual reviewer'],
       `_Feature recording failed: dev server did not start within 60s._\n\`\`\`\n${errMsg}\n\`\`\``
     );
     return null;
@@ -707,7 +707,7 @@ export async function runArtistRecorder(issueId: string): Promise<any> {
 
   await postComment(
     issueId,
-    AGENTS.artist,
+    AGENTS['visual reviewer'],
     `_Starting feature recording on branch \`${branchName}\` using flow \`${flow.name}\` (${flow.source})._`
   );
 
@@ -874,24 +874,24 @@ async function getBranchName(issueId: string): Promise<string> {
 
 export async function runArtistStage(issueId: string): Promise<void> {
   // Import lock from agent-types
-  const { artistProcessingLock } = await import('./agent-types');
+  const { visualReviewerProcessingLock } = await import('./agent-types');
 
-  if (artistProcessingLock[issueId]) {
+  if (visualReviewerProcessingLock[issueId]) {
     console.log(`[artist] Skipping duplicate run for ${issueId.slice(0, 8)} (already processing)`);
     return;
   }
 
-  artistProcessingLock[issueId] = true;
+  visualReviewerProcessingLock[issueId] = true;
   try {
     const result = await runArtistRecorder(issueId);
     if (!result) return;
 
-    await postComment(issueId, AGENTS.artist, result.report);
+    await postComment(issueId, AGENTS['visual reviewer'], result.report);
 
     if (result.status === 'passed') {
       await postComment(
         issueId,
-        AGENTS.artist,
+        AGENTS['visual reviewer'],
         `_Feature recording complete. Flow \`${result.flowName}\` passed visually. Moving issue to in_review._`
       );
       await patchIssue(issueId, { status: 'in_review', assigneeAgentId: undefined });
@@ -899,7 +899,7 @@ export async function runArtistStage(issueId: string): Promise<void> {
     } else {
       await postComment(
         issueId,
-        AGENTS.artist,
+        AGENTS['visual reviewer'],
         `_Feature recording complete with failures. Assigning back to Local Builder._`
       );
       await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
@@ -907,10 +907,10 @@ export async function runArtistStage(issueId: string): Promise<void> {
     }
   } catch (err: any) {
     console.error(`[artist] Stage failed:`, err.message);
-    await postComment(issueId, AGENTS.artist, `_Feature recorder failed: ${err.message}_`);
+    await postComment(issueId, AGENTS['visual reviewer'], `_Feature recorder failed: ${err.message}_`);
     await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
   } finally {
-    artistProcessingLock[issueId] = false;
+    visualReviewerProcessingLock[issueId] = false;
   }
 }
 
