@@ -1042,6 +1042,7 @@ Start validation.`;
   }
 
   const existingFiles = getExistingFilesList(config.workspace || WORKSPACE);
+  const keyFiles = getKeyFileContents(config.workspace || WORKSPACE);
 
   return `Task: ${config.title}
 
@@ -1051,21 +1052,38 @@ ${config.description}
 EXISTING FILES IN WORKSPACE:
 ${existingFiles}
 
-CRITICAL RULES - MUST FOLLOW:
-1. ONLY import 'react' - NO other npm packages
-2. NO CSS imports (no './File.css' imports)
-3. Use inline styles ONLY: style={{ padding: '16px', margin: '8px' }}
-4. NO className libraries (no clsx, classnames, tailwind-merge)
-5. Simple React components with inline styles only
+KEY EXISTING FILES (you MUST preserve all existing content when modifying these):
+${keyFiles}
 
-Write code in markdown blocks with file path as the FIRST comment line:
-   \`\`\`typescript
-   // packages/app/src/YourFile.tsx
-   import React from 'react';
-   ...
-   \`\`\`
+CRITICAL RULES:
+1. When modifying an existing file (like api/src/index.ts), you MUST include ALL existing content plus your additions. DO NOT remove existing imports, routes, or exports.
+2. Write files using FILE: format (see builder template above).
+3. For API code, use bare module paths: import { X } from 'app/types/...' (NOT relative paths to packages/).
+4. For frontend code, use @shop-diary/ui and @shop-diary/app aliases.
+5. After writing files, the build will run automatically.`;
+}
 
-After writing files, the build will run automatically.`;
+function getKeyFileContents(workspace: string): string {
+  // Read key shared files that builders commonly need to modify (append to, not overwrite)
+  const keyPaths = [
+    'api/src/index.ts',
+    'packages/app/types/db.types.ts',
+    'packages/app/types/services.enum.ts',
+  ];
+
+  const sections: string[] = [];
+  for (const relPath of keyPaths) {
+    const fullPath = join(workspace, relPath);
+    try {
+      if (existsSync(fullPath)) {
+        const content = readFileSync(fullPath, 'utf-8');
+        sections.push(`--- ${relPath} ---\n${content}\n--- end ---`);
+      }
+    } catch {
+      // skip
+    }
+  }
+  return sections.join('\n\n') || '(none found)';
 }
 
 function getExistingFilesList(workspace: string): string {
@@ -1329,31 +1347,42 @@ function getBuilderTemplate(workspace: string): string {
   return `# Local Builder Instructions
 
 ## CRITICAL: Import Paths
-- Use the real workspace aliases: @shop-diary/ui and @shop-diary/app
-- Use React Native components (View, Text, Pressable, ScrollView) for UI
-- Do not invent import paths like packages/... or @dashboard/...
-- Check existing files in ${workspace}\\packages\\app and ${workspace}\\packages\\ui for examples
 
-## Build Verification
-- After writing files, ALWAYS run: yarn build
-- If build fails, read the error and fix IMMEDIATELY
-- Common errors:
-  - "Module not found packages/..." - Replace with the real @shop-diary aliases
-  - "Module not found '@dashboard/...'" - Replace with '@shop-diary/app/...'
-  - "Module not found 'ky'" - Use 'fetch' instead (ky not installed)
-  - "TS2307: Cannot find module" - Check import path
+### API files (api/src/services/...)
+- Import shared types using BARE MODULE PATH: import { X } from 'app/types/...'
+- Example: import { Env } from 'app/types/env.types'
+- Example: import { DatabaseTables } from 'app/types/services.enum'
+- Example: import { TNewOrder } from 'app/types/db.types'
+- NEVER use relative paths to packages/ (e.g. ../../../packages/app/) — this WILL break the build
+- Import local files with relative paths: import { db } from '../../infra/db'
+- Use 'ulidx' for ULID generation (not 'ulid')
+- Use { json, error } from 'itty-router'
+- Use { sql } from 'kysely' for SQL expressions in migrations
 
-## Loop Detection
-- If you've tried 5+ times and build still fails:
-  1. Stop and analyze the pattern
-  2. Check existing files for correct patterns
-  3. Read the build error carefully and fix the specific issue
+### Frontend files (packages/app/..., packages/ui/...)
+- Use @shop-diary/ui for UI components
+- Use @shop-diary/app for shared logic
+- Use React Native components (View, Text, Pressable), NOT HTML
+
+### Check existing files for patterns
+- Look at ${workspace}/api/src/services/orders/orders.routes.ts for API route pattern
+- Look at ${workspace}/api/src/services/orders/orders.service.ts for service pattern
+- Look at ${workspace}/packages/app/types/schemas/orders.schema.ts for Zod schema pattern
+
+## Build Check
+- Build runs automatically after you write files
+- The build uses wrangler (esbuild) — it catches import resolution errors immediately
+- "Could not resolve" = wrong import path. Check existing files for the correct pattern.
 
 ## Output Format
-- Write files using FILE: path/to/file.ext format
-- Run build after all files written
+- Write files using FILE: path/to/file.ext format followed by a code block
+- Example:
+  FILE: api/src/services/example/example.routes.ts
+  \`\`\`typescript
+  import { Env } from 'app/types/env.types';
+  // ... code ...
+  \`\`\`
 - Report "BUILD_SUCCESS" when build passes
-- Report specific errors when stuck
 `;
 }
 
