@@ -85,13 +85,15 @@ export async function detectAndDelegate(
 
 function getAgentName(agentId: string): string {
   const names: Record<string, string> = {
+    [AGENTS['complexity router']]: 'Complexity Router',
     [AGENTS.strategist]: 'Strategist',
     [AGENTS['tech lead']]: 'Tech Lead',
     [AGENTS['local builder']]: 'Local Builder',
     [AGENTS.reviewer]: 'Reviewer',
+    [AGENTS['diff guardian']]: 'Diff Guardian',
+    [AGENTS['visual reviewer']]: 'Visual Reviewer',
     [AGENTS.sentinel]: 'Sentinel',
     [AGENTS.deployer]: 'Deployer',
-    [AGENTS.artist]: 'Artist',
   };
   return names[agentId] || agentId.slice(0, 8);
 }

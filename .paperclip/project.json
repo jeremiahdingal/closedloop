@@ -86,7 +86,8 @@
       "diff guardian": "79641900-921d-400f-8eba-63373f5c0e17",
       "sentinel": "c7fb4dae-8ac3-4795-b1f6-d14db2021035",
       "deployer": "5e234916-47ef-41a2-8c07-e9376ee6aa9c",
-      "artist": "787cbd9e-d10b-4bca-b486-e7f5fd99d184"
+      "visual reviewer": "787cbd9e-d10b-4bca-b486-e7f5fd99d184",
+      "complexity router": ""
     },
     "agentKeys": {
       "a90b07a4-f18c-4509-9d7b-b9f16eb098d6": "pcp_48d784f6edd3a907e7700cda9f93e36fc0d1030f4a6b6d04",
@@ -94,7 +95,7 @@
       "caf931bf-516a-409f-813e-a29e14decb10": "pcp_0fbcdff3e8a50df48ab7c94cd3f4409cd492b6eb84c683d8",
       "954ce225-6dc8-4df7-8917-b597afbae60b": "",
       "eace3a19-bded-4b90-827e-cfc00f3900bd": "pcp_650990c0932107838084b2adaf47fdbfb9407c649243211e",
-      "79641900-921d-400f-8eba-63373f5c0e17": "pcp_diff_guardian_key",
+      "79641900-921d-400f-8eba-63373f5c0e17": "",
       "c7fb4dae-8ac3-4795-b1f6-d14db2021035": "pcp_268a568963f01698e27a232c9b911d96fa3504b214232b97",
       "5e234916-47ef-41a2-8c07-e9376ee6aa9c": "pcp_ad33d0ec65c082f7b46feef3233872548ac64b606e0e7541",
       "787cbd9e-d10b-4bca-b486-e7f5fd99d184": "pcp_6b6711a3a014c59c92416ec479077557a021087ba08bc280"
@@ -107,24 +108,27 @@
     "proxyPort": 3201,
     "ollamaPort": 11434,
     "models": {
-      "strategist": "qwen3-coder:30b",
-      "tech lead": "qwen3-coder:30b",
-      "local builder": "qwen3-coder:30b",
-      "reviewer": "deepseek-r1:14b",
-      "diff guardian": "qwen2.5:7b",
+      "complexity router": "qwen3:4b",
+      "strategist": "qwen3:8b",
+      "tech lead": "deepcoder:14b",
+      "local builder": "deepcoder:14b",
+      "local builder burst": "qwen3-coder:30b",
+      "reviewer": "rnj-1:8b",
+      "diff guardian": "qwen3:4b",
+      "visual reviewer": "qwen3-vl:8b",
       "sentinel": "deepseek-r1:8b",
-      "deployer": "qwen3:8b",
-      "artist": "llama3.2-vision:11b"
+      "deployer": "qwen3:8b"
     },
     "timeouts": {
+      "complexity router": 60,
       "strategist": 900,
       "tech lead": 900,
       "local builder": 3600,
       "reviewer": 900,
       "diff guardian": 60,
+      "visual reviewer": 900,
       "sentinel": 600,
-      "deployer": 600,
-      "artist": 900
+      "deployer": 600
     }
   },
   
@@ -134,12 +138,24 @@
     "stepTimeoutMs": 15000,
     "screenshotDir": ".screenshots"
   },
-  
+
   "delegationRules": {
-    "strategist": ["tech lead", "reviewer", "sentinel", "artist"],
+    "complexity router": ["strategist"],
+    "strategist": ["tech lead", "reviewer", "sentinel", "visual reviewer"],
     "tech lead": ["local builder"],
-    "reviewer": ["diff guardian", "artist"],
-    "diff guardian": ["local builder", "artist"],
+    "reviewer": ["diff guardian"],
+    "diff guardian": ["visual reviewer"],
     "sentinel": ["deployer"]
+  },
+
+  "remote": {
+    "appArchitect": {
+      "model": "glm-5",
+      "apiBase": "https://open.bigmodel.cn/api/paas/v4"
+    },
+    "rescue": {
+      "model": "glm-5",
+      "threshold": 3
+    }
   }
 }

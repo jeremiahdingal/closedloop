@@ -109,6 +109,16 @@ export interface ProjectConfig {
     screenshotDir: string;
   };
   delegationRules: Record<string, string[]>;
+  remote?: {
+    appArchitect?: {
+      model: string;
+      apiBase: string;
+    };
+    rescue?: {
+      model: string;
+      threshold: number;
+    };
+  };
 }
 
 export interface FileValidation {

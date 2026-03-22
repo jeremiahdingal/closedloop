@@ -124,22 +124,27 @@ function createDefaultConfig(): ProjectConfig {
       proxyPort: 3201,
       ollamaPort: 11434,
       models: {
-        strategist: 'qwen3-coder:30b',
-        'tech lead': 'qwen3-coder:30b',
-        'local builder': 'qwen3-coder:30b',
-        reviewer: 'qwen3-coder:30b',
+        'complexity router': 'qwen3:4b',
+        strategist: 'qwen3:8b',
+        'tech lead': 'deepcoder:14b',
+        'local builder': 'deepcoder:14b',
+        'local builder burst': 'qwen3-coder:30b',
+        reviewer: 'rnj-1:8b',
+        'diff guardian': 'qwen3:4b',
+        'visual reviewer': 'qwen3-vl:8b',
         sentinel: 'deepseek-r1:8b',
         deployer: 'qwen3:8b',
-        artist: 'llama3.2-vision:11b',
       },
       timeouts: {
+        'complexity router': 60,
         strategist: 900,
         'tech lead': 900,
         'local builder': 3600,
         reviewer: 900,
+        'diff guardian': 60,
+        'visual reviewer': 900,
         sentinel: 600,
         deployer: 600,
-        artist: 900,
       },
     },
     artist: {
@@ -149,10 +154,22 @@ function createDefaultConfig(): ProjectConfig {
       screenshotDir: '.screenshots',
     },
     delegationRules: {
-      strategist: ['tech lead', 'reviewer', 'sentinel', 'artist'],
+      'complexity router': ['strategist'],
+      strategist: ['tech lead', 'reviewer', 'sentinel', 'visual reviewer'],
       'tech lead': ['local builder'],
-      reviewer: ['artist'],
+      reviewer: ['diff guardian'],
+      'diff guardian': ['visual reviewer'],
       sentinel: ['deployer'],
+    },
+    remote: {
+      appArchitect: {
+        model: 'glm-5',
+        apiBase: 'https://open.bigmodel.cn/api/paas/v4',
+      },
+      rescue: {
+        model: 'glm-5',
+        threshold: 3,
+      },
     },
   };
 }
@@ -205,4 +222,12 @@ export function getArtistConfig() {
     stepTimeoutMs: config.artist.stepTimeoutMs,
     screenshotDir: config.artist.screenshotDir,
   };
+}
+
+export function getRemoteConfig() {
+  return loadConfig().remote || null;
+}
+
+export function getAgentModel(agentName: string): string | undefined {
+  return loadConfig().ollama.models[agentName];
 }

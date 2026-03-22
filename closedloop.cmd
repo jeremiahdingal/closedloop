@@ -65,12 +65,20 @@ set PPC_PID=
 
 :: 3. ClosedLoop
 echo  [3/3] Starting ClosedLoop...
+:: Load secrets from .env if it exists
+if exist "%~dp0.env" (
+    for /f "usebackq tokens=1,* delims==" %%A in ("%~dp0.env") do (
+        if not "%%A"=="" if not "%%A:~0,1%"=="#" set "%%A=%%B"
+    )
+)
+if not defined LLM_MODEL set LLM_MODEL=deepcoder:14b
+if not defined LLM_MODEL_BURST set LLM_MODEL_BURST=qwen3-coder:30b
 set PROXY_PID=
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3201 "') do set PROXY_PID=%%a
 if defined PROXY_PID (
     echo        Already running on :3201 ^(PID %PROXY_PID%^).
 ) else (
-    powershell -Command "Start-Process -FilePath 'node' -ArgumentList 'dist/index.js' -WorkingDirectory 'C:\Users\dinga\Projects\paperclip' -WindowStyle Hidden -RedirectStandardOutput 'closedloop-out.log' -RedirectStandardError 'closedloop-err.log'"
+    powershell -Command "$env:Z_AI_API_KEY='%Z_AI_API_KEY%'; $env:LLM_MODEL='%LLM_MODEL%'; $env:LLM_MODEL_BURST='%LLM_MODEL_BURST%'; Start-Process -FilePath 'node' -ArgumentList 'dist/index.js' -WorkingDirectory 'C:\Users\dinga\Projects\paperclip' -WindowStyle Hidden -RedirectStandardOutput 'closedloop-out.log' -RedirectStandardError 'closedloop-err.log'"
     timeout /t 2 /nobreak >nul
     echo        Started on :3201.
 )
@@ -213,29 +221,38 @@ echo  ============================================
 echo    Wake Agent
 echo  ============================================
 echo.
-echo    [1] Strategist (CTO)
-echo    [2] Tech Lead
-echo    [3] Local Builder
-echo    [4] Reviewer
-echo    [5] Artist (UI/UX)
-echo    [6] Sentinel
-echo    [7] Deployer
-echo    [8] Back
+echo    [1] Complexity Router
+echo    [2] Strategist (CTO)
+echo    [3] Tech Lead
+echo    [4] Local Builder
+echo    [5] Reviewer
+echo    [6] Diff Guardian
+echo    [7] Visual Reviewer
+echo    [8] Sentinel
+echo    [9] Deployer
+echo    [0] Back
 echo.
 set /p agent="  Select agent: "
 
 set AGENT_ID=
-if "%agent%"=="1" set AGENT_ID=a90b07a4-f18c-4509-9d7b-b9f16eb098d6&set AGENT_NAME=Strategist
-if "%agent%"=="2" set AGENT_ID=dad994d7-5d3e-4101-ae57-82c7be9b778b&set AGENT_NAME=Tech Lead
-if "%agent%"=="3" set AGENT_ID=caf931bf-516a-409f-813e-a29e14decb10&set AGENT_NAME=Local Builder
-if "%agent%"=="4" set AGENT_ID=eace3a19-bded-4b90-827e-cfc00f3900bd&set AGENT_NAME=Reviewer
-if "%agent%"=="5" set AGENT_ID=787cbd9e-d10b-4bca-b486-e7f5fd99d184&set AGENT_NAME=Artist
-if "%agent%"=="6" set AGENT_ID=c7fb4dae-8ac3-4795-b1f6-d14db2021035&set AGENT_NAME=Sentinel
-if "%agent%"=="7" set AGENT_ID=5e234916-47ef-41a2-8c07-e9376ee6aa9c&set AGENT_NAME=Deployer
-if "%agent%"=="8" goto MENU
+if "%agent%"=="1" set AGENT_ID=&set AGENT_NAME=Complexity Router
+if "%agent%"=="2" set AGENT_ID=a90b07a4-f18c-4509-9d7b-b9f16eb098d6&set AGENT_NAME=Strategist
+if "%agent%"=="3" set AGENT_ID=dad994d7-5d3e-4101-ae57-82c7be9b778b&set AGENT_NAME=Tech Lead
+if "%agent%"=="4" set AGENT_ID=caf931bf-516a-409f-813e-a29e14decb10&set AGENT_NAME=Local Builder
+if "%agent%"=="5" set AGENT_ID=eace3a19-bded-4b90-827e-cfc00f3900bd&set AGENT_NAME=Reviewer
+if "%agent%"=="6" set AGENT_ID=79641900-921d-400f-8eba-63373f5c0e17&set AGENT_NAME=Diff Guardian
+if "%agent%"=="7" set AGENT_ID=787cbd9e-d10b-4bca-b486-e7f5fd99d184&set AGENT_NAME=Visual Reviewer
+if "%agent%"=="8" set AGENT_ID=c7fb4dae-8ac3-4795-b1f6-d14db2021035&set AGENT_NAME=Sentinel
+if "%agent%"=="9" set AGENT_ID=5e234916-47ef-41a2-8c07-e9376ee6aa9c&set AGENT_NAME=Deployer
+if "%agent%"=="0" goto MENU
 
 if not defined AGENT_ID (
     echo  Invalid selection.
+    pause
+    goto WAKE
+)
+if "%AGENT_ID%"=="" (
+    echo  %AGENT_NAME% has no UUID yet - provision it in Paperclip UI first.
     pause
     goto WAKE
 )

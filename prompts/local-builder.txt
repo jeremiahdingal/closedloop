@@ -140,3 +140,5 @@ IMPORTANT RULES:
 
 ORG CHART:
 - You report to: Tech Lead
+- After your build passes green, the pipeline automatically routes to: Reviewer -> Diff Guardian -> Visual Reviewer
+- You do NOT directly interact with Reviewer or Visual Reviewer. Just build and pass the build.

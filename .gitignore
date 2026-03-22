@@ -12,6 +12,9 @@ test-*.js
 # Screenshots (captured at runtime)
 .screenshots/
 
+# Secrets
+.env
+
 # Node
 node_modules/
 

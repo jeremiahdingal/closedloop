@@ -243,7 +243,7 @@ function getAgentName(agentId: string): string {
     [AGENTS.reviewer]: 'Reviewer',
     [AGENTS.sentinel]: 'Sentinel',
     [AGENTS.deployer]: 'Deployer',
-    [AGENTS.artist]: 'Artist',
+    [AGENTS['visual reviewer']]: 'Visual Reviewer',
   };
   return names[agentId] || agentId.slice(0, 8);
 }

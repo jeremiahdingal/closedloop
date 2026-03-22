@@ -32,10 +32,13 @@ export const AGENT_ALIASES: Record<string, string> = {
   'local builder (engineer)': AGENTS['local builder'],
   reviewer: AGENTS.reviewer,
   'diff guardian': AGENTS['diff guardian'],
+  'visual reviewer': AGENTS['visual reviewer'],
+  'visual reviewer (ui/ux)': AGENTS['visual reviewer'],
   sentinel: AGENTS.sentinel,
   deployer: AGENTS.deployer,
-  artist: AGENTS.artist,
-  'artist (ui/ux)': AGENTS.artist,
+  // Keep backward compat for prompts that still say "artist"
+  artist: AGENTS['visual reviewer'],
+  'artist (ui/ux)': AGENTS['visual reviewer'],
 };
 
 // Agents allowed to execute bash commands
@@ -70,5 +73,14 @@ export const issueBuilderPasses: Record<string, number> = {};
 // Lock per issue to prevent concurrent Local Builder processing
 export const issueProcessingLock: Record<string, boolean> = {};
 
-// Lock per issue to prevent concurrent Artist processing
+// Lock per issue to prevent concurrent Artist/Visual Reviewer processing
 export const artistProcessingLock: Record<string, boolean> = {};
+
+// Track issues in burst mode (greenfield scaffolds get larger model)
+export const issueBuilderBurstMode = new Set<string>();
+
+// Goal/Epic tracking — Paperclip has flat schema, so we track parent-child here
+export const goalTicketMap: Record<string, string[]> = {};   // goalIssueId -> [ticketIssueId, ...]
+export const ticketGoalMap: Record<string, string> = {};     // ticketIssueId -> goalIssueId
+export const issueComplexityCache: Record<string, { score: number; signals: string[] }> = {};
+export const remoteArchitectCalled: Record<string, { calledAt: number; specRelPath: string }> = {};

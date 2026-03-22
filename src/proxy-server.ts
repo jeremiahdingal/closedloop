@@ -7,9 +7,11 @@
  */
 
 import * as http from 'http';
-import { getOllamaPorts, getPaperclipApiUrl, getCompanyId } from './config';
+import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentModel } from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
-import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses } from './agent-types';
+import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses, issueBuilderBurstMode } from './agent-types';
+import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion } from './goal-system';
+import { callRemoteArchitect } from './remote-ai';
 import { extractIssueId, extractAgentId, sleep } from './utils';
 import { applyCodeBlocks } from './code-extractor';
 import { commitAndPush, createPullRequest } from './git-ops';
@@ -131,15 +133,38 @@ export function createProxy(): http.Server {
       }
     }
 
-    // Artist bypasses Ollama and runs deterministic recorder
-    if (issueId && agentId === AGENTS.artist) {
+    // Hook 1: Goal guard — prevent Local Builder from directly handling Goal/Epic issues
+    if (issueId && agentId === AGENTS['local builder']) {
+      const builderIssue = await getIssueDetails(issueId);
+      if (builderIssue && isGoalIssue(builderIssue)) {
+        console.log(`[closedloop] Goal guard: redirecting Goal issue ${issueId.slice(0, 8)} away from Local Builder`);
+        await postComment(issueId, null, '_Goal/Epic issue detected — redirecting to Complexity Router for decomposition._');
+        const routerTarget = AGENTS['complexity router'] || AGENTS.strategist;
+        await patchIssue(issueId, { assigneeAgentId: routerTarget });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: { role: 'assistant', content: '_Redirected Goal issue to Complexity Router._' } }));
+        return;
+      }
+    }
+
+    // Hook 2: Burst model override for greenfield scaffold issues
+    if (agentId === AGENTS['local builder'] && issueId && issueBuilderBurstMode.has(issueId)) {
+      const burstModel = getAgentModel('local builder burst');
+      if (burstModel) {
+        parsedBody.model = burstModel;
+        console.log(`[closedloop] Burst mode: using ${burstModel} for ${issueId.slice(0, 8)}`);
+      }
+    }
+
+    // Visual Reviewer bypasses Ollama and runs deterministic recorder
+    if (issueId && agentId === AGENTS['visual reviewer']) {
       console.log(`[proxy:${proxyPort}] ${agentName} -> feature recorder | issue=${issueId.slice(0, 8)}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({
           message: {
             role: 'assistant',
-            content: '_Artist feature recorder started._',
+            content: '_Visual Reviewer feature recorder started._',
           },
         })
       );
@@ -205,6 +230,31 @@ export function createProxy(): http.Server {
             // Detect delegation and reassign via API (triggers auto-wakeup)
             if (agentId) {
               await detectAndDelegate(issueId, agentId, content);
+            }
+
+            // Hook 3: Complexity Router post-response — score issue and route
+            if (agentId === AGENTS['complexity router'] && issueId) {
+              const routerIssue = await getIssueDetails(issueId);
+              if (routerIssue) {
+                const complexity = scoreComplexity(routerIssue.title, routerIssue.description || '');
+                console.log(`[closedloop] Complexity Router scored ${issueId.slice(0, 8)}: ${complexity.score}/10 [${complexity.signals.join(', ')}]`);
+                if (complexity.score >= 7) {
+                  // Complex issue — call Remote Architect then hand to Strategist
+                  await callRemoteArchitect(issueId, routerIssue);
+                }
+                // Always route to Strategist after scoring
+                await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+                console.log(`[closedloop] Complexity Router -> Strategist`);
+              }
+            }
+
+            // Hook 4: Strategist Goal decomposition — parse ## Ticket: blocks
+            if (agentId === AGENTS.strategist && issueId) {
+              const stratIssue = await getIssueDetails(issueId);
+              if (stratIssue && isGoalIssue(stratIssue) && content.includes('## Ticket:')) {
+                console.log(`[closedloop] Strategist produced ticket decomposition for Goal ${issueId.slice(0, 8)}`);
+                await decomposeGoalIntoTickets(issueId, content);
+              }
             }
 
             // Local Builder: extract code blocks, write files, commit (no PR yet)
@@ -399,9 +449,12 @@ export function createProxy(): http.Server {
                   // Reset loop counter on successful PR
                   resetLoopCounter(issueId);
 
-                  // Trigger Artist for visual audit
-                  await patchIssue(issueId, { assigneeAgentId: AGENTS.artist });
-                  console.log(`[closedloop] Auto-assigned to Artist for feature recording`);
+                  // Trigger Visual Reviewer for visual audit
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS['visual reviewer'] });
+                  console.log(`[closedloop] Auto-assigned to Visual Reviewer for feature recording`);
+
+                  // Hook 7: Goal completion check after PR creation
+                  await checkGoalCompletion(issueId);
                 } catch (prErr: any) {
                   console.error(`[closedloop] Failed to create PR:`, prErr.message);
                   await postComment(issueId, null, `_DiffGuardian approved but PR creation failed: ${prErr.message}_`);
