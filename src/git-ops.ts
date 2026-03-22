@@ -14,6 +14,25 @@ const WORKSPACE = getWorkspace();
 const GH_CLI = 'C:\\Program Files\\GitHub CLI\\gh';
 const SCREENSHOT_BASE = path.join(__dirname, '..', '.screenshots');
 
+/** Detect default branch name (main vs master) */
+function getDefaultBranch(): string {
+  try {
+    const result = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
+      cwd: WORKSPACE, stdio: 'pipe', timeout: 5000,
+    }).toString().trim();
+    // e.g. "refs/remotes/origin/main"
+    return result.split('/').pop() || 'main';
+  } catch {
+    // Fallback: check if 'main' branch exists
+    try {
+      execSync('git rev-parse --verify main', { cwd: WORKSPACE, stdio: 'pipe', timeout: 5000 });
+      return 'main';
+    } catch {
+      return 'master';
+    }
+  }
+}
+
 export async function getBranchName(issueId: string): Promise<string> {
   let issue;
   try {
@@ -44,6 +63,7 @@ export async function commitAndPush(
   if (files.length === 0) return { success: true };
 
   const branchName = await getBranchName(issueId);
+  const defaultBranch = getDefaultBranch();
   let issue;
   try {
     issue = await getIssueDetails(issueId);
@@ -54,14 +74,14 @@ export async function commitAndPush(
   const opts = { cwd: WORKSPACE, stdio: 'pipe' as const, timeout: 30000 };
 
   try {
-    // Discard any uncommitted changes on master before switching
+    // Discard any uncommitted changes before switching
     try {
       execSync('git checkout -- .', opts);
     } catch {}
 
-    // Create and switch to branch from master
+    // Create and switch to branch from default branch
     try {
-      execSync(`git checkout -b ${branchName} master`, opts);
+      execSync(`git checkout -b ${branchName} ${defaultBranch}`, opts);
     } catch {
       // Branch might exist, just switch
       execSync(`git checkout ${branchName}`, opts);
@@ -109,7 +129,7 @@ export async function commitAndPush(
         null,
         `_Code committed to branch \`${branchName}\` (${files.length} files). Push failed: ${err.message}_`
       );
-      execSync('git checkout master', opts);
+      execSync(`git checkout ${defaultBranch}`, opts);
       return buildResult;
     }
 
@@ -147,11 +167,11 @@ export async function commitAndPush(
     }
 
     // Switch back to master
-    execSync('git checkout master', opts);
+    execSync(`git checkout ${defaultBranch}`, opts);
   } catch (err: any) {
     console.error(`[git] Git workflow error:`, err.message);
     try {
-      execSync('git checkout master', opts);
+      execSync(`git checkout ${defaultBranch}`, opts);
     } catch {}
     await postComment(issueId, null, `_Git workflow error: ${err.message}_`);
     buildResult.output = err.message;
@@ -162,6 +182,7 @@ export async function commitAndPush(
 
 export async function createPullRequest(issueId: string): Promise<void> {
   const branchName = await getBranchName(issueId);
+  const defaultBranch = getDefaultBranch();
   let issue;
   try {
     issue = await getIssueDetails(issueId);
@@ -234,7 +255,7 @@ export async function createPullRequest(issueId: string): Promise<void> {
 
     // Switch back to master
     try {
-      execSync('git checkout master', opts);
+      execSync(`git checkout ${defaultBranch}`, opts);
     } catch {}
 
     // Build PR body with screenshot images
@@ -244,13 +265,13 @@ export async function createPullRequest(issueId: string): Promise<void> {
 
     // Generate diff summary for PR body
     try {
-      const diffStat = execSync(`git diff --stat master..${branchName}`, {
+      const diffStat = execSync(`git diff --stat ${defaultBranch}..${branchName}`, {
         ...opts,
         timeout: 30000,
       })
         .toString()
         .trim();
-      const diffShort = execSync(`git diff --name-only master..${branchName}`, {
+      const diffShort = execSync(`git diff --name-only ${defaultBranch}..${branchName}`, {
         ...opts,
         timeout: 30000,
       })
@@ -296,7 +317,7 @@ export async function createPullRequest(issueId: string): Promise<void> {
       `_Branch \`${branchName}\` pushed. PR creation failed: ${err.message}_`
     );
     try {
-      execSync('git checkout master', { cwd: WORKSPACE, stdio: 'pipe' });
+      execSync(`git checkout ${defaultBranch}`, { cwd: WORKSPACE, stdio: 'pipe' });
     } catch {}
   }
 }

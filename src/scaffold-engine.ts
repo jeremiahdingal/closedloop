@@ -544,7 +544,11 @@ export function patchDbTypes(
     }
   }
 
-  return result + '\n';
+  // Only add trailing newline if not already present
+  if (!result.endsWith('\n')) {
+    result += '\n';
+  }
+  return result;
 }
 
 /**

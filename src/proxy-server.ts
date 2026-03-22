@@ -22,6 +22,8 @@ import { OllamaRequest } from './types';
 import { detectScaffoldConfig, ScaffoldConfig } from './scaffold-engine';
 import { executeScaffold, formatScaffoldComment } from './scaffold-executor';
 import { scoreComplexity, callRemoteArchitect } from './complexity-router';
+import { execSync } from 'child_process';
+import { getBranchName } from './git-ops';
 
 const { proxyPort, ollamaPort } = getOllamaPorts();
 const PAPERCLIP_API = getPaperclipApiUrl();
@@ -235,29 +237,104 @@ export function createProxy(): http.Server {
         await postComment(issueId, null, comment);
 
         if (scaffoldResult.success) {
-          // Scaffold succeeded — skip Strategist/TechLead/Builder entirely, go to Reviewer
-          console.log(`[complexity-router] Scaffold complete. Forwarding to Local Builder for build verification.`);
-
-          // Send to Local Builder just for build verification (no code gen needed)
-          const bridgeUrl = getBridgeUrl();
           const allFiles = [...scaffoldResult.filesWritten, ...scaffoldResult.filesPatched];
+          const newFilesWritten = scaffoldResult.filesWritten.filter(f => !f.includes('skipped'));
+          const allSkipped = newFilesWritten.length === 0;
 
-          await fetch(`${bridgeUrl}/webhook/issue-assigned`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              issueId,
-              assigneeAgentId: AGENTS['local builder'],
-              title: `Build verification: ${title}`,
-              description: `Scaffold has already written all files. Just run the build to verify.\n\nFiles written:\n${allFiles.map(f => '- ' + f).join('\n')}\n\nIf build fails, fix only the import/type errors. Do NOT rewrite the scaffolded files.`,
-            }),
-          }).catch((err: any) => {
-            console.error(`[complexity-router] Bridge forward failed:`, err.message);
-          });
+          if (allSkipped) {
+            // All files already exist — skip build verification, go directly to Reviewer
+            console.log(`[complexity-router] All scaffold files already exist. Sending to Reviewer.`);
+            await postComment(issueId, null,
+              `_All scaffold files already exist. Skipping to Reviewer for validation._`
+            );
+            await patchIssue(issueId, {
+              assigneeAgentId: AGENTS.reviewer,
+              status: 'in_progress',
+            });
+          } else {
+            // New files written — commit to a branch, then send to Reviewer
+            console.log(`[complexity-router] Scaffold wrote ${newFilesWritten.length} new files. Committing to branch...`);
+
+            const workspace = getWorkspace();
+            const branchName = await getBranchName(issueId);
+            const opts = { cwd: workspace, stdio: 'pipe' as const, timeout: 30000 };
+
+            try {
+              // Detect default branch
+              let defaultBranch = 'main';
+              try {
+                execSync('git rev-parse --verify main', { ...opts, stdio: 'pipe' });
+              } catch {
+                defaultBranch = 'master';
+              }
+
+              // Create branch from default
+              try {
+                execSync(`git checkout -b ${branchName} ${defaultBranch}`, opts);
+              } catch {
+                execSync(`git checkout ${branchName}`, opts);
+              }
+
+              // Stage all scaffold files
+              for (const f of allFiles) {
+                const cleanPath = f.replace(' (skipped - already exists)', '');
+                try {
+                  execSync(`git add "${cleanPath}"`, opts);
+                } catch {}
+              }
+
+              // Commit
+              const issue = await getIssueDetails(issueId);
+              const identifier = issue?.identifier || issueId.slice(0, 8);
+              const commitMsg = `${identifier}: ${title} (scaffold)`;
+              execSync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, opts);
+              console.log(`[complexity-router] Committed: ${commitMsg}`);
+
+              // Push
+              execSync(`git push -u origin ${branchName}`, { ...opts, timeout: 60000 });
+              console.log(`[complexity-router] Pushed branch: ${branchName}`);
+
+              await postComment(issueId, null,
+                `_Code committed to branch \`${branchName}\` (scaffold)_\n\nFiles:\n${allFiles.map(f => '- `' + f + '`').join('\n')}`
+              );
+
+              // Switch back to default branch
+              execSync(`git checkout ${defaultBranch}`, opts);
+
+              // Send directly to Reviewer (skip Local Builder for scaffold since build was verified)
+              await patchIssue(issueId, {
+                assigneeAgentId: AGENTS.reviewer,
+                status: 'in_progress',
+              });
+              console.log(`[complexity-router] Scaffold committed and pushed. Sending to Reviewer.`);
+            } catch (gitErr: any) {
+              console.error(`[complexity-router] Git commit failed:`, gitErr.message);
+              await postComment(issueId, null, `_Scaffold files written but git commit failed: ${gitErr.message}_`);
+              // Fallback: send to Local Builder
+              await patchIssue(issueId, {
+                assigneeAgentId: AGENTS['local builder'],
+                status: 'in_progress',
+              });
+
+              const bridgeUrl = getBridgeUrl();
+              await fetch(`${bridgeUrl}/webhook/issue-assigned`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  issueId,
+                  assigneeAgentId: AGENTS['local builder'],
+                  title: `Build verification: ${title}`,
+                  description: `Scaffold has written files but git commit failed. Fix and commit.\n\nFiles:\n${allFiles.map(f => '- ' + f).join('\n')}`,
+                }),
+              }).catch((err: any) => {
+                console.error(`[complexity-router] Bridge forward failed:`, err.message);
+              });
+            }
+          }
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
-            message: { role: 'assistant', content: '_Scaffold complete. Forwarded to Local Builder for build verification._' },
+            message: { role: 'assistant', content: '_Scaffold complete._' },
           }));
           return;
         }
@@ -459,13 +536,16 @@ export function createProxy(): http.Server {
                 try {
                   await createPullRequest(issueId);
                   console.log(`[closedloop] PR created after DiffGuardian approval`);
-                  
+
                   // Reset loop counter on successful PR
                   resetLoopCounter(issueId);
 
-                  // Trigger Visual Reviewer for visual audit
-                  await patchIssue(issueId, { assigneeAgentId: AGENTS['visual reviewer'] });
-                  console.log(`[closedloop] Auto-assigned to Visual Reviewer for feature recording`);
+                  // Mark issue as in_review (PR created, pipeline complete)
+                  await patchIssue(issueId, {
+                    assigneeAgentId: AGENTS['visual reviewer'],
+                    status: 'in_review',
+                  });
+                  console.log(`[closedloop] Issue marked in_review, assigned to Visual Reviewer`);
                 } catch (prErr: any) {
                   console.error(`[closedloop] Failed to create PR:`, prErr.message);
                   await postComment(issueId, null, `_DiffGuardian approved but PR creation failed: ${prErr.message}_`);

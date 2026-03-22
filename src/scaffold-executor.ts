@@ -38,10 +38,14 @@ export function executeScaffold(config: ScaffoldConfig, workspace: string, templ
 
   const scaffold = generateScaffold(config, template);
 
-  // 1. Write new files
+  // 1. Write new files (skip if already exists to avoid overwriting working code)
   for (const file of scaffold.files) {
     const fullPath = path.join(workspace, file.path);
     try {
+      if (fs.existsSync(fullPath)) {
+        result.filesWritten.push(`${file.path} (skipped - already exists)`);
+        continue;
+      }
       const dir = path.dirname(fullPath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
