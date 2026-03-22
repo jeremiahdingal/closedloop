@@ -1,0 +1,3 @@
+[submodule "packages/paperclip-fork"]
+	path = packages/paperclip-fork
+	url = https://github.com/jeremiahdingal/paperclip.git
