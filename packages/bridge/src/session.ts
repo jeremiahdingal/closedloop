@@ -45,6 +45,13 @@ let cachedProjectConfig: ProjectConfig | null = null;
 
 type SessionMode = 'implementation' | 'repair' | 'escalated';
 
+interface TriedApproach {
+  pass: number;
+  files: string[];
+  error: string;
+  fingerprint: string;
+}
+
 interface SessionState {
   issueId: string;
   role: string;
@@ -57,6 +64,7 @@ interface SessionState {
   lastCheckpointDir: string | null;
   lastGreenCheckpointDir: string | null;
   lastBuildSucceeded: boolean;
+  triedApproaches: TriedApproach[];
   updatedAt: string;
 }
 
@@ -148,6 +156,7 @@ function createInitialState(issueId: string, role: string): SessionState {
     lastCheckpointDir: null,
     lastGreenCheckpointDir: null,
     lastBuildSucceeded: false,
+    triedApproaches: [],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -255,6 +264,30 @@ function restoreCheckpoint(checkpointDir: string, workspace: string, logPath: st
     mkdirSync(dirname(targetPath), { recursive: true });
     copyFileSync(sourcePath, targetPath);
     appendFileSync(logPath, '[RESTORE] copied ' + targetPath + '\n');
+  }
+}
+
+/**
+ * Revert workspace to the last green (build-passing) checkpoint.
+ * Called when Reviewer or Diff Guardian rejects — ensures the next builder
+ * attempt starts from the last known-good state rather than broken code.
+ */
+function revertToGreenCheckpoint(issueId: string, workspace: string, logPath: string): void {
+  try {
+    const builderSessionDir = getSessionDir(issueId, 'builder');
+    const builderState = loadSessionState(builderSessionDir, issueId, 'builder');
+    const greenCheckpoint = builderState.lastGreenCheckpointDir;
+
+    if (!greenCheckpoint || !existsSync(greenCheckpoint)) {
+      appendFileSync(logPath, '[REVERT] No green checkpoint available — builder will start from current state\n');
+      return;
+    }
+
+    appendFileSync(logPath, '[REVERT] Restoring workspace to green checkpoint: ' + greenCheckpoint + '\n');
+    restoreCheckpoint(greenCheckpoint, workspace, logPath);
+    appendFileSync(logPath, '[REVERT] Workspace reverted to last green state\n');
+  } catch (err: any) {
+    appendFileSync(logPath, '[REVERT] Failed to revert: ' + err.message + '\n');
   }
 }
 
@@ -475,9 +508,18 @@ function runLlmIteration(
           state.lastBuildSucceeded = false;
           touchSessionState(sessionDir, state);
 
+          // Record this failed approach for the tried-approaches list
+          state.triedApproaches.push({
+            pass: state.attemptCount,
+            files: [...state.lastChangedFiles],
+            error: (errorContext || '').substring(0, 300),
+            fingerprint,
+          });
+
           appendFileSync(logPath, '\n[BUILD FAILED - RETRYING]\n');
           appendFileSync(logPath, '[BUILD FINGERPRINT] ' + fingerprint + '\n');
           appendFileSync(logPath, '[REPAIR MODE] ' + state.mode + '\n');
+          appendFileSync(logPath, '[TRIED APPROACHES] ' + state.triedApproaches.length + ' total\n');
 
           // Remote rescue: fire before continuing local retry when same error repeats too many times
           if (sameFingerprint && state.repeatedErrorCount >= REMOTE_RESCUE_THRESHOLD) {
@@ -517,6 +559,7 @@ function runLlmIteration(
           state.lastBuildSucceeded = true;
           state.lastErrorFingerprint = null;
           state.repeatedErrorCount = 0;
+          state.triedApproaches = []; // clear on success
           touchSessionState(sessionDir, state);
           callback(null, {
             escalated: false,
@@ -553,12 +596,20 @@ function handleValidationWork(
     if (buildError) {
       const errorText = buildResult?.stderr || buildResult?.stdout || (buildError as Error).message;
       appendFileSync(logPath, '[' + label + ' FAILED]\n');
+
+      // Save reflection: build failure context for touched files
+      const builderFiles = builderState.lastChangedFiles || [];
+      saveReflection(workspace, builderFiles, 'Build failed during ' + label + ': ' + errorText.substring(0, 300));
+
       await postComment(
         state.issueId,
         label + ' found a build failure. Sending issue back to Local Builder.\n\n' +
           '```\n' + errorText.substring(0, 1200) + '\n```',
         roleAgentId
       );
+      // Revert workspace to last green checkpoint so builder starts clean
+      revertToGreenCheckpoint(state.issueId, workspace, logPath);
+
       await reassignIssue(state.issueId, 'builder');
       callback(buildError, {
         escalated: false,
@@ -572,12 +623,19 @@ function handleValidationWork(
       const reasonText = validation.reasons.join(' | ');
       appendFileSync(logPath, '[' + label + ' REJECTED]\n');
       appendFileSync(logPath, reasonText + '\n');
+
+      // Save reflection memory so future builds learn from this rejection
+      saveReflection(workspace, validation.touchedFiles, reasonText);
+
       await postComment(
         state.issueId,
         label + ' found diff-risk signals and sent the issue back to Local Builder.\n\n' +
           'Reasons:\n- ' + validation.reasons.join('\n- ') + '\n',
         roleAgentId
       );
+      // Revert workspace to last green checkpoint so builder starts clean
+      revertToGreenCheckpoint(state.issueId, workspace, logPath);
+
       await reassignIssue(state.issueId, 'builder');
       callback(new Error(reasonText), {
         escalated: false,
@@ -607,6 +665,77 @@ function readFileFromDisk(workspace: string, relativePath: string, maxLen = 2500
     return content.length > maxLen ? content.substring(0, maxLen) + '\n// ... truncated' : content;
   } catch {
     return null;
+  }
+}
+
+// ── Reflection Memory ──
+// Stores per-component review feedback in .reflections/ so future builds learn from past rejections.
+const REFLECTIONS_DIR = '.reflections';
+
+function getReflectionsDir(workspace: string): string {
+  return join(workspace, REFLECTIONS_DIR);
+}
+
+function readReflections(workspace: string, files: string[]): string {
+  const reflDir = getReflectionsDir(workspace);
+  if (!existsSync(reflDir)) return '';
+
+  const sections: string[] = [];
+  const seen = new Set<string>();
+
+  for (const file of files) {
+    // Normalize: api/src/services/orders/orders.routes.ts → orders.routes
+    const key = (file.split(/[\\/]/).pop() || file).replace(/\.(ts|tsx|js|jsx)$/, '');
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const reflPath = join(reflDir, key + '.md');
+    if (existsSync(reflPath)) {
+      try {
+        const content = readFileSync(reflPath, 'utf8').trim();
+        if (content) {
+          sections.push(`[${key}] ${content}`);
+        }
+      } catch { /* skip */ }
+    }
+  }
+
+  if (sections.length === 0) return '';
+  return '\n== PAST REVIEW FEEDBACK (learn from these) ==\n' + sections.join('\n') + '\n';
+}
+
+function saveReflection(workspace: string, files: string[], feedback: string): void {
+  if (!feedback || files.length === 0) return;
+
+  const reflDir = getReflectionsDir(workspace);
+  try {
+    mkdirSync(reflDir, { recursive: true });
+  } catch { /* already exists */ }
+
+  // Extract the short feedback (first 500 chars, strip markdown)
+  const shortFeedback = feedback
+    .replace(/```[\s\S]*?```/g, '') // strip code blocks
+    .replace(/\*\*/g, '')
+    .substring(0, 500)
+    .trim();
+
+  if (!shortFeedback) return;
+
+  const timestamp = new Date().toISOString().slice(0, 10);
+
+  for (const file of files) {
+    const key = (file.split(/[\\/]/).pop() || file).replace(/\.(ts|tsx|js|jsx)$/, '');
+    const reflPath = join(reflDir, key + '.md');
+
+    try {
+      // Append rather than overwrite — accumulate feedback
+      const existing = existsSync(reflPath) ? readFileSync(reflPath, 'utf8') : '';
+      const entry = `\n[${timestamp}] ${shortFeedback}\n`;
+
+      // Cap at 2000 chars total to keep prompts lean
+      const combined = (existing + entry).slice(-2000);
+      writeFileSync(reflPath, combined, 'utf8');
+    } catch { /* skip */ }
   }
 }
 
@@ -649,13 +778,24 @@ function buildFixPrompt(
     }
   }
 
+  // Build tried-approaches context so the builder avoids repeating past failures
+  let triedContext = '';
+  if (state.triedApproaches.length > 0) {
+    const recent = state.triedApproaches.slice(-5); // last 5 approaches
+    triedContext = '\n== PREVIOUSLY TRIED (FAILED) ==\n' +
+      recent.map((a, i) =>
+        `Attempt ${a.pass}: files=[${a.files.join(', ')}] error="${a.error.substring(0, 120)}"`
+      ).join('\n') +
+      '\nDo NOT repeat these exact approaches. Try a DIFFERENT strategy.\n';
+  }
+
   return `BUILD ERROR - ${state.mode.toUpperCase()} MODE
 
 Attempt: ${state.attemptCount}
 Repeated same error: ${state.repeatedErrorCount}
 Fingerprint: ${fingerprint}
 Workspace: ${workspace}
-
+${triedContext}
 You are in targeted repair mode.
 Fix only the files related to the failing build.
 Do not create new files unless the build error requires it.
@@ -664,7 +804,7 @@ Prefer editing the smallest possible set of existing files.
 Known touched files:
 ${touchedFiles.join('\n') || '(unknown)'}
 ${fileContents ? '\n== CURRENT FILE CONTENTS ON DISK ==' + fileContents : ''}
-
+${readReflections(workspace, touchedFiles)}
 Original task:
 ${originalPrompt}
 
@@ -1218,8 +1358,10 @@ Instructions:
 Start validation.`;
   }
 
-  const existingFiles = getExistingFilesList(config.workspace || WORKSPACE);
-  const keyFiles = getKeyFileContents(config.workspace || WORKSPACE);
+  const workspace = config.workspace || WORKSPACE;
+  const existingFiles = getExistingFilesList(workspace);
+  const keyFiles = getKeyFileContents(workspace);
+  const reflections = readReflections(workspace, config.lastChangedFiles || []);
 
   return `Task: ${config.title}
 
@@ -1231,7 +1373,7 @@ ${existingFiles}
 
 KEY EXISTING FILES (you MUST preserve all existing content when modifying these):
 ${keyFiles}
-
+${reflections}
 CRITICAL RULES:
 1. When modifying an existing file (like api/src/index.ts), you MUST include ALL existing content plus your additions. DO NOT remove existing imports, routes, or exports.
 2. Write files using FILE: format (see builder template above).
@@ -1601,6 +1743,13 @@ function getBuilderTemplate(workspace: string): string {
 - Look at ${workspace}/api/src/services/orders/orders.routes.ts for API route pattern
 - Look at ${workspace}/api/src/services/orders/orders.service.ts for service pattern
 - Look at ${workspace}/packages/app/types/schemas/orders.schema.ts for Zod schema pattern
+
+## Pre-Flight Check (do this BEFORE writing any code)
+Before generating FILE: blocks, briefly list:
+1. Which existing files you will MODIFY (not create from scratch)
+2. Which NEW files you will create
+3. Any assumptions you are making about the codebase
+If something is ambiguous (e.g. unclear which table/schema to use, unclear naming convention), state the assumption explicitly and pick the most conservative option that matches existing patterns.
 
 ## Build Check
 - Build runs automatically after you write files
