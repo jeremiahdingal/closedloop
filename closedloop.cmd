@@ -47,6 +47,12 @@ if exist "%~dp0.env" (
     echo        Environment loaded from .env
 )
 
+:: Set defaults if not in .env
+if not defined Z_AI_API_KEY set Z_AI_API_KEY=582aa918cc194bdba2453e11c9f2080e.RU9NrpNKFOoqT5QD
+if not defined LLM_MODEL set LLM_MODEL=deepcoder:14b
+if not defined LLM_MODEL_BURST set LLM_MODEL_BURST=qwen3-coder:30b
+if not defined WORKSPACE set WORKSPACE=C:\Users\dinga\Projects\shop-diary-v3
+
 :: 1. Ollama
 echo  [1/3] Starting Ollama...
 tasklist /FI "IMAGENAME eq ollama.exe" 2>nul | find /I "ollama.exe" >nul

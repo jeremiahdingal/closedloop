@@ -24,6 +24,9 @@ const Z_AI_API_BASE = 'https://open.bigmodel.cn/api/paas/v4';
 const REMOTE_RESCUE_MODEL = process.env.REMOTE_RESCUE_MODEL || 'glm-5';
 const REMOTE_RESCUE_THRESHOLD = 3; // same-fingerprint repeat count before rescue fires
 
+// Burst model: one-shot override for first build pass (greenfield scaffold)
+const issueBurstModel = new Map<string, string>();
+
 interface ProjectConfig {
   paperclip?: {
     apiUrl?: string;
@@ -344,23 +347,58 @@ export async function spawnSession(config: any): Promise<void> {
 
     console.log('[spawnSession] Creating ' + role + ' session for ' + config.issueId + ' in ' + sessionDir);
 
-    await spawnPiMono(config, sessionDir, logPath, role, sessionState);
+    await spawnPiMono(config, sessionDir, logPath, role, sessionState, config.modelOverride);
   } catch (err: any) {
     console.error('[spawnSession] Error:', err.message);
     throw err;
   }
 }
 
-async function spawnPiMono(config: any, sessionDir: string, logPath: string, role: string, state: SessionState): Promise<void> {
+async function spawnPiMono(config: any, sessionDir: string, logPath: string, role: string, state: SessionState, modelOverride?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     console.log('[llm] Starting LLM session for ' + config.issueId + ' (' + role + ')');
     appendFileSync(logPath, '\n[LLM STARTING]\n');
     appendFileSync(logPath, '[STATE] mode=' + state.mode + ' attempt=' + state.attemptCount + '/' + state.maxPasses + '\n');
 
+    // SCAFFOLD MODE: If files were already written by scaffold engine, just run build verification
+    const isScaffoldMode = (config.description || '').includes('Scaffold has already written all files');
+    if (isScaffoldMode && role === 'builder') {
+      appendFileSync(logPath, '\n[SCAFFOLD MODE] Skipping LLM — running build verification only\n');
+      const workspace = config.workspace || WORKSPACE;
+
+      runBuild(workspace, logPath, async (buildError, buildResult) => {
+        if (buildError) {
+          appendFileSync(logPath, '[SCAFFOLD BUILD FAILED]\n');
+          const errorText = buildResult?.stderr || buildResult?.stdout || (buildError as Error).message;
+          appendFileSync(logPath, errorText.substring(0, 1000) + '\n');
+
+          // Build failed — fall through to normal LLM iteration for repair
+          appendFileSync(logPath, '[SCAFFOLD] Falling back to LLM for build repair\n');
+          const fixPrompt = `The scaffold engine wrote files but the build failed. Fix the build errors.\n\nBuild error:\n${errorText.substring(0, 500)}\n\nOriginal task: ${config.title}\n${config.description}`;
+          runLlmIteration(config.issueId, fixPrompt, role, workspace, sessionDir, logPath, state, completionHandler);
+          return;
+        }
+
+        appendFileSync(logPath, '\n[SCAFFOLD BUILD SUCCESS]\n');
+        state.lastBuildSucceeded = true;
+        state.mode = 'implementation';
+        touchSessionState(sessionDir, state);
+        onComplete(config.issueId, role, 0).then(resolve).catch(reject);
+      });
+      return;
+    }
+
     const taskPrompt = buildTaskPrompt(config, role);
     appendFileSync(logPath, '[TASK PROMPT]\n' + taskPrompt + '\n\n');
 
-    runLlmIteration(config.issueId, taskPrompt, role, config.workspace || WORKSPACE, sessionDir, logPath, state, (finalError, completion) => {
+    if (modelOverride) {
+      issueBurstModel.set(config.issueId, modelOverride);
+      appendFileSync(logPath, '[BURST MODEL] ' + modelOverride + '\n');
+    }
+
+    runLlmIteration(config.issueId, taskPrompt, role, config.workspace || WORKSPACE, sessionDir, logPath, state, completionHandler);
+
+    function completionHandler(finalError: any, completion: SessionCompletionResult) {
       if (finalError && completion.reason === 'max-passes') {
         const errorText = completion.finalErrorText || (finalError as Error).message || 'Unknown error';
         state.mode = 'escalated';
@@ -385,7 +423,7 @@ async function spawnPiMono(config: any, sessionDir: string, logPath: string, rol
       }
 
       onComplete(config.issueId, role, state.attemptCount).then(resolve).catch(reject);
-    });
+    }
   });
 }
 
@@ -404,7 +442,14 @@ function runLlmIteration(
   appendFileSync(logPath, '\n[PASS ' + state.attemptCount + '/' + state.maxPasses + ']\n');
   appendFileSync(logPath, '[STATE] mode=' + state.mode + ' repeated=' + state.repeatedErrorCount + '\n');
 
-  callOllama(prompt, role, workspace, logPath, (error, result) => {
+  // Check for burst model override (one-shot, first pass only)
+  const burstOverride = issueBurstModel.get(issueId);
+  if (burstOverride) {
+    issueBurstModel.delete(issueId);
+    appendFileSync(logPath, '[BURST] Using ' + burstOverride + ' for this pass\n');
+  }
+
+  const ollamaCallback = (error: any, result: any) => {
     if (error) {
       callback(error, {
         escalated: false,
@@ -481,7 +526,9 @@ function runLlmIteration(
     } else if (role === 'reviewer' || role === 'diff-guardian') {
       handleValidationWork(role, workspace, sessionDir, logPath, state, callback);
     }
-  });
+  };
+
+  callOllama(prompt, role, workspace, logPath, ollamaCallback, burstOverride);
 }
 
 function handleValidationWork(
@@ -853,8 +900,19 @@ function parseFileMarkers(output: string): Array<{ path: string; content: string
 }
 
 function runBuild(workspace: string, logPath: string, callback: (error: any, result: any) => void): void {
-  const build = spawn('yarn', ['build'], {
-    cwd: workspace,
+  // Configurable build command via env vars.
+  // Default: wrangler dry-run (esbuild compile check for Cloudflare Workers).
+  // Override with BUILD_CMD + BUILD_ARGS for other project types.
+  const buildCmd = process.env.BUILD_CMD || 'npx';
+  const buildArgs = process.env.BUILD_ARGS
+    ? process.env.BUILD_ARGS.split(' ')
+    : ['wrangler', 'deploy', 'src/index.ts', '--dry-run', '--outdir', '.wrangler/tmp-build'];
+  // BUILD_CWD overrides the build working directory (e.g. "api" subdir for Workers)
+  const buildCwd = process.env.BUILD_CWD
+    ? join(workspace, process.env.BUILD_CWD)
+    : join(workspace, 'api');
+  const build = spawn(buildCmd, buildArgs, {
+    cwd: buildCwd,
     shell: true,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -910,6 +968,9 @@ function runBuild(workspace: string, logPath: string, callback: (error: any, res
 
 function callOllama(prompt: string, role: string, workspace: string, logPath: string, callback: (error: any, result: any) => void, modelOverride?: string): void {
   const model = modelOverride || LLM_MODEL;
+  if (modelOverride) {
+    appendFileSync(logPath, '[MODEL OVERRIDE] Using ' + modelOverride + '\n');
+  }
   const data = JSON.stringify({
     model: model,
     prompt: prompt,
@@ -1011,6 +1072,7 @@ Start validation.`;
   }
 
   const existingFiles = getExistingFilesList(config.workspace || WORKSPACE);
+  const keyFiles = getKeyFileContents(config.workspace || WORKSPACE);
 
   return `Task: ${config.title}
 
@@ -1020,21 +1082,38 @@ ${config.description}
 EXISTING FILES IN WORKSPACE:
 ${existingFiles}
 
-CRITICAL RULES - MUST FOLLOW:
-1. ONLY import 'react' - NO other npm packages
-2. NO CSS imports (no './File.css' imports)
-3. Use inline styles ONLY: style={{ padding: '16px', margin: '8px' }}
-4. NO className libraries (no clsx, classnames, tailwind-merge)
-5. Simple React components with inline styles only
+KEY EXISTING FILES (you MUST preserve all existing content when modifying these):
+${keyFiles}
 
-Write code in markdown blocks with file path as the FIRST comment line:
-   \`\`\`typescript
-   // packages/app/src/YourFile.tsx
-   import React from 'react';
-   ...
-   \`\`\`
+CRITICAL RULES:
+1. When modifying an existing file (like api/src/index.ts), you MUST include ALL existing content plus your additions. DO NOT remove existing imports, routes, or exports.
+2. Write files using FILE: format (see builder template above).
+3. For API code, use bare module paths: import { X } from 'app/types/...' (NOT relative paths to packages/).
+4. For frontend code, use @shop-diary/ui and @shop-diary/app aliases.
+5. After writing files, the build will run automatically.`;
+}
 
-After writing files, the build will run automatically.`;
+function getKeyFileContents(workspace: string): string {
+  // Read key shared files that builders commonly need to modify (append to, not overwrite)
+  const keyPaths = [
+    'api/src/index.ts',
+    'packages/app/types/db.types.ts',
+    'packages/app/types/services.enum.ts',
+  ];
+
+  const sections: string[] = [];
+  for (const relPath of keyPaths) {
+    const fullPath = join(workspace, relPath);
+    try {
+      if (existsSync(fullPath)) {
+        const content = readFileSync(fullPath, 'utf-8');
+        sections.push(`--- ${relPath} ---\n${content}\n--- end ---`);
+      }
+    } catch {
+      // skip
+    }
+  }
+  return sections.join('\n\n') || '(none found)';
 }
 
 function getExistingFilesList(workspace: string): string {
@@ -1298,31 +1377,42 @@ function getBuilderTemplate(workspace: string): string {
   return `# Local Builder Instructions
 
 ## CRITICAL: Import Paths
-- Use the real workspace aliases: @shop-diary/ui and @shop-diary/app
-- Use React Native components (View, Text, Pressable, ScrollView) for UI
-- Do not invent import paths like packages/... or @dashboard/...
-- Check existing files in ${workspace}\\packages\\app and ${workspace}\\packages\\ui for examples
 
-## Build Verification
-- After writing files, ALWAYS run: yarn build
-- If build fails, read the error and fix IMMEDIATELY
-- Common errors:
-  - "Module not found packages/..." - Replace with the real @shop-diary aliases
-  - "Module not found '@dashboard/...'" - Replace with '@shop-diary/app/...'
-  - "Module not found 'ky'" - Use 'fetch' instead (ky not installed)
-  - "TS2307: Cannot find module" - Check import path
+### API files (api/src/services/...)
+- Import shared types using BARE MODULE PATH: import { X } from 'app/types/...'
+- Example: import { Env } from 'app/types/env.types'
+- Example: import { DatabaseTables } from 'app/types/services.enum'
+- Example: import { TNewOrder } from 'app/types/db.types'
+- NEVER use relative paths to packages/ (e.g. ../../../packages/app/) — this WILL break the build
+- Import local files with relative paths: import { db } from '../../infra/db'
+- Use 'ulidx' for ULID generation (not 'ulid')
+- Use { json, error } from 'itty-router'
+- Use { sql } from 'kysely' for SQL expressions in migrations
 
-## Loop Detection
-- If you've tried 5+ times and build still fails:
-  1. Stop and analyze the pattern
-  2. Check existing files for correct patterns
-  3. Read the build error carefully and fix the specific issue
+### Frontend files (packages/app/..., packages/ui/...)
+- Use @shop-diary/ui for UI components
+- Use @shop-diary/app for shared logic
+- Use React Native components (View, Text, Pressable), NOT HTML
+
+### Check existing files for patterns
+- Look at ${workspace}/api/src/services/orders/orders.routes.ts for API route pattern
+- Look at ${workspace}/api/src/services/orders/orders.service.ts for service pattern
+- Look at ${workspace}/packages/app/types/schemas/orders.schema.ts for Zod schema pattern
+
+## Build Check
+- Build runs automatically after you write files
+- The build uses wrangler (esbuild) — it catches import resolution errors immediately
+- "Could not resolve" = wrong import path. Check existing files for the correct pattern.
 
 ## Output Format
-- Write files using FILE: path/to/file.ext format
-- Run build after all files written
+- Write files using FILE: path/to/file.ext format followed by a code block
+- Example:
+  FILE: api/src/services/example/example.routes.ts
+  \`\`\`typescript
+  import { Env } from 'app/types/env.types';
+  // ... code ...
+  \`\`\`
 - Report "BUILD_SUCCESS" when build passes
-- Report specific errors when stuck
 `;
 }
 
