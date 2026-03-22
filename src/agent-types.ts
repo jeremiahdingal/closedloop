@@ -76,3 +76,14 @@ export const issueProcessingLock: Record<string, boolean> = {};
 
 // Lock per issue to prevent concurrent Artist processing
 export const visualReviewerProcessingLock: Record<string, boolean> = {};
+
+// Track issues that came through the complex/remote path (score >= 7).
+// When Strategist delegates these, the builder should use the remote model.
+// Key: issueId, Value: remote model name (e.g. 'glm-5')
+export const issueRemoteFlags = new Map<string, string>();
+
+// Track issues that should use burst model (greenfield first pass)
+export const issueBuilderBurstMode = new Set<string>();
+
+// Per-issue model overrides for Local Builder (one-shot, consumed on use)
+export const issueBuilderModelOverrides = new Map<string, string>();

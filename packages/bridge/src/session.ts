@@ -17,6 +17,7 @@ const WORKSPACE = process.env.WORKSPACE || 'C:\\Users\\dinga\\Projects\\shop-dia
 const OLLAMA_API = process.env.OLLAMA_API || 'http://127.0.0.1:11434';
 const LLM_MODEL = process.env.LLM_MODEL || 'qwen2.5-coder:14b';
 const LLM_MODEL_BURST = process.env.LLM_MODEL_BURST || 'qwen3-coder:30b';
+const PROXY_URL = process.env.PROXY_URL || 'http://127.0.0.1:3201';
 
 // Remote rescue via z.ai (GLM-5)
 const Z_AI_API_KEY = process.env.Z_AI_API_KEY || '';
@@ -986,6 +987,11 @@ interface GitSyncResult {
   message: string;
 }
 
+/**
+ * Delegate git operations to the proxy's /git/sync endpoint.
+ * The proxy owns all git-ops (branch, commit, push) via git-ops.ts.
+ * This avoids duplicating git logic across bridge and proxy.
+ */
 async function syncBuilderBranch(
   issueId: string,
   workspace: string,
@@ -997,136 +1003,43 @@ async function syncBuilderBranch(
     return { success: false, message: 'No builder files were available for git sync.' };
   }
 
-  const branchName = await getIssueBranchName(issueId);
-  const currentBranch = getCurrentBranch(workspace);
-  appendFileSync(logPath, '[GIT] target branch=' + branchName + ' current=' + currentBranch + '\n');
+  // Read file contents to send to the proxy (it writes them on the branch)
+  const fileContents: Record<string, string> = {};
+  for (const file of uniqueFiles) {
+    const fullPath = join(workspace, file);
+    try {
+      if (existsSync(fullPath)) {
+        fileContents[file] = readFileSync(fullPath, 'utf8');
+      }
+    } catch {
+      appendFileSync(logPath, '[GIT] Could not read ' + file + ' for sync\n');
+    }
+  }
+
+  appendFileSync(logPath, '[GIT] Delegating to proxy /git/sync for ' + uniqueFiles.length + ' files\n');
 
   try {
-    if (currentBranch !== branchName) {
-      try {
-        execSync(`git switch ${branchName}`, {
-          cwd: workspace,
-          stdio: 'pipe',
-          timeout: 30000,
-        });
-      } catch {
-        execSync(`git switch -c ${branchName}`, {
-          cwd: workspace,
-          stdio: 'pipe',
-          timeout: 30000,
-        });
-      }
+    const res = await fetch(`${PROXY_URL}/git/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ issueId, files: uniqueFiles, fileContents }),
+      signal: AbortSignal.timeout(180000),
+    } as any);
+
+    const result = await res.json() as any;
+
+    if (!res.ok || !result.success) {
+      const msg = result.output || result.error || 'proxy git sync failed';
+      appendFileSync(logPath, '[GIT] Proxy sync failed: ' + msg + '\n');
+      return { success: false, message: msg };
     }
 
-    for (const file of uniqueFiles) {
-      execSync(`git add -- "${file.replace(/"/g, '\\"')}"`, {
-        cwd: workspace,
-        stdio: 'pipe',
-        timeout: 30000,
-      });
-    }
-
-    const staged = execSync('git diff --cached --name-only', {
-      cwd: workspace,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 30000,
-    }).trim();
-
-    if (!staged) {
-      appendFileSync(logPath, '[GIT] No staged changes detected after git add\n');
-      return { success: true, message: 'No staged changes to commit.' };
-    }
-
-    const issue = await getIssueForBranch(issueId);
-    const identifier = issue?.identifier || issueId.slice(0, 8);
-    const title = issue?.title || 'Code changes';
-    const commitMessage = `${identifier}: ${title}`.replace(/"/g, '\\"');
-
-    try {
-      execSync(`git commit -m "${commitMessage}"`, {
-        cwd: workspace,
-        stdio: 'pipe',
-        timeout: 60000,
-      });
-      appendFileSync(logPath, '[GIT] committed ' + staged + '\n');
-    } catch (err: any) {
-      const stderr = err.stderr?.toString() || '';
-      const stdout = err.stdout?.toString() || '';
-      const combined = (stderr || stdout).trim();
-      if (!/nothing to commit/i.test(combined)) {
-        return {
-          success: false,
-          message: 'git commit failed: ' + (combined || err.message || 'unknown error'),
-        };
-      }
-      appendFileSync(logPath, '[GIT] nothing to commit after staging\n');
-    }
-
-    try {
-      execSync(`git push -u origin ${branchName}`, {
-        cwd: workspace,
-        stdio: 'pipe',
-        timeout: 120000,
-      });
-      appendFileSync(logPath, '[GIT] pushed ' + branchName + '\n');
-    } catch (err: any) {
-      const stderr = err.stderr?.toString() || '';
-      const stdout = err.stdout?.toString() || '';
-      return {
-        success: false,
-        message: 'git push failed: ' + ((stderr || stdout || err.message || 'unknown error').trim()),
-      };
-    }
-
-    return { success: true, message: 'Committed and pushed ' + branchName };
+    appendFileSync(logPath, '[GIT] Proxy sync succeeded\n');
+    return { success: true, message: result.output || 'Committed and pushed via proxy' };
   } catch (err: any) {
-    return {
-      success: false,
-      message: 'git branch sync failed: ' + (err.message || 'unknown error'),
-    };
+    appendFileSync(logPath, '[GIT] Proxy sync error: ' + err.message + '\n');
+    return { success: false, message: 'proxy git sync error: ' + err.message };
   }
-}
-
-function getCurrentBranch(workspace: string): string {
-  try {
-    return execSync('git branch --show-current', {
-      cwd: workspace,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 15000,
-    }).trim();
-  } catch {
-    return '';
-  }
-}
-
-async function getIssueForBranch(issueId: string): Promise<any | null> {
-  try {
-    const res = await fetch(`${getPaperclipApiUrl()}/api/issues/${issueId}`);
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch {
-    // ignore
-  }
-
-  return null;
-}
-
-async function getIssueBranchName(issueId: string): Promise<string> {
-  const issue = await getIssueForBranch(issueId);
-  const identifier = sanitizeBranchPart(issue?.identifier || issueId.slice(0, 8));
-  const title = sanitizeBranchPart(issue?.title || 'code changes').slice(0, 40);
-  return `${identifier}-${title}`.replace(/-+/g, '-').replace(/^-|-$/g, '');
-}
-
-function sanitizeBranchPart(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
 }
 
 function runBuild(workspace: string, logPath: string, callback: (error: any, result: any) => void): void {

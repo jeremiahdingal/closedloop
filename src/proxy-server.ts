@@ -9,9 +9,9 @@
 import * as http from 'http';
 import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getBurstModel, getWorkspace, getAgentModel, getRemoteBuilderModel, loadConfig } from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
-import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES } from './agent-types';
+import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueRemoteFlags, issueBuilderBurstMode, issueBuilderModelOverrides } from './agent-types';
 import { extractIssueId, extractAgentId } from './utils';
-import { createPullRequest } from './git-ops';
+import { createPullRequest, commitAndPush } from './git-ops';
 import { buildIssueContext, buildLocalBuilderContext, setRAGIndexer } from './context-builder';
 import { executeBashBlocks } from './bash-executor';
 import { detectAndDelegate } from './delegation';
@@ -39,9 +39,8 @@ const issueLoopCounts = new Map<string, { count: number; lastReset: number }>();
 const MAX_LOOP_PASSES = 20; // Auto-create PR after 20 passes for human intervention
 const LOOP_RESET_WINDOW_MS = 60 * 60 * 1000; // Reset count after 1 hour of no activity
 
-// Track issues that should use burst model (greenfield first pass)
-const issueBuilderBurstMode = new Set<string>();
-const issueBuilderModelOverrides = new Map<string, string>();
+// issueBuilderBurstMode, issueBuilderModelOverrides, issueRemoteFlags
+// imported from agent-types.ts (shared state accessible by delegation module)
 
 /**
  * Track and detect Reviewer <-> Local Builder loops
@@ -138,6 +137,33 @@ export function createProxy(): http.Server {
     } catch {
       res.writeHead(400);
       res.end('Invalid JSON');
+      return;
+    }
+
+    // ─── /git/sync endpoint — bridge delegates git ops to proxy ───
+    if (req.url === '/git/sync') {
+      const { issueId: syncIssueId, files, fileContents } = parsedBody as {
+        issueId: string;
+        files: string[];
+        fileContents: Record<string, string>;
+      };
+
+      if (!syncIssueId || !files?.length) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'issueId and files[] required' }));
+        return;
+      }
+
+      console.log(`[git/sync] Syncing ${files.length} files for ${syncIssueId.slice(0, 8)}`);
+      try {
+        const result = await commitAndPush(syncIssueId, files, fileContents || {});
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err: any) {
+        console.error(`[git/sync] Error:`, err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, output: err.message }));
+      }
       return;
     }
 
@@ -478,6 +504,10 @@ export function createProxy(): http.Server {
 
       console.log(`[complexity-router] Classifying: ${title.slice(0, 60)}`);
 
+      // Score complexity once — used by all downstream paths
+      const complexityScore = scoreComplexity(title, description);
+      console.log(`[complexity-router] Complexity score: ${complexityScore}/10`);
+
       // Path 1: Template scaffold detection
       const scaffoldConfig = detectScaffoldConfig(title, description);
       if (scaffoldConfig) {
@@ -594,15 +624,12 @@ export function createProxy(): http.Server {
         // Scaffold failed — fall through to Strategist
         console.log(`[complexity-router] Scaffold had errors, falling through to Strategist`);
       } else {
-        // No regex match — score complexity first so genuinely hard tickets cannot be siphoned into scaffold.
-        const complexityScore = scoreComplexity(title, description);
-        console.log(`[complexity-router] Complexity score: ${complexityScore}`);
-
+        // No regex match — check complexity first so genuinely hard tickets cannot be siphoned into scaffold.
         if (complexityScore >= 7) {
           const remoteBuilderModel = getRemoteBuilderModel();
           console.log(`[complexity-router] REMOTE path: score ${complexityScore} >= 7`);
           await postComment(issueId, null,
-            `_Complexity Router: **REMOTE** path (score: ${complexityScore}/10). Calling GLM-5 Remote Architect, then dispatching **Remote Builder** with model \`${remoteBuilderModel}\`._`
+            `_Complexity Router: **REMOTE** path (score: ${complexityScore}/10). Calling GLM-5 Remote Architect for architecture spec, then routing to **Strategist** for decomposition._`
           );
 
           const archSpec = await callRemoteArchitect(issueId, title, description);
@@ -610,23 +637,19 @@ export function createProxy(): http.Server {
             ? description + '\n\n---\n## Architecture Spec (GLM-5)\n\n' + archSpec
             : description;
 
-          issueBuilderModelOverrides.set(issueId, remoteBuilderModel);
+          // Store remote flag so downstream delegation can apply model override
+          issueRemoteFlags.set(issueId, remoteBuilderModel);
+
+          // Route to Strategist for decomposition — NOT directly to builder
           await patchIssue(issueId, {
             description: remoteDescription,
-            assigneeAgentId: AGENTS['local builder'],
+            assigneeAgentId: AGENTS.strategist,
             status: 'in_progress',
           });
 
-          try {
-            await forwardBuilderAssignmentToBridge(issueId, title, remoteDescription, remoteBuilderModel);
-          } catch (err: any) {
-            console.error(`[complexity-router] Remote Builder bridge dispatch failed:`, err.message);
-            await postComment(issueId, null, `_Remote Builder dispatch failed: ${err.message}. The issue remains assigned to Local Builder for retry._`);
-          }
-
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
-            message: { role: 'assistant', content: `_Routed to Remote Builder${archSpec ? ' with architecture spec' : ''}._` },
+            message: { role: 'assistant', content: `_Routed to Strategist${archSpec ? ' with architecture spec' : ' (remote unavailable)'}._` },
           }));
           return;
         }
@@ -655,10 +678,9 @@ export function createProxy(): http.Server {
       }
 
       // Path 2: LOCAL — simple, route directly to Strategist
-      const fallbackScore = scoreComplexity(title, description);
-      console.log(`[complexity-router] LOCAL path: score ${fallbackScore} < 7`);
+      console.log(`[complexity-router] LOCAL path: score ${complexityScore} < 7`);
       await postComment(issueId, null,
-        `_Complexity Router: **LOCAL** path (score: ${fallbackScore}/10). Routing to Strategist._`
+        `_Complexity Router: **LOCAL** path (score: ${complexityScore}/10). Routing to Strategist._`
       );
       await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
 

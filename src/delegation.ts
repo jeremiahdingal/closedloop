@@ -2,7 +2,11 @@
  * Delegation detection and handling
  */
 
-import { DELEGATION_RULES, AGENT_ALIASES, BLOCKED_AGENTS, recentDelegations, DELEGATION_COOLDOWN_MS } from './agent-types';
+import {
+  DELEGATION_RULES, AGENT_ALIASES, BLOCKED_AGENTS,
+  recentDelegations, DELEGATION_COOLDOWN_MS,
+  issueRemoteFlags, issueBuilderModelOverrides, issueBuilderBurstMode,
+} from './agent-types';
 import { getPaperclipApiUrl } from './config';
 import { AGENTS } from './agent-types';
 
@@ -80,6 +84,20 @@ export async function detectAndDelegate(
       console.log(
         `[delegation] DELEGATED issue ${issueId.slice(0, 8)}: ${fromName} -> ${target.name} (auto-wakeup triggered)`
       );
+
+      // Propagate remote model override when complex issues reach builder path
+      if (issueRemoteFlags.has(issueId)) {
+        const remoteModel = issueRemoteFlags.get(issueId)!;
+        if (target.id === AGENTS['local builder']) {
+          // Final hop — apply the model override directly
+          issueBuilderModelOverrides.set(issueId, remoteModel);
+          issueBuilderBurstMode.add(issueId);
+          issueRemoteFlags.delete(issueId);
+          console.log(`[delegation] Remote flag applied for ${issueId.slice(0, 8)}: model=${remoteModel}`);
+        }
+        // For intermediate hops (Strategist → Tech Lead), the flag stays in the map
+        // and will be picked up when Tech Lead eventually delegates to Local Builder
+      }
     } else {
       const text = await res.text();
       console.error(`[delegation] Delegation failed: ${res.status} ${text}`);
