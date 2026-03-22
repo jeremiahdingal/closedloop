@@ -12,25 +12,11 @@ test-*.js
 # Screenshots (captured at runtime)
 .screenshots/
 
-# Bridge session data
-packages/bridge/sessions/
-packages/bridge/dist/
-
-# Build output
-dist/
+# Secrets
+.env
 
 # Node
 node_modules/
-
-# Working docs
-CONFIG_SUMMARY.md
-LOCAL_BUILDER_BRIDGE_AUDIT.md
-LOCAL_BUILDER_BRIDGE_HANDOFF.md
-Diff
-fix-imports.ts
-
-# Environment
-.env
 
 # OS
 Thumbs.db

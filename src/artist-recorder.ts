@@ -874,19 +874,19 @@ async function getBranchName(issueId: string): Promise<string> {
 
 export async function runArtistStage(issueId: string): Promise<void> {
   // Import lock from agent-types
-  const { visualReviewerProcessingLock } = await import('./agent-types');
+  const { artistProcessingLock } = await import('./agent-types');
 
-  if (visualReviewerProcessingLock[issueId]) {
+  if (artistProcessingLock[issueId]) {
     console.log(`[artist] Skipping duplicate run for ${issueId.slice(0, 8)} (already processing)`);
     return;
   }
 
-  visualReviewerProcessingLock[issueId] = true;
+  artistProcessingLock[issueId] = true;
   try {
     const result = await runArtistRecorder(issueId);
     if (!result) return;
 
-    await postComment(issueId, null, result.report);
+    await postComment(issueId, AGENTS['visual reviewer'], result.report);
 
     if (result.status === 'passed') {
       await postComment(
@@ -907,10 +907,10 @@ export async function runArtistStage(issueId: string): Promise<void> {
     }
   } catch (err: any) {
     console.error(`[artist] Stage failed:`, err.message);
-    await postComment(issueId, null, `_Feature recorder failed: ${err.message}_`);
+    await postComment(issueId, AGENTS['visual reviewer'], `_Feature recorder failed: ${err.message}_`);
     await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
   } finally {
-    visualReviewerProcessingLock[issueId] = false;
+    artistProcessingLock[issueId] = false;
   }
 }
 

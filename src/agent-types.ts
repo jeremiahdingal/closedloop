@@ -32,12 +32,13 @@ export const AGENT_ALIASES: Record<string, string> = {
   'local builder (engineer)': AGENTS['local builder'],
   reviewer: AGENTS.reviewer,
   'diff guardian': AGENTS['diff guardian'],
-  sentinel: AGENTS.sentinel,
-  deployer: AGENTS.deployer,
   'visual reviewer': AGENTS['visual reviewer'],
   'visual reviewer (ui/ux)': AGENTS['visual reviewer'],
-  'complexity router': AGENTS['complexity router'],
-  'scaffold architect': AGENTS['scaffold architect'],
+  sentinel: AGENTS.sentinel,
+  deployer: AGENTS.deployer,
+  // Keep backward compat for prompts that still say "artist"
+  artist: AGENTS['visual reviewer'],
+  'artist (ui/ux)': AGENTS['visual reviewer'],
 };
 
 // Agents allowed to execute bash commands
@@ -46,8 +47,6 @@ export const BASH_AGENTS = new Set([
   AGENTS.sentinel,
   AGENTS.deployer,
   AGENTS.reviewer,
-  AGENTS['diff guardian'],
-  AGENTS['visual reviewer'],
 ]);
 
 // Dangerous command patterns to block
@@ -74,16 +73,14 @@ export const issueBuilderPasses: Record<string, number> = {};
 // Lock per issue to prevent concurrent Local Builder processing
 export const issueProcessingLock: Record<string, boolean> = {};
 
-// Lock per issue to prevent concurrent Artist processing
-export const visualReviewerProcessingLock: Record<string, boolean> = {};
+// Lock per issue to prevent concurrent Artist/Visual Reviewer processing
+export const artistProcessingLock: Record<string, boolean> = {};
 
-// Track issues that came through the complex/remote path (score >= 7).
-// When Strategist delegates these, the builder should use the remote model.
-// Key: issueId, Value: remote model name (e.g. 'glm-5')
-export const issueRemoteFlags = new Map<string, string>();
-
-// Track issues that should use burst model (greenfield first pass)
+// Track issues in burst mode (greenfield scaffolds get larger model)
 export const issueBuilderBurstMode = new Set<string>();
 
-// Per-issue model overrides for Local Builder (one-shot, consumed on use)
-export const issueBuilderModelOverrides = new Map<string, string>();
+// Goal/Epic tracking — Paperclip has flat schema, so we track parent-child here
+export const goalTicketMap: Record<string, string[]> = {};   // goalIssueId -> [ticketIssueId, ...]
+export const ticketGoalMap: Record<string, string> = {};     // ticketIssueId -> goalIssueId
+export const issueComplexityCache: Record<string, { score: number; signals: string[] }> = {};
+export const remoteArchitectCalled: Record<string, { calledAt: number; specRelPath: string }> = {};

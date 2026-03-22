@@ -31,10 +31,10 @@ function createDefaultConfig(): ProjectConfig {
   return {
     project: {
       name: 'Shop Diary V2',
-      slug: 'shop-diary-v3',
+      slug: 'shop-diary-v2',
       description: 'Cross-platform POS (point-of-sale) and shop management app',
-      githubRepo: 'jeremiahdingal/shop-diary-v3',
-      workspace: 'C:\\Users\\dinga\\Projects\\shop-diary-v3',
+      githubRepo: 'jeremiahdingal/shop-diary-v2',
+      workspace: 'C:\\Users\\dinga\\Projects\\shop-diary-v2',
     },
     techStack: {
       monorepo: 'Turborepo + Yarn workspaces',
@@ -105,9 +105,7 @@ function createDefaultConfig(): ProjectConfig {
         reviewer: 'eace3a19-bded-4b90-827e-cfc00f3900bd',
         sentinel: 'c7fb4dae-8ac3-4795-b1f6-d14db2021035',
         deployer: '5e234916-47ef-41a2-8c07-e9376ee6aa9c',
-        'visual reviewer': '787cbd9e-d10b-4bca-b486-e7f5fd99d184',
-        'diff guardian': '79641900-921d-400f-8eba-63373f5c0e17',
-        'complexity router': '093ee390-cfbf-4129-81d6-aeeb638c7d71',
+        artist: '787cbd9e-d10b-4bca-b486-e7f5fd99d184',
       },
       agentKeys: {
         'a90b07a4-f18c-4509-9d7b-b9f16eb098d6': 'pcp_48d784f6edd3a907e7700cda9f93e36fc0d1030f4a6b6d04',
@@ -118,8 +116,6 @@ function createDefaultConfig(): ProjectConfig {
         'c7fb4dae-8ac3-4795-b1f6-d14db2021035': 'pcp_268a568963f01698e27a232c9b911d96fa3504b214232b97',
         '5e234916-47ef-41a2-8c07-e9376ee6aa9c': 'pcp_ad33d0ec65c082f7b46feef3233872548ac64b606e0e7541',
         '787cbd9e-d10b-4bca-b486-e7f5fd99d184': 'pcp_6b6711a3a014c59c92416ec479077557a021087ba08bc280',
-        '79641900-921d-400f-8eba-63373f5c0e17': '',
-        '093ee390-cfbf-4129-81d6-aeeb638c7d71': '',
       },
       blockedAgents: ['954ce225-6dc8-4df7-8917-b597afbae60b'],
       apiUrl: 'http://127.0.0.1:3100',
@@ -140,13 +136,13 @@ function createDefaultConfig(): ProjectConfig {
         deployer: 'qwen3:8b',
       },
       timeouts: {
+        'complexity router': 60,
         strategist: 900,
         'tech lead': 900,
         'local builder': 3600,
         reviewer: 900,
         'diff guardian': 60,
         'visual reviewer': 900,
-        'complexity router': 60,
         sentinel: 600,
         deployer: 600,
       },
@@ -164,6 +160,16 @@ function createDefaultConfig(): ProjectConfig {
       reviewer: ['diff guardian'],
       'diff guardian': ['visual reviewer'],
       sentinel: ['deployer'],
+    },
+    remote: {
+      appArchitect: {
+        model: 'glm-5',
+        apiBase: 'https://open.bigmodel.cn/api/paas/v4',
+      },
+      rescue: {
+        model: 'glm-5',
+        threshold: 3,
+      },
     },
   };
 }
@@ -208,18 +214,6 @@ export function getOllamaPorts(): { proxyPort: number; ollamaPort: number } {
   };
 }
 
-export function getAgentModel(agentName: string): string | undefined {
-  return loadConfig().ollama.models[agentName];
-}
-
-export function getBurstModel(): string | undefined {
-  return loadConfig().ollama.models['local builder burst'];
-}
-
-export function getRemoteBuilderModel(): string {
-  return process.env.REMOTE_BUILDER_MODEL || loadConfig().remote?.appArchitect?.model || 'glm-5';
-}
-
 export function getArtistConfig() {
   const config = loadConfig();
   return {
@@ -228,4 +222,12 @@ export function getArtistConfig() {
     stepTimeoutMs: config.artist.stepTimeoutMs,
     screenshotDir: config.artist.screenshotDir,
   };
+}
+
+export function getRemoteConfig() {
+  return loadConfig().remote || null;
+}
+
+export function getAgentModel(agentName: string): string | undefined {
+  return loadConfig().ollama.models[agentName];
 }

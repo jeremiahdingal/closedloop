@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ClosedLoop HTTP Server
  * 
  * Local-first, Ollama-powered proxy for Paperclip AI agents.
@@ -7,23 +7,21 @@
  */
 
 import * as http from 'http';
-import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getBurstModel, getWorkspace, getAgentModel, getRemoteBuilderModel, loadConfig } from './config';
+import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentModel } from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
-import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueRemoteFlags, issueBuilderBurstMode, issueBuilderModelOverrides } from './agent-types';
-import { extractIssueId, extractAgentId } from './utils';
-import { createPullRequest, commitAndPush } from './git-ops';
-import { buildIssueContext, buildLocalBuilderContext, setRAGIndexer } from './context-builder';
+import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses, issueBuilderBurstMode } from './agent-types';
+import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion } from './goal-system';
+import { callRemoteArchitect } from './remote-ai';
+import { extractIssueId, extractAgentId, sleep } from './utils';
+import { applyCodeBlocks } from './code-extractor';
+import { commitAndPush, createPullRequest } from './git-ops';
+import { buildIssueContext, buildLocalBuilderContext, setRAGIndexer, getRAGIndexer } from './context-builder';
 import { executeBashBlocks } from './bash-executor';
 import { detectAndDelegate } from './delegation';
 import { runArtistStage } from './artist-recorder';
 import { runDiffGuardian } from './diff-guardian';
 import { ragIndexer } from './rag-indexer';
-import { OllamaRequest } from './types';
-import { detectScaffoldConfig, ScaffoldConfig, parseArchitectOutput } from './scaffold-engine';
-import { executeScaffold, formatScaffoldComment } from './scaffold-executor';
-import { scoreComplexity, callRemoteArchitect } from './complexity-router';
-import { execSync } from 'child_process';
-import { getBranchName } from './git-ops';
+import { OllamaRequest, OllamaResponse } from './types';
 
 const { proxyPort, ollamaPort } = getOllamaPorts();
 const PAPERCLIP_API = getPaperclipApiUrl();
@@ -33,17 +31,14 @@ const COMPANY_ID = getCompanyId();
 const recentAgentRuns = new Map<string, number>();
 const DELEGATION_COOLDOWN_MS = 5 * 60 * 1000;
 
-// Track Reviewer <-> Local Builder loops to prevent infinite cycles
+// Track Reviewer ↔ Local Builder loops to prevent infinite cycles
 // Key: issueId, Value: { count: number, lastReset: number }
 const issueLoopCounts = new Map<string, { count: number; lastReset: number }>();
 const MAX_LOOP_PASSES = 20; // Auto-create PR after 20 passes for human intervention
 const LOOP_RESET_WINDOW_MS = 60 * 60 * 1000; // Reset count after 1 hour of no activity
 
-// issueBuilderBurstMode, issueBuilderModelOverrides, issueRemoteFlags
-// imported from agent-types.ts (shared state accessible by delegation module)
-
 /**
- * Track and detect Reviewer <-> Local Builder loops
+ * Track and detect Reviewer ↔ Local Builder loops
  * Returns true if loop exceeds MAX_LOOP_PASSES
  */
 function trackLoop(issueId: string, agentId: string): { count: number; exceeded: boolean } {
@@ -55,7 +50,7 @@ function trackLoop(issueId: string, agentId: string): { count: number; exceeded:
     loopData = { count: 0, lastReset: now };
   }
 
-  // Increment on Reviewer -> Local Builder handoff
+  // Increment on Reviewer → Local Builder handoff
   if (agentId === AGENTS.reviewer || agentId === AGENTS['local builder']) {
     loopData.count++;
     issueLoopCounts.set(issueId, loopData);
@@ -72,51 +67,6 @@ function trackLoop(issueId: string, agentId: string): { count: number; exceeded:
  */
 function resetLoopCounter(issueId: string): void {
   issueLoopCounts.delete(issueId);
-}
-
-async function forwardAssignmentToBridge(
-  issueId: string,
-  assigneeAgentId: string,
-  title: string,
-  description: string,
-  modelOverride?: string
-): Promise<void> {
-  const payload: Record<string, unknown> = {
-    issueId,
-    assigneeAgentId,
-    title,
-    description,
-  };
-
-  if (modelOverride) {
-    payload.modelOverride = modelOverride;
-  }
-
-  const bridgeRes = await fetch(`${getBridgeUrl()}/webhook/issue-assigned`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  if (!bridgeRes.ok) {
-    const bridgeText = await bridgeRes.text();
-    throw new Error(`Bridge forward failed: ${bridgeRes.status} ${bridgeText}`);
-  }
-}
-
-async function forwardBuilderAssignmentToBridge(
-  issueId: string,
-  title: string,
-  description: string,
-  modelOverride?: string
-): Promise<void> {
-  return forwardAssignmentToBridge(
-    issueId,
-    AGENTS['local builder'],
-    title,
-    description,
-    modelOverride
-  );
 }
 
 export function createProxy(): http.Server {
@@ -137,33 +87,6 @@ export function createProxy(): http.Server {
     } catch {
       res.writeHead(400);
       res.end('Invalid JSON');
-      return;
-    }
-
-    // ─── /git/sync endpoint — bridge delegates git ops to proxy ───
-    if (req.url === '/git/sync') {
-      const { issueId: syncIssueId, files, fileContents } = parsedBody as {
-        issueId: string;
-        files: string[];
-        fileContents: Record<string, string>;
-      };
-
-      if (!syncIssueId || !files?.length) {
-        res.writeHead(400);
-        res.end(JSON.stringify({ error: 'issueId and files[] required' }));
-        return;
-      }
-
-      console.log(`[git/sync] Syncing ${files.length} files for ${syncIssueId.slice(0, 8)}`);
-      try {
-        const result = await commitAndPush(syncIssueId, files, fileContents || {});
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(result));
-      } catch (err: any) {
-        console.error(`[git/sync] Error:`, err.message);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, output: err.message }));
-      }
       return;
     }
 
@@ -199,7 +122,7 @@ export function createProxy(): http.Server {
     if (issueId) {
       const issueState = await getIssueDetails(issueId);
       if (issueState && (issueState.status === 'in_review' || issueState.status === 'done' || issueState.status === 'cancelled')) {
-        console.log(`[closedloop] Skipping ${agentName} - issue ${issueId.slice(0, 8)} is ${issueState.status}`);
+        console.log(`[closedloop] Skipping ${agentName} — issue ${issueId.slice(0, 8)} is ${issueState.status}`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -210,48 +133,32 @@ export function createProxy(): http.Server {
       }
     }
 
-    // Diff Guardian bypasses Ollama and runs mechanical checks
-    if (issueId && agentId === AGENTS['diff guardian']) {
-      console.log(`[proxy:${proxyPort}] Diff Guardian -> mechanical check | issue=${issueId.slice(0, 8)}`);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          message: {
-            role: 'assistant',
-            content: '_Diff Guardian mechanical check started._',
-          },
-        })
-      );
+    // Hook 1: Goal guard — prevent Local Builder from directly handling Goal/Epic issues
+    if (issueId && agentId === AGENTS['local builder']) {
+      const builderIssue = await getIssueDetails(issueId);
+      if (builderIssue && isGoalIssue(builderIssue)) {
+        console.log(`[closedloop] Goal guard: redirecting Goal issue ${issueId.slice(0, 8)} away from Local Builder`);
+        await postComment(issueId, null, '_Goal/Epic issue detected — redirecting to Complexity Router for decomposition._');
+        const routerTarget = AGENTS['complexity router'] || AGENTS.strategist;
+        await patchIssue(issueId, { assigneeAgentId: routerTarget });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: { role: 'assistant', content: '_Redirected Goal issue to Complexity Router._' } }));
+        return;
+      }
+    }
 
-      setImmediate(async () => {
-        try {
-          const diffResult = await runDiffGuardian(issueId);
-          if (diffResult.approved) {
-            await createPullRequest(issueId);
-            console.log(`[closedloop] PR created after DiffGuardian approval`);
-            resetLoopCounter(issueId);
-            // Move to Visual Reviewer and mark in_review to stop the loop
-            await patchIssue(issueId, {
-              assigneeAgentId: AGENTS['visual reviewer'],
-              status: 'in_review',
-            });
-          } else {
-            console.log(`[closedloop] DiffGuardian rejected — sending back to Local Builder`);
-            await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
-          }
-        } catch (err: any) {
-          console.error(`[closedloop] DiffGuardian error:`, err.message);
-          // Fallback: create PR anyway if diff guardian crashes
-          await createPullRequest(issueId);
-          await patchIssue(issueId, { status: 'in_review' });
-        }
-      });
-      return;
+    // Hook 2: Burst model override for greenfield scaffold issues
+    if (agentId === AGENTS['local builder'] && issueId && issueBuilderBurstMode.has(issueId)) {
+      const burstModel = getAgentModel('local builder burst');
+      if (burstModel) {
+        parsedBody.model = burstModel;
+        console.log(`[closedloop] Burst mode: using ${burstModel} for ${issueId.slice(0, 8)}`);
+      }
     }
 
     // Visual Reviewer bypasses Ollama and runs deterministic recorder
     if (issueId && agentId === AGENTS['visual reviewer']) {
-      console.log(`[proxy:${proxyPort}] Visual Reviewer -> feature recorder | issue=${issueId.slice(0, 8)}`);
+      console.log(`[proxy:${proxyPort}] ${agentName} -> feature recorder | issue=${issueId.slice(0, 8)}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({
@@ -268,444 +175,20 @@ export function createProxy(): http.Server {
       return;
     }
 
-    // ─── SCAFFOLD ARCHITECT HANDLER ───
-    // Scaffold Architect runs on LLM, outputs SCAFFOLD_CONFIG JSON or NOT_SCAFFOLDABLE.
-    // We intercept its response, parse the config, and execute the scaffold engine.
-    if (issueId && agentId === AGENTS['scaffold architect']) {
-      console.log(`[proxy:${proxyPort}] Scaffold Architect -> ollama | issue=${issueId.slice(0, 8)}`);
-
-      // Build context and call Ollama
-      const saIssue = await getIssueDetails(issueId);
-      const saPromptPath = require('path').join(__dirname, '..', 'prompts', 'scaffold-architect.txt');
-      let saSystemPrompt = '';
-      try {
-        saSystemPrompt = require('fs').readFileSync(saPromptPath, 'utf8');
-      } catch {
-        saSystemPrompt = 'You are the Scaffold Architect. Extract a SCAFFOLD_CONFIG JSON from the issue description, or respond NOT_SCAFFOLDABLE.';
-      }
-
-      const saModel = getAgentModel('scaffold architect') || 'qwen3:4b';
-      const saPayload = {
-        model: saModel,
-        stream: false,
-        messages: [
-          { role: 'system', content: saSystemPrompt },
-          { role: 'user', content: `Issue: ${saIssue?.title || ''}\n\n${saIssue?.description || ''}` },
-        ],
-      };
-
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ message: { role: 'assistant', content: '_Scaffold Architect processing..._' } }));
-
-      setImmediate(async () => {
-        try {
-          const timeoutConfig = loadConfig().ollama.timeouts;
-          const timeoutSec = timeoutConfig['scaffold architect'] || 120;
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), timeoutSec * 1000);
-
-          const ollamaRes = await fetch(`http://127.0.0.1:${ollamaPort}/api/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(saPayload),
-            signal: controller.signal,
-          });
-          const ollamaData = await ollamaRes.json() as any;
-          clearTimeout(timeoutId);
-
-          const content = ollamaData.message?.content || ollamaData.response || '';
-          console.log(`[scaffold-architect] LLM response (${content.length} chars)`);
-
-          // Post the architect's output as a comment
-          await postComment(issueId, null, `**Scaffold Architect:**\n\n${content.trim()}`);
-
-          // Parse SCAFFOLD_CONFIG from response
-          const configMatch = content.match(/SCAFFOLD_CONFIG:\s*```(?:json)?\s*([\s\S]*?)```/);
-          const notScaffoldable = content.match(/NOT_SCAFFOLDABLE:\s*(.+)/);
-
-          if (configMatch) {
-            try {
-              const parsed = JSON.parse(configMatch[1].trim());
-              const scaffoldConfig = parseArchitectOutput(parsed);
-
-              console.log(`[scaffold-architect] Extracted config: ${scaffoldConfig.entityPascal} (${scaffoldConfig.fields.length} fields)`);
-              await postComment(issueId, null,
-                `_Scaffold Architect extracted config: **${scaffoldConfig.entityPascal}** with ${scaffoldConfig.fields.length} fields. Running scaffold engine..._`
-              );
-
-              // Execute scaffold engine (deterministic)
-              const workspace = getWorkspace();
-              const scaffoldResult = executeScaffold(scaffoldConfig, workspace);
-              const comment = formatScaffoldComment(scaffoldConfig, scaffoldResult);
-              await postComment(issueId, null, comment);
-
-              if (scaffoldResult.success) {
-                const allFiles = [...scaffoldResult.filesWritten, ...scaffoldResult.filesPatched];
-                const newFilesWritten = scaffoldResult.filesWritten.filter(f => !f.includes('skipped'));
-                const allSkipped = newFilesWritten.length === 0;
-
-                if (allSkipped) {
-                  // All files already exist on main — nothing to review or PR
-                  console.log(`[scaffold-architect] All files already exist on main. Marking done.`);
-                  await postComment(issueId, null,
-                    `_All scaffold files already exist on main. No changes needed — marking as done._`
-                  );
-                  await patchIssue(issueId, { status: 'done' });
-                } else {
-                  // Git branch/commit/push
-                  const workspace = getWorkspace();
-                  const branchName = await getBranchName(issueId);
-                  const opts = { cwd: workspace, stdio: 'pipe' as const, timeout: 30000 };
-
-                  try {
-                    let defaultBranch = 'main';
-                    try { execSync('git rev-parse --verify main', { ...opts, stdio: 'pipe' }); } catch { defaultBranch = 'master'; }
-
-                    try { execSync(`git checkout -b ${branchName} ${defaultBranch}`, opts); } catch { execSync(`git checkout ${branchName}`, opts); }
-
-                    for (const f of allFiles) {
-                      const cleanPath = f.replace(' (skipped - already exists)', '');
-                      try { execSync(`git add "${cleanPath}"`, opts); } catch {}
-                    }
-
-                    const identifier = saIssue?.identifier || issueId.slice(0, 8);
-                    const commitMsg = `${identifier}: ${saIssue?.title || 'scaffold'} (scaffold-architect)`;
-                    execSync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, opts);
-                    execSync(`git push -u origin ${branchName}`, { ...opts, timeout: 60000 });
-
-                    await postComment(issueId, null,
-                      `_Code committed to branch \`${branchName}\` (scaffold-architect)_\n\nFiles:\n${allFiles.map(f => '- `' + f + '`').join('\n')}`
-                    );
-
-                    execSync(`git checkout ${defaultBranch}`, opts);
-                    await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer, status: 'in_progress' });
-                    console.log(`[scaffold-architect] Committed and pushed. Sent to Reviewer.`);
-                  } catch (gitErr: any) {
-                    console.error(`[scaffold-architect] Git failed:`, gitErr.message);
-                    await postComment(issueId, null, `_Scaffold files written but git failed: ${gitErr.message}. Sending to Local Builder._`);
-                    await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'], status: 'in_progress' });
-                  }
-                }
-              } else {
-                // Scaffold engine failed — fall back to Strategist
-                console.log(`[scaffold-architect] Scaffold engine had errors. Falling back to Strategist.`);
-                await postComment(issueId, null, `_Scaffold engine failed. Routing to Strategist for manual implementation._`);
-                await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
-              }
-            } catch (parseErr: any) {
-              console.error(`[scaffold-architect] JSON parse failed:`, parseErr.message);
-              await postComment(issueId, null, `_Scaffold Architect produced invalid JSON: ${parseErr.message}. Routing to Strategist._`);
-              await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
-            }
-          } else if (notScaffoldable) {
-            console.log(`[scaffold-architect] NOT_SCAFFOLDABLE: ${notScaffoldable[1]}`);
-            await postComment(issueId, null, `_Scaffold Architect: not scaffoldable — ${notScaffoldable[1].trim()}. Routing to Strategist._`);
-            await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
-          } else {
-            // Could not parse response — fall back to Strategist
-            console.log(`[scaffold-architect] Could not parse response. Falling back to Strategist.`);
-            await postComment(issueId, null, `_Scaffold Architect response could not be parsed. Routing to Strategist._`);
-            await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
-          }
-        } catch (err: any) {
-          console.error(`[scaffold-architect] Error:`, err.message);
-          await postComment(issueId, null, `_Scaffold Architect failed: ${err.message}. Routing to Strategist._`);
-          await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
-        }
-      });
-
-      return;
-    }
-
-    // Local Builder is bridge-owned now; forward immediately instead of running in the proxy.
-    if (issueId && agentId === AGENTS['local builder']) {
-      const localBuilderIssue = await getIssueDetails(issueId);
-
-      // Determine if burst mode should be used (greenfield first pass)
-      const useBurst = issueBuilderBurstMode.has(issueId);
-      const overrideModel = issueBuilderModelOverrides.get(issueId);
-      const burstModel = overrideModel || (useBurst ? getBurstModel() : undefined);
-      if (overrideModel) {
-        console.log(`[closedloop] Builder override active for ${issueId.slice(0, 8)} — using ${overrideModel}`);
-        issueBuilderModelOverrides.delete(issueId);
-      }
-      if (useBurst) {
-        console.log(`[closedloop] Burst mode active for ${issueId.slice(0, 8)} — using ${burstModel}`);
-        issueBuilderBurstMode.delete(issueId); // One-shot: only first pass uses burst
-      }
-
-      console.log(`[closedloop] Forwarding Local Builder assignment to bridge: ${getBridgeUrl()}`);
-
-      try {
-        await forwardBuilderAssignmentToBridge(
-          issueId,
-          localBuilderIssue?.title || 'Local Builder task',
-          localBuilderIssue?.description || '',
-          burstModel
-        );
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            message: {
-              role: 'assistant',
-              content: '_Local Builder assignment forwarded to bridge._',
-            },
-          })
-        );
-      } catch (err: any) {
-        console.error('[closedloop] Failed to forward Local Builder assignment to bridge:', err.message);
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: `Bridge unreachable: ${err.message}` }));
-      }
-
-      return;
-    }
-
-    if (issueId && agentId === AGENTS.reviewer) {
-      const reviewerIssue = await getIssueDetails(issueId);
-      console.log(`[closedloop] Forwarding Reviewer assignment to bridge: ${getBridgeUrl()}`);
-
-      try {
-        await forwardAssignmentToBridge(
-          issueId,
-          AGENTS.reviewer,
-          reviewerIssue?.title || 'Reviewer task',
-          reviewerIssue?.description || ''
-        );
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            message: {
-              role: 'assistant',
-              content: '_Reviewer assignment forwarded to bridge._',
-            },
-          })
-        );
-      } catch (err: any) {
-        console.error('[closedloop] Failed to forward Reviewer assignment to bridge:', err.message);
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: `Bridge unreachable: ${err.message}` }));
-      }
-
-      return;
-    }
-
-    // ─── THREE-WAY COMPLEXITY ROUTER GATE ───
-    // When Complexity Router is assigned, classify the issue into one of:
-    //   1. SCAFFOLD — deterministic template (free, instant, zero LLM)
-    //   2. LOCAL    — simple non-template task, route to Strategist → local LLM
-    //   3. REMOTE   — genuinely novel/complex, call GLM-5 Remote Architect first
-    if (issueId && agentId === AGENTS['complexity router']) {
-      const issue = await getIssueDetails(issueId);
-      const title = issue?.title || '';
-      const description = issue?.description || '';
-
-      console.log(`[complexity-router] Classifying: ${title.slice(0, 60)}`);
-
-      // Score complexity once — used by all downstream paths
-      const complexityScore = scoreComplexity(title, description);
-      console.log(`[complexity-router] Complexity score: ${complexityScore}/10`);
-
-      // Path 1: Template scaffold detection
-      const scaffoldConfig = detectScaffoldConfig(title, description);
-      if (scaffoldConfig) {
-        console.log(`[complexity-router] SCAFFOLD match: ${scaffoldConfig.entityPascal}`);
-        await postComment(issueId, null,
-          `_Complexity Router: **SCAFFOLD** path detected for ${scaffoldConfig.entityPascal} CRUD API. Generating deterministic code..._`
-        );
-
-        const workspace = getWorkspace();
-        const scaffoldResult = executeScaffold(scaffoldConfig, workspace);
-        const comment = formatScaffoldComment(scaffoldConfig, scaffoldResult);
-        await postComment(issueId, null, comment);
-
-        if (scaffoldResult.success) {
-          const allFiles = [...scaffoldResult.filesWritten, ...scaffoldResult.filesPatched];
-          const newFilesWritten = scaffoldResult.filesWritten.filter(f => !f.includes('skipped'));
-          const allSkipped = newFilesWritten.length === 0;
-
-          if (allSkipped) {
-            // All files already exist on main — nothing to review or PR
-            console.log(`[complexity-router] All scaffold files already exist on main. Marking done.`);
-            await postComment(issueId, null,
-              `_All scaffold files already exist on main. No changes needed — marking as done._`
-            );
-            await patchIssue(issueId, { status: 'done' });
-          } else {
-            // New files written — commit to a branch, then send to Reviewer
-            console.log(`[complexity-router] Scaffold wrote ${newFilesWritten.length} new files. Committing to branch...`);
-
-            const workspace = getWorkspace();
-            const branchName = await getBranchName(issueId);
-            const opts = { cwd: workspace, stdio: 'pipe' as const, timeout: 30000 };
-
-            try {
-              // Detect default branch
-              let defaultBranch = 'main';
-              try {
-                execSync('git rev-parse --verify main', { ...opts, stdio: 'pipe' });
-              } catch {
-                defaultBranch = 'master';
-              }
-
-              // Create branch from default
-              try {
-                execSync(`git checkout -b ${branchName} ${defaultBranch}`, opts);
-              } catch {
-                execSync(`git checkout ${branchName}`, opts);
-              }
-
-              // Stage all scaffold files
-              for (const f of allFiles) {
-                const cleanPath = f.replace(' (skipped - already exists)', '');
-                try {
-                  execSync(`git add "${cleanPath}"`, opts);
-                } catch {}
-              }
-
-              // Commit
-              const issue = await getIssueDetails(issueId);
-              const identifier = issue?.identifier || issueId.slice(0, 8);
-              const commitMsg = `${identifier}: ${title} (scaffold)`;
-              execSync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, opts);
-              console.log(`[complexity-router] Committed: ${commitMsg}`);
-
-              // Push
-              execSync(`git push -u origin ${branchName}`, { ...opts, timeout: 60000 });
-              console.log(`[complexity-router] Pushed branch: ${branchName}`);
-
-              await postComment(issueId, null,
-                `_Code committed to branch \`${branchName}\` (scaffold)_\n\nFiles:\n${allFiles.map(f => '- `' + f + '`').join('\n')}`
-              );
-
-              // Switch back to default branch
-              execSync(`git checkout ${defaultBranch}`, opts);
-
-              // Send directly to Reviewer (skip Local Builder for scaffold since build was verified)
-              await patchIssue(issueId, {
-                assigneeAgentId: AGENTS.reviewer,
-                status: 'in_progress',
-              });
-              console.log(`[complexity-router] Scaffold committed and pushed. Sending to Reviewer.`);
-            } catch (gitErr: any) {
-              console.error(`[complexity-router] Git commit failed:`, gitErr.message);
-              await postComment(issueId, null, `_Scaffold files written but git commit failed: ${gitErr.message}_`);
-              // Fallback: send to Local Builder
-              await patchIssue(issueId, {
-                assigneeAgentId: AGENTS['local builder'],
-                status: 'in_progress',
-              });
-
-              const bridgeUrl = getBridgeUrl();
-              await fetch(`${bridgeUrl}/webhook/issue-assigned`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  issueId,
-                  assigneeAgentId: AGENTS['local builder'],
-                  title: `Build verification: ${title}`,
-                  description: `Scaffold has written files but git commit failed. Fix and commit.\n\nFiles:\n${allFiles.map(f => '- ' + f).join('\n')}`,
-                }),
-              }).catch((err: any) => {
-                console.error(`[complexity-router] Bridge forward failed:`, err.message);
-              });
-            }
-          }
-
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            message: { role: 'assistant', content: '_Scaffold complete._' },
-          }));
-          return;
-        }
-
-        // Scaffold failed — fall through to Strategist
-        console.log(`[complexity-router] Scaffold had errors, falling through to Strategist`);
-      } else {
-        // No regex match — check complexity first so genuinely hard tickets cannot be siphoned into scaffold.
-        if (complexityScore >= 7) {
-          const remoteBuilderModel = getRemoteBuilderModel();
-          console.log(`[complexity-router] REMOTE path: score ${complexityScore} >= 7`);
-          await postComment(issueId, null,
-            `_Complexity Router: **REMOTE** path (score: ${complexityScore}/10). Calling GLM-5 Remote Architect for architecture spec, then routing to **Strategist** for decomposition._`
-          );
-
-          const archSpec = await callRemoteArchitect(issueId, title, description);
-          const remoteDescription = archSpec
-            ? description + '\n\n---\n## Architecture Spec (GLM-5)\n\n' + archSpec
-            : description;
-
-          // Store remote flag so downstream delegation can apply model override
-          issueRemoteFlags.set(issueId, remoteBuilderModel);
-
-          // Route to Strategist for decomposition — NOT directly to builder
-          await patchIssue(issueId, {
-            description: remoteDescription,
-            assigneeAgentId: AGENTS.strategist,
-            status: 'in_progress',
-          });
-
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            message: { role: 'assistant', content: `_Routed to Strategist${archSpec ? ' with architecture spec' : ' (remote unavailable)'}._` },
-          }));
-          return;
-        }
-
-        // Path 1b: CRUD signals detected (score < 7) — route to Scaffold Architect for NL extraction
-        const crudSignals = ['crud', 'api', 'service', 'endpoint', 'create', 'read', 'update', 'delete'];
-        const textLower = (title + ' ' + description).toLowerCase();
-        const crudScore = crudSignals.filter(s => textLower.includes(s)).length;
-
-        if (crudScore >= 2 && AGENTS['scaffold architect']) {
-          console.log(`[complexity-router] CRUD signals detected (score: ${crudScore}) but no regex match. Routing to Scaffold Architect for NL extraction.`);
-          await postComment(issueId, null,
-            `_Complexity Router: CRUD signals detected (score: ${crudScore}). Routing to **Scaffold Architect** for config extraction from natural language._`
-          );
-          await patchIssue(issueId, {
-            assigneeAgentId: AGENTS['scaffold architect'],
-            status: 'in_progress',
-          });
-
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            message: { role: 'assistant', content: '_Routed to Scaffold Architect._' },
-          }));
-          return;
-        }
-      }
-
-      // Path 2: LOCAL — simple, route directly to Strategist
-      console.log(`[complexity-router] LOCAL path: score ${complexityScore} < 7`);
-      await postComment(issueId, null,
-        `_Complexity Router: **LOCAL** path (score: ${complexityScore}/10). Routing to Strategist._`
-      );
-      await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
-
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        message: { role: 'assistant', content: '_Routed to Strategist via local path._' },
-      }));
-      return;
-    }
-
-    // Build Ollama payload — override model from agent config if available
-    const configuredModel = agentName ? getAgentModel(agentName.toLowerCase()) : undefined;
+    // Build Ollama payload
     const ollamaPayload: OllamaRequest = {
-      model: configuredModel || parsedBody.model,
+      model: parsedBody.model,
       stream: parsedBody.stream ?? false,
       messages: [...(parsedBody.messages || [])],
     };
 
     // Enrich with issue context or heartbeat context
     if (issueId) {
-      // Use enhanced context for Local Builder (includes Tier 1-3 file contents)
-      const isBurst = issueBuilderBurstMode.has(issueId);
-      const issueContext = (agentId === AGENTS['local builder'])
-        ? await buildLocalBuilderContext(issueId, agentId, isBurst ? 'burst' : 'normal')
-        : await buildIssueContext(issueId, agentId || '');
+      // Local Builder gets enhanced context with existing file contents and RAG
+      const issueContext =
+        agentId === AGENTS['local builder']
+          ? await buildLocalBuilderContext(issueId, agentId)
+          : await buildIssueContext(issueId, agentId || '');
       if (issueContext) {
         ollamaPayload.messages.push({
           role: 'user',
@@ -722,21 +205,13 @@ export function createProxy(): http.Server {
     );
 
     try {
-      // Set timeout based on agent config (default 15 min)
-      const timeoutConfig = loadConfig().ollama.timeouts;
-      const timeoutSec = (agentName ? timeoutConfig[agentName.toLowerCase()] : undefined) || 900;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutSec * 1000);
-
       const ollamaRes = await fetch(`http://127.0.0.1:${ollamaPort}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(ollamaPayload),
-        signal: controller.signal,
       });
 
       const ollamaData = await ollamaRes.text();
-      clearTimeout(timeoutId);
 
       res.writeHead(ollamaRes.status, {
         'Content-Type': 'application/json',
@@ -750,19 +225,137 @@ export function createProxy(): http.Server {
           const content = parsed.message?.content || parsed.response || '';
 
           if (content.trim()) {
-            // Post as system comment (null agentId) to avoid auth issues
-            // Prefix with agent name for attribution
-            const commentPrefix = agentName ? `**${agentName}:**\n\n` : '';
-            await postComment(issueId, null, commentPrefix + content.trim());
+            await postComment(issueId, agentId, content.trim());
 
             // Detect delegation and reassign via API (triggers auto-wakeup)
             if (agentId) {
-              // Tech Lead → Local Builder: activate burst mode for greenfield scaffold
-              if (agentId === AGENTS['tech lead'] && content.toLowerCase().includes('local builder')) {
-                issueBuilderBurstMode.add(issueId);
-                console.log(`[closedloop] Burst mode activated for ${issueId.slice(0, 8)} (first pass from Tech Lead)`);
-              }
               await detectAndDelegate(issueId, agentId, content);
+            }
+
+            // Hook 3: Complexity Router post-response — score issue and route
+            if (agentId === AGENTS['complexity router'] && issueId) {
+              const routerIssue = await getIssueDetails(issueId);
+              if (routerIssue) {
+                const complexity = scoreComplexity(routerIssue.title, routerIssue.description || '');
+                console.log(`[closedloop] Complexity Router scored ${issueId.slice(0, 8)}: ${complexity.score}/10 [${complexity.signals.join(', ')}]`);
+                if (complexity.score >= 7) {
+                  // Complex issue — call Remote Architect then hand to Strategist
+                  await callRemoteArchitect(issueId, routerIssue);
+                }
+                // Always route to Strategist after scoring
+                await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+                console.log(`[closedloop] Complexity Router -> Strategist`);
+              }
+            }
+
+            // Hook 4: Strategist Goal decomposition — parse ## Ticket: blocks
+            if (agentId === AGENTS.strategist && issueId) {
+              const stratIssue = await getIssueDetails(issueId);
+              if (stratIssue && isGoalIssue(stratIssue) && content.includes('## Ticket:')) {
+                console.log(`[closedloop] Strategist produced ticket decomposition for Goal ${issueId.slice(0, 8)}`);
+                await decomposeGoalIntoTickets(issueId, content);
+              }
+            }
+
+            // Local Builder: extract code blocks, write files, commit (no PR yet)
+            if (agentId === AGENTS['local builder']) {
+              if (issueProcessingLock[issueId]) {
+                console.log(`[closedloop] Skipping duplicate Local Builder run for ${issueId.slice(0, 8)} (already processing)`);
+              } else {
+                issueProcessingLock[issueId] = true;
+                try {
+                  const { written: writtenFiles, fileContents } = applyCodeBlocks(content);
+                  if (writtenFiles.length > 0) {
+                    // Track pass count
+                    if (!issueBuilderPasses[issueId]) {
+                      try {
+                        const branchName = await getBranchName(issueId);
+                        const { execSync } = await import('child_process');
+                        const { getWorkspace } = await import('./config');
+                        execSync(`git rev-parse --verify ${branchName}`, {
+                          cwd: getWorkspace(),
+                          stdio: 'pipe',
+                        });
+                        issueBuilderPasses[issueId] = 1;
+                      } catch {
+                        issueBuilderPasses[issueId] = 0;
+                      }
+                    }
+                    issueBuilderPasses[issueId]++;
+                    const pass = issueBuilderPasses[issueId];
+                    console.log(`[closedloop] Local Builder wrote ${writtenFiles.length} files (pass ${pass})`);
+
+                    // Commit, push, and check build result
+                    const buildResult = await commitAndPush(issueId, writtenFiles, fileContents);
+
+                    // Track Reviewer ↔ Local Builder loops
+                    const loopStatus = trackLoop(issueId, agentId);
+                    console.log(`[closedloop] Loop count: ${loopStatus.count}/${MAX_LOOP_PASSES}`);
+
+                    // If build failed, send back to Local Builder to fix FIRST
+                    if (!buildResult.success) {
+                      console.log(`[closedloop] Build FAILED - sending back to Local Builder to fix before Reviewer`);
+                      await postComment(
+                        issueId,
+                        AGENTS['local builder'],
+                        `⚠️ **Build Failed - Fix Before Review**\n\n` +
+                        `Your code committed successfully but the build failed. Please fix the build errors before sending to Reviewer.\n\n` +
+                        `\`\`\`\n${buildResult.output || 'Build error output not available'}\n\`\`\`\n\n` +
+                        `**Action required:**\n` +
+                        `1. Run \`yarn build\` locally to see full errors\n` +
+                        `2. Fix the build errors in the files you just wrote\n` +
+                        `3. Re-commit and the build will be verified again`
+                      );
+                      await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+                      console.log(`[closedloop] Sent back to Local Builder for build fixes`);
+                    } else {
+                      // Build passed - continue with normal flow
+                      // Check if loop exceeded - auto create PR for human intervention
+                      if (loopStatus.exceeded) {
+                        console.log(`[closedloop] LOOP EXCEEDED (${loopStatus.count}) - Creating PR for human intervention`);
+                        await postComment(
+                          issueId,
+                          null,
+                          `⚠️ **Auto-PR Created: Review Loop Exceeded**\n\n` +
+                          `This issue has gone through ${loopStatus.count} Reviewer ↔ Local Builder cycles.\n` +
+                          `A human developer should now review the changes.\n\n` +
+                          `**What happened:**\n` +
+                          `- Local Builder and Reviewer couldn't reach agreement after ${loopStatus.count} passes\n` +
+                          `- This may indicate:\n` +
+                          `  - Complex requirements needing clarification\n` +
+                          `  - Conflicting feedback between agents\n` +
+                          `  - Technical debt in existing codebase\n\n` +
+                          `**Next steps:**\n` +
+                          `1. Review the PR and comment history\n` +
+                          `2. Manually resolve any remaining issues\n` +
+                          `3. Merge when ready\n`
+                        );
+                        try {
+                          await createPullRequest(issueId);
+                          resetLoopCounter(issueId);
+                          console.log(`[closedloop] PR created for human intervention`);
+                          // Still send to Reviewer for final approval
+                          await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                        } catch (prErr: any) {
+                          console.error(`[closedloop] Failed to create PR:`, prErr.message);
+                        }
+                        // Skip normal flow - already sent to Reviewer
+                      } else {
+                        // Normal flow: Send to Reviewer
+                        console.log(`[closedloop] Pass ${pass}: Sending to Reviewer...`);
+                        try {
+                          await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                          console.log(`[closedloop] Auto-assigned to Reviewer`);
+                        } catch (err: any) {
+                          console.error(`[closedloop] Failed to trigger Reviewer:`, err.message);
+                        }
+                      }
+                    }
+                  }
+                } finally {
+                  issueProcessingLock[issueId] = false;
+                }
+              }
             }
 
             // Strategist/Sentinel/Deployer/Reviewer: execute bash commands
@@ -787,16 +380,12 @@ export function createProxy(): http.Server {
 
             // Reviewer: validate changes and approve/reject before PR creation
             if (agentId === AGENTS.reviewer) {
-              const lower = content.toLowerCase();
               const reviewApproved =
-                lower.includes('approved') ||
-                lower.includes('looks good') ||
-                lower.includes('lgtm') ||
-                lower.includes('no issues') ||
-                lower.includes('ready for pr') ||
-                lower.includes('meet the project standards') ||
-                lower.includes('meets the project standards') ||
-                (lower.includes('result') && lower.includes('pass') && !lower.includes('send back'));
+                content.toLowerCase().includes('approved') ||
+                content.toLowerCase().includes('looks good') ||
+                content.toLowerCase().includes('lgtm') ||
+                content.toLowerCase().includes('no issues') ||
+                content.toLowerCase().includes('ready for pr');
 
               if (reviewApproved) {
                 console.log(`[closedloop] Reviewer APPROVED changes for ${issueId.slice(0, 8)}`);
@@ -824,37 +413,23 @@ export function createProxy(): http.Server {
                 // Reviewer rejected - track loop
                 const loopStatus = trackLoop(issueId, agentId);
                 console.log(`[closedloop] Reviewer found issues - sending back to Local Builder (loop: ${loopStatus.count}/${MAX_LOOP_PASSES})`);
-
-                // Detect BURST request from Reviewer
-                // Reviewer can include "BURST" in rejection to request the stronger model
-                const burstRequested = /\bBURST\b/.test(content);
-                if (burstRequested) {
-                  issueBuilderBurstMode.add(issueId);
-                  console.log(`[closedloop] Reviewer requested BURST mode for ${issueId.slice(0, 8)} — next builder pass uses ${getBurstModel()}`);
-                }
-
+                
                 // Check if loop exceeded
                 if (loopStatus.exceeded) {
                   console.log(`[closedloop] LOOP EXCEEDED (${loopStatus.count}) during Reviewer rejection`);
                   await postComment(
                     issueId,
                     null,
-                    `**Review Loop Exceeded - Manual Review Required**\n\n` +
+                    `⚠️ **Review Loop Exceeded - Manual Review Required**\n\n` +
                     `This issue has been rejected by Reviewer ${loopStatus.count} times.\n` +
                     `Please review the feedback and provide clearer guidance.\n\n` +
                     `**Recent Reviewer feedback:**\n${content.slice(0, 500)}...`
                   );
                 }
-
-                // Auto-escalate to burst after 3 rejections even without explicit BURST keyword
-                if (loopStatus.count >= 3 && !issueBuilderBurstMode.has(issueId)) {
-                  issueBuilderBurstMode.add(issueId);
-                  console.log(`[closedloop] Auto-escalated to BURST mode after ${loopStatus.count} rejections`);
-                }
-
+                
                 try {
                   await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
-                  console.log(`[closedloop] Sent back to Local Builder for fixes${burstRequested ? ' (BURST)' : ''}`);
+                  console.log(`[closedloop] Sent back to Local Builder for fixes`);
                 } catch (err: any) {
                   console.error(`[closedloop] Failed to send back to Local Builder:`, err.message);
                 }
@@ -870,16 +445,16 @@ export function createProxy(): http.Server {
                 try {
                   await createPullRequest(issueId);
                   console.log(`[closedloop] PR created after DiffGuardian approval`);
-
+                  
                   // Reset loop counter on successful PR
                   resetLoopCounter(issueId);
 
-                  // Mark issue as in_review (PR created, pipeline complete)
-                  await patchIssue(issueId, {
-                    assigneeAgentId: AGENTS['visual reviewer'],
-                    status: 'in_review',
-                  });
-                  console.log(`[closedloop] Issue marked in_review, assigned to Visual Reviewer`);
+                  // Trigger Visual Reviewer for visual audit
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS['visual reviewer'] });
+                  console.log(`[closedloop] Auto-assigned to Visual Reviewer for feature recording`);
+
+                  // Hook 7: Goal completion check after PR creation
+                  await checkGoalCompletion(issueId);
                 } catch (prErr: any) {
                   console.error(`[closedloop] Failed to create PR:`, prErr.message);
                   await postComment(issueId, null, `_DiffGuardian approved but PR creation failed: ${prErr.message}_`);
@@ -895,16 +470,16 @@ export function createProxy(): http.Server {
               }
             }
           } else {
-            await postComment(issueId, null, `**${agentName || 'Agent'}:** _Completed run but produced no text output._`);
+            await postComment(issueId, agentId, '_Agent completed run but produced no text output._');
           }
         } catch {
-          await postComment(issueId, null, `**${agentName || 'Agent'}:** _Run completed. Response could not be parsed._`);
+          await postComment(issueId, agentId, '_Agent run completed. Response could not be parsed._');
         }
       }
     } catch (err: any) {
       console.error(`[proxy:${proxyPort}] ${agentName} Ollama error:`, err.message);
       if (issueId) {
-        await postComment(issueId, null, `**${agentName || 'Agent'}:** _Run failed: ${err.message}_`);
+        await postComment(issueId, agentId, `_Agent run failed: ${err.message}_`);
       }
       res.writeHead(502);
       res.end(JSON.stringify({ error: `Ollama unreachable: ${err.message}` }));
@@ -918,9 +493,15 @@ export function createProxy(): http.Server {
   return server;
 }
 
-function getBridgeUrl(): string {
-  const projectConfig = getConfig() as any;
-  return projectConfig.closedloop?.bridgeUrl || 'http://localhost:3202';
+async function getBranchName(issueId: string): Promise<string> {
+  const { getIssueDetails } = await import('./paperclip-api');
+  let issue;
+  try {
+    issue = await getIssueDetails(issueId);
+  } catch {}
+  const identifier = issue?.identifier || issueId.slice(0, 8);
+  const title = issue?.title || 'Code changes';
+  return `${identifier}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`.replace(/-+$/, '');
 }
 
 function buildHeartbeatContext(context: any): string {
@@ -963,33 +544,10 @@ export async function checkAssignedIssues(): Promise<void> {
       console.log(`[closedloop] Background check: ${agentName} has assigned issue ${issue.identifier || issue.id.slice(0, 8)}`);
 
       try {
-        // Directly invoke the proxy (self-call) to trigger the full agent flow
-        // patchIssue alone doesn't trigger Paperclip to re-run agents
-        const config = loadConfig();
-        const agentModel = config.ollama?.models?.[agentName.toLowerCase()] || 'qwen3:8b';
-        const issueDetails = await getIssueDetails(issue.id);
-        const context = await buildIssueContext(issue.id, agentId);
-
-        const selfCallPayload = {
-          model: agentModel,
-          agentId: agentId,
-          issueId: issue.id,
-          messages: [
-            { role: 'system', content: `You are the ${agentName} agent.` },
-            { role: 'user', content: context || `Process issue ${issue.identifier}: ${issueDetails?.title || ''}` },
-          ],
-          stream: false,
-        };
-
-        // Fire-and-forget self-call to port 3201
-        fetch(`http://127.0.0.1:${proxyPort}/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(selfCallPayload),
-        }).catch(err => {
-          console.log(`[closedloop] Self-call failed for ${agentName}: ${err.message}`);
+        await patchIssue(issue.id, {
+          assigneeAgentId: agentId,
+          priority: issue.priority || 'medium',
         });
-
         recentAgentRuns.set(recentRunKey, Date.now());
         console.log(`[closedloop] Triggered wakeup for ${agentName} on ${issue.identifier || issue.id.slice(0, 8)}`);
       } catch (err: any) {
@@ -1007,4 +565,3 @@ export async function initializeRAG(): Promise<void> {
   setRAGIndexer(ragIndexer);
   console.log('[closedloop] RAG index initialized');
 }
-

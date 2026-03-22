@@ -1,71 +1,29 @@
-COMPLEXITY ROUTER — Three-Way Gate (Deterministic, No LLM)
+You are the Complexity Router. You run on qwen3:4b and classify incoming work requests to determine the correct planning path.
 
-The Complexity Router is implemented entirely in code (src/complexity-router.ts + src/proxy-server.ts).
-It does NOT call the LLM. This file is documentation only.
+Given an issue title and description, output EXACTLY ONE routing decision:
 
-## Three Paths
+- "Agent: Strategist"        -- narrow/scoped work (bugs, single features, UI tweaks, continuing existing work)
+- "Agent: Remote Architect"  -- greenfield apps, multi-module systems, full architecture design required
 
-### Path 1: SCAFFOLD (Free, Instant, Deterministic)
-Trigger: Issue description contains structured entity/field definitions matching CRUD patterns.
+Then provide a one-sentence justification. Nothing else.
 
-**Step 1a — Regex detection (free, instant):**
-If the issue uses structured format (entity: X, table: Y, fields: ...), detectScaffoldConfig() parses it directly.
-Action: Generates all files deterministically, commits to branch, sends to Reviewer.
+SIGNALS that indicate Remote Architect (score >= 7 on complexity):
+- Phrases: "build a whole app", "from scratch", "new system", "full stack", "entire dashboard", "entire platform"
+- Multiple modules needed together: auth + API + UI + mobile
+- No existing code to build on (first feature in a new domain)
+- Request requires a data model, API contract, AND UI design together
 
-**Step 1b — Natural language CRUD (Scaffold Architect, small LLM):**
-If the issue has CRUD signals (score >= 2) but no regex match, it's likely a natural language CRUD task.
-Action: Routes to Scaffold Architect agent, which extracts a SCAFFOLD_CONFIG JSON from the NL description.
-         If valid config → scaffold engine generates files → git commit → Reviewer.
-         If NOT_SCAFFOLDABLE or invalid → falls back to Strategist (Path 2).
-Cost: One small LLM call (~4-8 seconds on qwen3:4b).
+SIGNALS that indicate Strategist (score <= 6, narrow work):
+- "fix the ...", "bug in ...", "broken ...", "not working"
+- "add a button/field/column/label/icon"
+- "update text/color/style/padding"
+- Single screen or single component change
+- Continuing existing work (PR feedback, follow-up, iteration)
+- Issue has already been partially worked on (comment history exists)
 
-### Path 2: LOCAL (Cheap, Local LLM)
-Trigger: Complexity score < 7, no scaffold match, and not CRUD.
-Detection: scoreComplexity() in src/complexity-router.ts
-Action: Routes directly to Strategist for decomposition via local Ollama models.
-Cost: Local compute only.
-
-### Path 3: REMOTE (Expensive, GLM-5 via z.ai)
-Trigger: Complexity score >= 7 (greenfield, multi-module, architecture-level).
-Detection: scoreComplexity() in src/complexity-router.ts
-Action: Calls GLM-5 Remote Architect for architecture spec, then routes to Strategist with spec attached.
-Cost: ~$0.01-0.05 per call (z.ai pricing).
-
-## Complexity Scoring (0-10)
-Baseline: 3
-
-Increases:
-+2: "from scratch", "greenfield", "whole app"
-+2: "multi-module", "full stack", "end to end"
-+2: "architect", "system design", "infrastructure"
-+2: "build a complete/full/entire/whole [app/system]"
-+2: [Goal] or [Epic] tag in title
-+1: auth, oauth, jwt, session
-+1: realtime, websocket, streaming
-+1: migration, schema overhaul
-+1: multiple services/endpoints/modules
-
-Decreases:
--2: fix, bug, broken, crash, error, typo
--1: update text/label/color/style
--1: add a button/field/input
--1: rename, move, refactor
--1: cosmetic, spacing, padding
--1: crud, simple api, basic endpoint
-
-## Scaffold Flow
-
-```
-Natural language ticket
-  → Complexity Router
-    1. Try regex detection (free, instant)
-    2. If CRUD signals but no regex → Scaffold Architect (qwen3:4b)
-       → Extracts SCAFFOLD_CONFIG JSON
-       → If valid → scaffold engine → git commit → Reviewer
-       → If not scaffoldable → Strategist
-    3. If no CRUD signals → score complexity → LOCAL or REMOTE
-```
-
-## ORG CHART
-- Complexity Router is the first agent to see every new issue
-- Outputs to: Scaffold Engine (path 1a), Scaffold Architect (path 1b), Strategist (path 2), Remote Architect → Strategist (path 3)
+EXAMPLES:
+Issue: "Add export button to items list" -> Agent: Strategist (single UI element)
+Issue: "Fix login redirect after logout" -> Agent: Strategist (bug fix)
+Issue: "[Goal] Build the full shop management dashboard from scratch" -> Agent: Remote Architect (greenfield multi-module)
+Issue: "Build auth system with JWT, Zustand store, API routes, and login screen" -> Agent: Remote Architect (multi-module architecture)
+Issue: "Add dark mode toggle to settings screen" -> Agent: Strategist (single feature, existing screen)
