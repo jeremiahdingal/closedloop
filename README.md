@@ -3,23 +3,44 @@
     ██╔════╝██║     ██╔═══██╗██╔════╝██╔════╝██╔══██╗██║     ██╔═══██╗██╔═══██╗██╔══██╗
     ██║     ██║     ██║   ██║███████╗█████╗  ██║  ██║██║     ██║   ██║██║   ██║██████╔╝
     ██║     ██║     ██║   ██║╚════██║██╔══╝  ██║  ██║██║     ██║   ██║██║   ██║██╔═══╝
-    ╚██████╗███████╗╚██████╔╝███████║███████╗██████╔╝███████╗╚██████╔╝╚██████╔╝██║
+    ╚██████╗███████╗╚██████╔╝███████║███████║██████╔╝███████╗╚██████╔╝╚██████╔╝██║
      ╚═════╝╚══════╝ ╚═════╝ ╚══════╝╚══════╝╚═════╝ ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝
 ```
 
 <p align="center">
-  <strong>🏠 Run a full AI dev team on your PC. No cloud. No bills. No limits.</strong>
+  <strong>⚠️ Local AI agents are dumb. They hallucinate, break code, and get stuck in loops.</strong>
 </p>
 
 <p align="center">
-  <em>9 specialized AI agents. Local LLMs via Ollama. Autonomous coding from issue to PR.</em>
+  <em>ClosedLoop fixes this with orchestration — making 14B models outperform 70B models through RAG, build-green enforcement, and reflection memory. All local. All free.</em>
 </p>
+
+---
+
+## 💡 The Problem
+
+You've tried local AI coding. You know the pain:
+
+- ❌ **Hallucinates imports** — generates code for APIs that don't exist
+- ❌ **Breaks existing code** — deletes exports, ignores your patterns
+- ❌ **Spins in circles** — tries the same broken fix 5 times
+- ❌ **Can't handle multi-file work** — loses context across files
+
+**This isn't the model's fault. It's the workflow.**
+
+ClosedLoop isn't another agent. It's an **orchestration layer** that makes mediocre models produce elite results.
+
+Think of it like this:
+- **Individual agents** = junior devs (fast, cheap, make mistakes)
+- **ClosedLoop system** = senior tech lead + code review + CI/CD + institutional memory
+
+**The system is the product.**
 
 ---
 
 ## 🎯 The North Star
 
-> **Run AI-powered code development locally on a consumer-grade PC with little to no cost — enabling continuous, autonomous software delivery without cloud API bills.**
+> **Make local AI agents actually usable for complex, multi-file development — without $300/month API bills.**
 
 Most AI coding tools charge per token, cap your usage, or send your proprietary code to remote servers. ClosedLoop flips that model entirely:
 
@@ -28,6 +49,27 @@ Most AI coding tools charge per token, cap your usage, or send your proprietary 
 - 🖥️ **Consumer hardware** — runs on a PC with a decent GPU (16GB+ VRAM recommended)
 - ♾️ **Unlimited usage** — run it 24/7, no rate limits, no quotas
 - 🤖 **Full autonomy** — from issue ticket to merged PR, hands-free
+
+---
+
+## 🎯 Why ClosedLoop Exists
+
+Most local AI coding tools just wrap Ollama and call it a day. Then they wonder why the AI:
+- Writes code that doesn't build
+- Repeats the same mistakes
+- Hallucinates your entire codebase
+
+ClosedLoop was built on one principle: **Orchestration > Model Size**
+
+A 14B model with:
+- RAG grounding (sees your actual code)
+- Build-green enforcement (can't ship broken code)
+- Reflection memory (learns from rejections)
+- Multi-agent handoffs (specialized roles)
+
+...will outperform a 70B model thrown at the problem raw.
+
+This is the difference between "AI coding" and "AI engineering."
 
 ---
 
