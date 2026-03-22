@@ -273,8 +273,12 @@ export function createProxy(): http.Server {
                 const allSkipped = newFilesWritten.length === 0;
 
                 if (allSkipped) {
-                  console.log(`[scaffold-architect] All files exist. Sending to Reviewer.`);
-                  await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer, status: 'in_progress' });
+                  // All files already exist on main — nothing to review or PR
+                  console.log(`[scaffold-architect] All files already exist on main. Marking done.`);
+                  await postComment(issueId, null,
+                    `_All scaffold files already exist on main. No changes needed — marking as done._`
+                  );
+                  await patchIssue(issueId, { status: 'done' });
                 } else {
                   // Git branch/commit/push
                   const workspace = getWorkspace();
@@ -426,15 +430,12 @@ export function createProxy(): http.Server {
           const allSkipped = newFilesWritten.length === 0;
 
           if (allSkipped) {
-            // All files already exist — skip build verification, go directly to Reviewer
-            console.log(`[complexity-router] All scaffold files already exist. Sending to Reviewer.`);
+            // All files already exist on main — nothing to review or PR
+            console.log(`[complexity-router] All scaffold files already exist on main. Marking done.`);
             await postComment(issueId, null,
-              `_All scaffold files already exist. Skipping to Reviewer for validation._`
+              `_All scaffold files already exist on main. No changes needed — marking as done._`
             );
-            await patchIssue(issueId, {
-              assigneeAgentId: AGENTS.reviewer,
-              status: 'in_progress',
-            });
+            await patchIssue(issueId, { status: 'done' });
           } else {
             // New files written — commit to a branch, then send to Reviewer
             console.log(`[complexity-router] Scaffold wrote ${newFilesWritten.length} new files. Committing to branch...`);
