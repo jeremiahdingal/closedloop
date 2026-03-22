@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspace } from './config';
 import { RAGSearchResult } from './types';
+import { extractASTMetadata, formatASTSummary, type ASTMetadata } from './ast-indexer';
 
 const WORKSPACE = getWorkspace();
 const INDEX_PATH = path.join(__dirname, '..', '.paperclip', 'rag-index.json');
@@ -17,6 +18,10 @@ interface RAGDocument {
   purpose: string;
   exports: string[];
   content: string;
+  /** AST-extracted structural metadata (function sigs, interfaces, enums) */
+  astSummary?: string;
+  /** Compact AST search text for keyword matching */
+  astSearchText?: string;
   embedding?: number[];
 }
 
@@ -84,12 +89,18 @@ export class RAGIndexer {
         const exports = this.extractExports(content);
         const purpose = this.extractPurpose(content);
 
+        // AST-based structural extraction
+        const astMeta = extractASTMetadata(content);
+        const astSummary = formatASTSummary(astMeta);
+
         documents.push({
           id: relativePath.replace(/[\/\\]/g, '-'),
           path: relativePath,
           purpose,
           exports,
           content: content.substring(0, 3000), // Truncate for storage
+          astSummary: astSummary || undefined,
+          astSearchText: astMeta.searchText || undefined,
         });
       } catch (err: any) {
         console.log(`[RAG] Error reading ${relativePath}: ${err.message}`);
@@ -122,14 +133,24 @@ export class RAGIndexer {
     const queryLower = query.toLowerCase();
     const queryKeywords = queryLower.split(/\W+/).filter(w => w.length > 2);
 
-    // Score documents by keyword matches
+    // Score documents by keyword matches (includes AST search text for structural queries)
     const scored = this.index.documents.map(doc => {
-      const searchText = `${doc.path} ${doc.purpose} ${doc.exports.join(' ')} ${doc.content}`.toLowerCase();
+      const searchText = `${doc.path} ${doc.purpose} ${doc.exports.join(' ')} ${doc.astSearchText || ''} ${doc.content}`.toLowerCase();
       let score = 0;
 
       for (const keyword of queryKeywords) {
         const matches = searchText.split(keyword).length - 1;
         score += matches * keyword.length;
+      }
+
+      // Boost score for AST matches (structural queries are higher signal)
+      if (doc.astSearchText) {
+        const astText = doc.astSearchText.toLowerCase();
+        for (const keyword of queryKeywords) {
+          if (astText.includes(keyword)) {
+            score += keyword.length * 2; // 2x boost for AST matches
+          }
+        }
       }
 
       return { doc, score };
@@ -139,7 +160,7 @@ export class RAGIndexer {
     scored.sort((a, b) => b.score - a.score);
 
     return scored.slice(0, limit).map(({ doc }) => ({
-      document: `File: ${doc.path}\nPurpose: ${doc.purpose}\nExports: ${doc.exports.join(', ')}`,
+      document: `File: ${doc.path}\nPurpose: ${doc.purpose}\nExports: ${doc.exports.join(', ')}${doc.astSummary ? '\n' + doc.astSummary : ''}`,
       metadata: {
         path: doc.path,
         exports: JSON.stringify(doc.exports),

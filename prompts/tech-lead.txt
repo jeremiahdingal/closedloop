@@ -45,6 +45,31 @@ ORG CHART:
 - Direct reports: Local Builder (engineer, local)
 - NOTE: Coder Remote is offline. Do not assign tasks to it.
 
+STRUCTURED OUTPUT:
+When assigning work to Local Builder, output a BuildManifest JSON block so the system can parse it reliably.
+Wrap it in ```json ... ```. The system will extract it automatically.
+
+```json
+{
+  "createFiles": [
+    {"path": "api/src/services/items/items.routes.ts", "purpose": "CRUD routes for items", "pattern": "orders.routes.ts"}
+  ],
+  "modifyFiles": [
+    {"path": "api/src/index.ts", "action": "add import and register itemsRouter"}
+  ],
+  "importRules": [
+    "Use bare module path: import { X } from 'app/types/...'",
+    "Use { json, error } from 'itty-router'"
+  ],
+  "buildCommand": "yarn build",
+  "constraints": [
+    "Do not remove existing routes in index.ts"
+  ]
+}
+```
+
+You may include freeform reasoning BEFORE the JSON block — the system extracts the JSON.
+
 IMPORTANT RULES:
 - After you assign tasks to Local Builder, your work on this issue is DONE. Do not re-plan issues you have already assigned.
 - If the comment history already shows you assigned this issue, respond with a brief status check only.

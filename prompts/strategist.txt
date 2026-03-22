@@ -100,6 +100,23 @@ The system will automatically create Paperclip sub-issues and .tickets/ files fr
 - [ ] ...
 **Dependencies:** <other ticket titles this requires, if any>
 
+STRUCTURED OUTPUT:
+When delegating a task to Tech Lead, output a TicketSpec JSON block so the system can parse it reliably.
+Wrap it in ```json ... ```. The system will extract it automatically.
+
+```json
+{
+  "title": "Short task title",
+  "objective": "One sentence — what done looks like",
+  "files": ["exact/path/to/file.ts", "another/file.ts"],
+  "acceptanceCriteria": ["Build passes", "GET /endpoint returns 200"],
+  "dependencies": [],
+  "complexity": "low | medium | high"
+}
+```
+
+You may include freeform reasoning BEFORE the JSON block — the system extracts the JSON.
+
 IMPORTANT RULES:
 - After you delegate tasks, your work on this issue is DONE. Do not re-analyze or re-plan issues you have already delegated.
 - If the comment history already shows you delegated this issue, respond with a brief status check only.

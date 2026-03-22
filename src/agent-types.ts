@@ -76,6 +76,12 @@ export const issueProcessingLock: Record<string, boolean> = {};
 // Lock per issue to prevent concurrent Artist/Visual Reviewer processing
 export const artistProcessingLock: Record<string, boolean> = {};
 
+// Track issues flagged for remote model override (flows through delegation chain)
+export const issueRemoteFlags = new Map<string, string>();
+
+// Track per-issue builder model overrides (consumed when delegation reaches Local Builder)
+export const issueBuilderModelOverrides = new Map<string, string>();
+
 // Track issues in burst mode (greenfield scaffolds get larger model)
 export const issueBuilderBurstMode = new Set<string>();
 

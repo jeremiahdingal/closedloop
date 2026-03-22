@@ -2,7 +2,7 @@
  * Delegation detection and handling
  */
 
-import { DELEGATION_RULES, AGENT_ALIASES, BLOCKED_AGENTS, recentDelegations, DELEGATION_COOLDOWN_MS } from './agent-types';
+import { DELEGATION_RULES, AGENT_ALIASES, BLOCKED_AGENTS, recentDelegations, DELEGATION_COOLDOWN_MS, issueRemoteFlags, issueBuilderModelOverrides, issueBuilderBurstMode } from './agent-types';
 import { getPaperclipApiUrl } from './config';
 import { AGENTS } from './agent-types';
 
@@ -32,11 +32,21 @@ export async function detectAndDelegate(
   // Look for any mention of agent names in the content
   const found: DelegationTarget[] = [];
   for (const [alias, targetId] of Object.entries(AGENT_ALIASES)) {
-    if (clean.includes(alias) && allowedTargets.includes(targetId)) {
-      if (!BLOCKED_AGENTS.has(targetId)) {
-        found.push({ name: alias, id: targetId });
-      } else {
-        console.log(`[delegation] Skipped delegation to ${alias} (blocked)`);
+    if (!clean.includes(alias)) continue;
+    if (BLOCKED_AGENTS.has(targetId)) {
+      console.log(`[delegation] Skipped delegation to ${alias} (blocked)`);
+      continue;
+    }
+    if (allowedTargets.includes(targetId)) {
+      found.push({ name: alias, id: targetId });
+    } else {
+      // Reroute: if agent mentions a target outside their org chart,
+      // redirect through the correct intermediate (e.g. Strategist mentioning
+      // "local builder" gets rerouted through Tech Lead)
+      const techLeadId = AGENTS['tech lead'];
+      if (targetId === AGENTS['local builder'] && techLeadId && allowedTargets.includes(techLeadId)) {
+        console.log(`[delegation] Rerouting: ${alias} -> tech lead (org chart)`);
+        found.push({ name: 'tech lead', id: techLeadId });
       }
     }
   }
@@ -74,6 +84,19 @@ export async function detectAndDelegate(
       console.log(
         `[delegation] DELEGATED issue ${issueId.slice(0, 8)}: ${fromName} -> ${target.name} (auto-wakeup triggered)`
       );
+
+      // Propagate remote flag through delegation chain
+      if (issueRemoteFlags.has(issueId)) {
+        const remoteModel = issueRemoteFlags.get(issueId)!;
+        if (target.id === AGENTS['local builder']) {
+          // Consume flag: apply model override + burst mode for builder
+          issueBuilderModelOverrides.set(issueId, remoteModel);
+          issueBuilderBurstMode.add(issueId);
+          issueRemoteFlags.delete(issueId);
+          console.log(`[delegation] Remote flag applied for ${issueId.slice(0, 8)}: model=${remoteModel}`);
+        }
+        // else: flag persists for intermediate hops (e.g. Strategist → Tech Lead)
+      }
     } else {
       const text = await res.text();
       console.error(`[delegation] Delegation failed: ${res.status} ${text}`);
