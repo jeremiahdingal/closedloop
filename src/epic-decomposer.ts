@@ -170,7 +170,7 @@ async function decomposeEpic(epic: Goal): Promise<void> {
 /**
  * Parse TICKET: blocks from LLM response.
  */
-function parseSubTickets(content: string): SubTicket[] {
+export function parseSubTickets(content: string): SubTicket[] {
   const tickets: SubTicket[] = [];
 
   // Parse TICKET: blocks
