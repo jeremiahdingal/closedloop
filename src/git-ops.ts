@@ -39,7 +39,7 @@ export async function getBranchName(issueId: string): Promise<string> {
     issue = await getIssueDetails(issueId);
   } catch {}
 
-  const identifier = issue?.identifier || issueId.slice(0, 8);
+  const identifier = (issue?.identifier || issueId.slice(0, 8)).toLowerCase();
   const title = issue?.title || 'Code changes';
   return `${identifier}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`.replace(/-+$/, '');
 }
@@ -319,5 +319,6 @@ export async function createPullRequest(issueId: string): Promise<void> {
     try {
       execSync(`git checkout ${defaultBranch}`, { cwd: WORKSPACE, stdio: 'pipe' });
     } catch {}
+    throw err;
   }
 }

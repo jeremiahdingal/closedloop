@@ -7,7 +7,7 @@
  */
 
 import * as http from 'http';
-import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getBurstModel, getWorkspace, getAgentModel, loadConfig } from './config';
+import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getBurstModel, getWorkspace, getAgentModel, getRemoteBuilderModel, loadConfig } from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
 import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES } from './agent-types';
 import { extractIssueId, extractAgentId } from './utils';
@@ -41,6 +41,7 @@ const LOOP_RESET_WINDOW_MS = 60 * 60 * 1000; // Reset count after 1 hour of no a
 
 // Track issues that should use burst model (greenfield first pass)
 const issueBuilderBurstMode = new Set<string>();
+const issueBuilderModelOverrides = new Map<string, string>();
 
 /**
  * Track and detect Reviewer <-> Local Builder loops
@@ -72,6 +73,51 @@ function trackLoop(issueId: string, agentId: string): { count: number; exceeded:
  */
 function resetLoopCounter(issueId: string): void {
   issueLoopCounts.delete(issueId);
+}
+
+async function forwardAssignmentToBridge(
+  issueId: string,
+  assigneeAgentId: string,
+  title: string,
+  description: string,
+  modelOverride?: string
+): Promise<void> {
+  const payload: Record<string, unknown> = {
+    issueId,
+    assigneeAgentId,
+    title,
+    description,
+  };
+
+  if (modelOverride) {
+    payload.modelOverride = modelOverride;
+  }
+
+  const bridgeRes = await fetch(`${getBridgeUrl()}/webhook/issue-assigned`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!bridgeRes.ok) {
+    const bridgeText = await bridgeRes.text();
+    throw new Error(`Bridge forward failed: ${bridgeRes.status} ${bridgeText}`);
+  }
+}
+
+async function forwardBuilderAssignmentToBridge(
+  issueId: string,
+  title: string,
+  description: string,
+  modelOverride?: string
+): Promise<void> {
+  return forwardAssignmentToBridge(
+    issueId,
+    AGENTS['local builder'],
+    title,
+    description,
+    modelOverride
+  );
 }
 
 export function createProxy(): http.Server {
@@ -348,38 +394,29 @@ export function createProxy(): http.Server {
     // Local Builder is bridge-owned now; forward immediately instead of running in the proxy.
     if (issueId && agentId === AGENTS['local builder']) {
       const localBuilderIssue = await getIssueDetails(issueId);
-      const bridgeUrl = getBridgeUrl();
 
       // Determine if burst mode should be used (greenfield first pass)
       const useBurst = issueBuilderBurstMode.has(issueId);
-      const burstModel = useBurst ? getBurstModel() : undefined;
+      const overrideModel = issueBuilderModelOverrides.get(issueId);
+      const burstModel = overrideModel || (useBurst ? getBurstModel() : undefined);
+      if (overrideModel) {
+        console.log(`[closedloop] Builder override active for ${issueId.slice(0, 8)} — using ${overrideModel}`);
+        issueBuilderModelOverrides.delete(issueId);
+      }
       if (useBurst) {
         console.log(`[closedloop] Burst mode active for ${issueId.slice(0, 8)} — using ${burstModel}`);
         issueBuilderBurstMode.delete(issueId); // One-shot: only first pass uses burst
       }
 
-      console.log(`[closedloop] Forwarding Local Builder assignment to bridge: ${bridgeUrl}`);
+      console.log(`[closedloop] Forwarding Local Builder assignment to bridge: ${getBridgeUrl()}`);
 
       try {
-        const bridgeRes = await fetch(`${bridgeUrl}/webhook/issue-assigned`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            issueId,
-            assigneeAgentId: agentId,
-            title: localBuilderIssue?.title || 'Local Builder task',
-            description: localBuilderIssue?.description || '',
-            ...(burstModel ? { modelOverride: burstModel } : {}),
-          }),
-        });
-
-        if (!bridgeRes.ok) {
-          const bridgeText = await bridgeRes.text();
-          console.error(`[closedloop] Bridge forward failed with status ${bridgeRes.status}: ${bridgeText}`);
-          res.writeHead(502, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: `Bridge forward failed: ${bridgeRes.status}` }));
-          return;
-        }
+        await forwardBuilderAssignmentToBridge(
+          issueId,
+          localBuilderIssue?.title || 'Local Builder task',
+          localBuilderIssue?.description || '',
+          burstModel
+        );
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
@@ -392,6 +429,36 @@ export function createProxy(): http.Server {
         );
       } catch (err: any) {
         console.error('[closedloop] Failed to forward Local Builder assignment to bridge:', err.message);
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Bridge unreachable: ${err.message}` }));
+      }
+
+      return;
+    }
+
+    if (issueId && agentId === AGENTS.reviewer) {
+      const reviewerIssue = await getIssueDetails(issueId);
+      console.log(`[closedloop] Forwarding Reviewer assignment to bridge: ${getBridgeUrl()}`);
+
+      try {
+        await forwardAssignmentToBridge(
+          issueId,
+          AGENTS.reviewer,
+          reviewerIssue?.title || 'Reviewer task',
+          reviewerIssue?.description || ''
+        );
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            message: {
+              role: 'assistant',
+              content: '_Reviewer assignment forwarded to bridge._',
+            },
+          })
+        );
+      } catch (err: any) {
+        console.error('[closedloop] Failed to forward Reviewer assignment to bridge:', err.message);
         res.writeHead(502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: `Bridge unreachable: ${err.message}` }));
       }
@@ -527,8 +594,44 @@ export function createProxy(): http.Server {
         // Scaffold failed — fall through to Strategist
         console.log(`[complexity-router] Scaffold had errors, falling through to Strategist`);
       } else {
-        // No regex match — check if this LOOKS like a CRUD task (natural language)
-        // If so, route to Scaffold Architect for NL → ScaffoldConfig extraction
+        // No regex match — score complexity first so genuinely hard tickets cannot be siphoned into scaffold.
+        const complexityScore = scoreComplexity(title, description);
+        console.log(`[complexity-router] Complexity score: ${complexityScore}`);
+
+        if (complexityScore >= 7) {
+          const remoteBuilderModel = getRemoteBuilderModel();
+          console.log(`[complexity-router] REMOTE path: score ${complexityScore} >= 7`);
+          await postComment(issueId, null,
+            `_Complexity Router: **REMOTE** path (score: ${complexityScore}/10). Calling GLM-5 Remote Architect, then dispatching **Remote Builder** with model \`${remoteBuilderModel}\`._`
+          );
+
+          const archSpec = await callRemoteArchitect(issueId, title, description);
+          const remoteDescription = archSpec
+            ? description + '\n\n---\n## Architecture Spec (GLM-5)\n\n' + archSpec
+            : description;
+
+          issueBuilderModelOverrides.set(issueId, remoteBuilderModel);
+          await patchIssue(issueId, {
+            description: remoteDescription,
+            assigneeAgentId: AGENTS['local builder'],
+            status: 'in_progress',
+          });
+
+          try {
+            await forwardBuilderAssignmentToBridge(issueId, title, remoteDescription, remoteBuilderModel);
+          } catch (err: any) {
+            console.error(`[complexity-router] Remote Builder bridge dispatch failed:`, err.message);
+            await postComment(issueId, null, `_Remote Builder dispatch failed: ${err.message}. The issue remains assigned to Local Builder for retry._`);
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            message: { role: 'assistant', content: `_Routed to Remote Builder${archSpec ? ' with architecture spec' : ''}._` },
+          }));
+          return;
+        }
+
+        // Path 1b: CRUD signals detected (score < 7) — route to Scaffold Architect for NL extraction
         const crudSignals = ['crud', 'api', 'service', 'endpoint', 'create', 'read', 'update', 'delete'];
         const textLower = (title + ' ' + description).toLowerCase();
         const crudScore = crudSignals.filter(s => textLower.includes(s)).length;
@@ -551,40 +654,11 @@ export function createProxy(): http.Server {
         }
       }
 
-      // Path 2 & 3: Score complexity
-      const complexityScore = scoreComplexity(title, description);
-      console.log(`[complexity-router] Complexity score: ${complexityScore}`);
-
-      if (complexityScore >= 7) {
-        // Path 3: REMOTE — genuinely complex, call Remote Architect
-        console.log(`[complexity-router] REMOTE path: score ${complexityScore} >= 7`);
-        await postComment(issueId, null,
-          `_Complexity Router: **REMOTE** path (score: ${complexityScore}/10). Calling GLM-5 Remote Architect for architecture spec..._`
-        );
-
-        const archSpec = await callRemoteArchitect(issueId, title, description);
-        if (archSpec) {
-          // Update issue description with arch spec, then route to Strategist
-          await patchIssue(issueId, {
-            description: description + '\n\n---\n## Architecture Spec (GLM-5)\n\n' + archSpec,
-            assigneeAgentId: AGENTS.strategist,
-          });
-        } else {
-          // Remote failed — route to Strategist anyway
-          await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
-        }
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          message: { role: 'assistant', content: `_Routed to ${archSpec ? 'Strategist (with arch spec)' : 'Strategist (remote unavailable)'}._` },
-        }));
-        return;
-      }
-
       // Path 2: LOCAL — simple, route directly to Strategist
-      console.log(`[complexity-router] LOCAL path: score ${complexityScore} < 7`);
+      const fallbackScore = scoreComplexity(title, description);
+      console.log(`[complexity-router] LOCAL path: score ${fallbackScore} < 7`);
       await postComment(issueId, null,
-        `_Complexity Router: **LOCAL** path (score: ${complexityScore}/10). Routing to Strategist._`
+        `_Complexity Router: **LOCAL** path (score: ${fallbackScore}/10). Routing to Strategist._`
       );
       await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
 

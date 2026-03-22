@@ -216,6 +216,10 @@ export function getBurstModel(): string | undefined {
   return loadConfig().ollama.models['local builder burst'];
 }
 
+export function getRemoteBuilderModel(): string {
+  return process.env.REMOTE_BUILDER_MODEL || loadConfig().remote?.appArchitect?.model || 'glm-5';
+}
+
 export function getArtistConfig() {
   const config = loadConfig();
   return {

@@ -838,6 +838,17 @@ function handleBuilderWork(
   }
 
   const files = parseFileMarkers(result.output);
+  if (files.length === 0) {
+    const noFilesError = 'Builder produced no parseable files. Expected FILE blocks or JSON FILE entries.';
+    appendFileSync(logPath, noFilesError + '\n');
+    callback(new Error(noFilesError), {
+      success: false,
+      stdout: '',
+      stderr: noFilesError + '\n\nLLM output:\n' + String(result.output || '').substring(0, 4000),
+      exitCode: 1,
+    });
+    return;
+  }
   appendFileSync(logPath, 'Found ' + files.length + ' file(s) to create\n');
   state.lastChangedFiles = files.map((file: { path: string; content: string }) => file.path);
   touchSessionState(sessionDir, state);
@@ -886,7 +897,26 @@ function handleBuilderWork(
     state.repeatedErrorCount = 0;
     state.lastErrorFingerprint = null;
     touchSessionState(sessionDir, state);
-    callback(null, buildResult);
+    syncBuilderBranch(state.issueId, workspace, state.lastChangedFiles, logPath).then((gitResult) => {
+      if (!gitResult.success) {
+        callback(new Error(gitResult.message), {
+          success: false,
+          stdout: '',
+          stderr: gitResult.message,
+          exitCode: 1,
+        });
+        return;
+      }
+
+      callback(null, buildResult);
+    }).catch((err: any) => {
+      callback(err, {
+        success: false,
+        stdout: '',
+        stderr: err.message || 'Unknown git sync failure',
+        exitCode: 1,
+      });
+    });
   });
 }
 
@@ -922,7 +952,181 @@ function parseFileMarkers(output: string): Array<{ path: string; content: string
     }
   }
 
+  if (files.length > 0) {
+    return files;
+  }
+
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    for (const [rawKey, value] of Object.entries(parsed)) {
+      if (!rawKey.startsWith('FILE:')) continue;
+
+      const path = rawKey.slice('FILE:'.length).trim();
+      if (!path) continue;
+
+      let content = '';
+      if (typeof value === 'string') {
+        content = value;
+      } else if (value && typeof value === 'object' && 'content' in value && typeof (value as any).content === 'string') {
+        content = (value as any).content;
+      }
+
+      if (!content.trim()) continue;
+      files.push({ path, content: content.trim() });
+    }
+  } catch {
+    // Not JSON - ignore and fall through.
+  }
+
   return files;
+}
+
+interface GitSyncResult {
+  success: boolean;
+  message: string;
+}
+
+async function syncBuilderBranch(
+  issueId: string,
+  workspace: string,
+  files: string[],
+  logPath: string
+): Promise<GitSyncResult> {
+  const uniqueFiles = Array.from(new Set(files.filter(Boolean)));
+  if (uniqueFiles.length === 0) {
+    return { success: false, message: 'No builder files were available for git sync.' };
+  }
+
+  const branchName = await getIssueBranchName(issueId);
+  const currentBranch = getCurrentBranch(workspace);
+  appendFileSync(logPath, '[GIT] target branch=' + branchName + ' current=' + currentBranch + '\n');
+
+  try {
+    if (currentBranch !== branchName) {
+      try {
+        execSync(`git switch ${branchName}`, {
+          cwd: workspace,
+          stdio: 'pipe',
+          timeout: 30000,
+        });
+      } catch {
+        execSync(`git switch -c ${branchName}`, {
+          cwd: workspace,
+          stdio: 'pipe',
+          timeout: 30000,
+        });
+      }
+    }
+
+    for (const file of uniqueFiles) {
+      execSync(`git add -- "${file.replace(/"/g, '\\"')}"`, {
+        cwd: workspace,
+        stdio: 'pipe',
+        timeout: 30000,
+      });
+    }
+
+    const staged = execSync('git diff --cached --name-only', {
+      cwd: workspace,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30000,
+    }).trim();
+
+    if (!staged) {
+      appendFileSync(logPath, '[GIT] No staged changes detected after git add\n');
+      return { success: true, message: 'No staged changes to commit.' };
+    }
+
+    const issue = await getIssueForBranch(issueId);
+    const identifier = issue?.identifier || issueId.slice(0, 8);
+    const title = issue?.title || 'Code changes';
+    const commitMessage = `${identifier}: ${title}`.replace(/"/g, '\\"');
+
+    try {
+      execSync(`git commit -m "${commitMessage}"`, {
+        cwd: workspace,
+        stdio: 'pipe',
+        timeout: 60000,
+      });
+      appendFileSync(logPath, '[GIT] committed ' + staged + '\n');
+    } catch (err: any) {
+      const stderr = err.stderr?.toString() || '';
+      const stdout = err.stdout?.toString() || '';
+      const combined = (stderr || stdout).trim();
+      if (!/nothing to commit/i.test(combined)) {
+        return {
+          success: false,
+          message: 'git commit failed: ' + (combined || err.message || 'unknown error'),
+        };
+      }
+      appendFileSync(logPath, '[GIT] nothing to commit after staging\n');
+    }
+
+    try {
+      execSync(`git push -u origin ${branchName}`, {
+        cwd: workspace,
+        stdio: 'pipe',
+        timeout: 120000,
+      });
+      appendFileSync(logPath, '[GIT] pushed ' + branchName + '\n');
+    } catch (err: any) {
+      const stderr = err.stderr?.toString() || '';
+      const stdout = err.stdout?.toString() || '';
+      return {
+        success: false,
+        message: 'git push failed: ' + ((stderr || stdout || err.message || 'unknown error').trim()),
+      };
+    }
+
+    return { success: true, message: 'Committed and pushed ' + branchName };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: 'git branch sync failed: ' + (err.message || 'unknown error'),
+    };
+  }
+}
+
+function getCurrentBranch(workspace: string): string {
+  try {
+    return execSync('git branch --show-current', {
+      cwd: workspace,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 15000,
+    }).trim();
+  } catch {
+    return '';
+  }
+}
+
+async function getIssueForBranch(issueId: string): Promise<any | null> {
+  try {
+    const res = await fetch(`${getPaperclipApiUrl()}/api/issues/${issueId}`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+async function getIssueBranchName(issueId: string): Promise<string> {
+  const issue = await getIssueForBranch(issueId);
+  const identifier = sanitizeBranchPart(issue?.identifier || issueId.slice(0, 8));
+  const title = sanitizeBranchPart(issue?.title || 'code changes').slice(0, 40);
+  return `${identifier}-${title}`.replace(/-+/g, '-').replace(/^-|-$/g, '');
+}
+
+function sanitizeBranchPart(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
 function runBuild(workspace: string, logPath: string, callback: (error: any, result: any) => void): void {
@@ -996,6 +1200,10 @@ function callOllama(prompt: string, role: string, workspace: string, logPath: st
   const model = modelOverride || LLM_MODEL;
   if (modelOverride) {
     appendFileSync(logPath, '[MODEL OVERRIDE] Using ' + modelOverride + '\n');
+  }
+  if (isRemoteBuilderModel(model)) {
+    callRemoteBuilder(prompt, role, logPath, callback, model);
+    return;
   }
   const data = JSON.stringify({
     model: model,
@@ -1372,6 +1580,62 @@ async function reassignIssue(issueId: string, newRole: string): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRemoteBuilderModel(model: string): boolean {
+  return /^glm-/i.test(model) || /^gpt-/i.test(model);
+}
+
+function callRemoteBuilder(
+  prompt: string,
+  role: string,
+  logPath: string,
+  callback: (error: any, result: any) => void,
+  model: string
+): void {
+  if (!Z_AI_API_KEY) {
+    callback(new Error('Z_AI_API_KEY not set for remote builder'), null);
+    return;
+  }
+
+  appendFileSync(logPath, '[REMOTE BUILDER] Using ' + model + '\n');
+  const systemPrompt =
+    'You are the remote build agent for a TypeScript monorepo. ' +
+    'Return concrete implementation work using FILE: blocks when changing files. ' +
+    'Preserve existing code unless the task explicitly requires removal.';
+
+  fetch(`${Z_AI_API_BASE}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${Z_AI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
+      ],
+    }),
+    signal: AbortSignal.timeout(600000),
+  } as any).then(async (res) => {
+    if (!res.ok) {
+      throw new Error('z.ai API error ' + res.status);
+    }
+
+    const response = await res.json() as any;
+    const llmOutput = response.choices?.[0]?.message?.content || '';
+    appendFileSync(logPath, '[REMOTE BUILDER RESPONSE]\n' + llmOutput.substring(0, 2000) + '...\n');
+
+    callback(null, {
+      summary: 'Remote builder generated response for ' + role,
+      output: llmOutput,
+      files: [],
+    });
+  }).catch((err: any) => {
+    appendFileSync(logPath, '[REMOTE BUILDER ERROR] ' + err.message + '\n');
+    callback(err, null);
+  });
 }
 
 function sanitizeForWin1252(str: string): string {
