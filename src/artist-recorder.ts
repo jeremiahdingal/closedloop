@@ -886,7 +886,7 @@ export async function runArtistStage(issueId: string): Promise<void> {
     const result = await runArtistRecorder(issueId);
     if (!result) return;
 
-    await postComment(issueId, AGENTS['visual reviewer'], result.report);
+    await postComment(issueId, null, result.report);
 
     if (result.status === 'passed') {
       await postComment(
@@ -907,7 +907,7 @@ export async function runArtistStage(issueId: string): Promise<void> {
     }
   } catch (err: any) {
     console.error(`[artist] Stage failed:`, err.message);
-    await postComment(issueId, AGENTS['visual reviewer'], `_Feature recorder failed: ${err.message}_`);
+    await postComment(issueId, null, `_Feature recorder failed: ${err.message}_`);
     await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
   } finally {
     visualReviewerProcessingLock[issueId] = false;

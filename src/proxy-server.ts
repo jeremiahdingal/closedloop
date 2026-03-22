@@ -7,12 +7,12 @@
  */
 
 import * as http from 'http';
-import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getBurstModel, getWorkspace } from './config';
+import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getBurstModel, getWorkspace, getAgentModel, loadConfig } from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
 import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES } from './agent-types';
 import { extractIssueId, extractAgentId } from './utils';
 import { createPullRequest } from './git-ops';
-import { buildIssueContext, setRAGIndexer } from './context-builder';
+import { buildIssueContext, buildLocalBuilderContext, setRAGIndexer } from './context-builder';
 import { executeBashBlocks } from './bash-executor';
 import { detectAndDelegate } from './delegation';
 import { runArtistStage } from './artist-recorder';
@@ -136,6 +136,45 @@ export function createProxy(): http.Server {
         );
         return;
       }
+    }
+
+    // Diff Guardian bypasses Ollama and runs mechanical checks
+    if (issueId && agentId === AGENTS['diff guardian']) {
+      console.log(`[proxy:${proxyPort}] Diff Guardian -> mechanical check | issue=${issueId.slice(0, 8)}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          message: {
+            role: 'assistant',
+            content: '_Diff Guardian mechanical check started._',
+          },
+        })
+      );
+
+      setImmediate(async () => {
+        try {
+          const diffResult = await runDiffGuardian(issueId);
+          if (diffResult.approved) {
+            await createPullRequest(issueId);
+            console.log(`[closedloop] PR created after DiffGuardian approval`);
+            resetLoopCounter(issueId);
+            // Move to Visual Reviewer and mark in_review to stop the loop
+            await patchIssue(issueId, {
+              assigneeAgentId: AGENTS['visual reviewer'],
+              status: 'in_review',
+            });
+          } else {
+            console.log(`[closedloop] DiffGuardian rejected — sending back to Local Builder`);
+            await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+          }
+        } catch (err: any) {
+          console.error(`[closedloop] DiffGuardian error:`, err.message);
+          // Fallback: create PR anyway if diff guardian crashes
+          await createPullRequest(issueId);
+          await patchIssue(issueId, { status: 'in_review' });
+        }
+      });
+      return;
     }
 
     // Visual Reviewer bypasses Ollama and runs deterministic recorder
@@ -387,16 +426,21 @@ export function createProxy(): http.Server {
       return;
     }
 
-    // Build Ollama payload
+    // Build Ollama payload — override model from agent config if available
+    const configuredModel = agentName ? getAgentModel(agentName.toLowerCase()) : undefined;
     const ollamaPayload: OllamaRequest = {
-      model: parsedBody.model,
+      model: configuredModel || parsedBody.model,
       stream: parsedBody.stream ?? false,
       messages: [...(parsedBody.messages || [])],
     };
 
     // Enrich with issue context or heartbeat context
     if (issueId) {
-      const issueContext = await buildIssueContext(issueId, agentId || '');
+      // Use enhanced context for Local Builder (includes Tier 1-3 file contents)
+      const isBurst = issueBuilderBurstMode.has(issueId);
+      const issueContext = (agentId === AGENTS['local builder'])
+        ? await buildLocalBuilderContext(issueId, agentId, isBurst ? 'burst' : 'normal')
+        : await buildIssueContext(issueId, agentId || '');
       if (issueContext) {
         ollamaPayload.messages.push({
           role: 'user',
@@ -413,13 +457,21 @@ export function createProxy(): http.Server {
     );
 
     try {
+      // Set timeout based on agent config (default 15 min)
+      const timeoutConfig = loadConfig().ollama.timeouts;
+      const timeoutSec = (agentName ? timeoutConfig[agentName.toLowerCase()] : undefined) || 900;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutSec * 1000);
+
       const ollamaRes = await fetch(`http://127.0.0.1:${ollamaPort}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(ollamaPayload),
+        signal: controller.signal,
       });
 
       const ollamaData = await ollamaRes.text();
+      clearTimeout(timeoutId);
 
       res.writeHead(ollamaRes.status, {
         'Content-Type': 'application/json',
@@ -433,7 +485,10 @@ export function createProxy(): http.Server {
           const content = parsed.message?.content || parsed.response || '';
 
           if (content.trim()) {
-            await postComment(issueId, agentId, content.trim());
+            // Post as system comment (null agentId) to avoid auth issues
+            // Prefix with agent name for attribution
+            const commentPrefix = agentName ? `**${agentName}:**\n\n` : '';
+            await postComment(issueId, null, commentPrefix + content.trim());
 
             // Detect delegation and reassign via API (triggers auto-wakeup)
             if (agentId) {
@@ -504,7 +559,15 @@ export function createProxy(): http.Server {
                 // Reviewer rejected - track loop
                 const loopStatus = trackLoop(issueId, agentId);
                 console.log(`[closedloop] Reviewer found issues - sending back to Local Builder (loop: ${loopStatus.count}/${MAX_LOOP_PASSES})`);
-                
+
+                // Detect BURST request from Reviewer
+                // Reviewer can include "BURST" in rejection to request the stronger model
+                const burstRequested = /\bBURST\b/.test(content);
+                if (burstRequested) {
+                  issueBuilderBurstMode.add(issueId);
+                  console.log(`[closedloop] Reviewer requested BURST mode for ${issueId.slice(0, 8)} — next builder pass uses ${getBurstModel()}`);
+                }
+
                 // Check if loop exceeded
                 if (loopStatus.exceeded) {
                   console.log(`[closedloop] LOOP EXCEEDED (${loopStatus.count}) during Reviewer rejection`);
@@ -517,10 +580,16 @@ export function createProxy(): http.Server {
                     `**Recent Reviewer feedback:**\n${content.slice(0, 500)}...`
                   );
                 }
-                
+
+                // Auto-escalate to burst after 3 rejections even without explicit BURST keyword
+                if (loopStatus.count >= 3 && !issueBuilderBurstMode.has(issueId)) {
+                  issueBuilderBurstMode.add(issueId);
+                  console.log(`[closedloop] Auto-escalated to BURST mode after ${loopStatus.count} rejections`);
+                }
+
                 try {
                   await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
-                  console.log(`[closedloop] Sent back to Local Builder for fixes`);
+                  console.log(`[closedloop] Sent back to Local Builder for fixes${burstRequested ? ' (BURST)' : ''}`);
                 } catch (err: any) {
                   console.error(`[closedloop] Failed to send back to Local Builder:`, err.message);
                 }
@@ -561,16 +630,16 @@ export function createProxy(): http.Server {
               }
             }
           } else {
-            await postComment(issueId, agentId, '_Agent completed run but produced no text output._');
+            await postComment(issueId, null, `**${agentName || 'Agent'}:** _Completed run but produced no text output._`);
           }
         } catch {
-          await postComment(issueId, agentId, '_Agent run completed. Response could not be parsed._');
+          await postComment(issueId, null, `**${agentName || 'Agent'}:** _Run completed. Response could not be parsed._`);
         }
       }
     } catch (err: any) {
       console.error(`[proxy:${proxyPort}] ${agentName} Ollama error:`, err.message);
       if (issueId) {
-        await postComment(issueId, agentId, `_Agent run failed: ${err.message}_`);
+        await postComment(issueId, null, `**${agentName || 'Agent'}:** _Run failed: ${err.message}_`);
       }
       res.writeHead(502);
       res.end(JSON.stringify({ error: `Ollama unreachable: ${err.message}` }));
@@ -629,10 +698,33 @@ export async function checkAssignedIssues(): Promise<void> {
       console.log(`[closedloop] Background check: ${agentName} has assigned issue ${issue.identifier || issue.id.slice(0, 8)}`);
 
       try {
-        await patchIssue(issue.id, {
-          assigneeAgentId: agentId,
-          priority: issue.priority || 'medium',
+        // Directly invoke the proxy (self-call) to trigger the full agent flow
+        // patchIssue alone doesn't trigger Paperclip to re-run agents
+        const config = loadConfig();
+        const agentModel = config.ollama?.models?.[agentName.toLowerCase()] || 'qwen3:8b';
+        const issueDetails = await getIssueDetails(issue.id);
+        const context = await buildIssueContext(issue.id, agentId);
+
+        const selfCallPayload = {
+          model: agentModel,
+          agentId: agentId,
+          issueId: issue.id,
+          messages: [
+            { role: 'system', content: `You are the ${agentName} agent.` },
+            { role: 'user', content: context || `Process issue ${issue.identifier}: ${issueDetails?.title || ''}` },
+          ],
+          stream: false,
+        };
+
+        // Fire-and-forget self-call to port 3201
+        fetch(`http://127.0.0.1:${proxyPort}/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(selfCallPayload),
+        }).catch(err => {
+          console.log(`[closedloop] Self-call failed for ${agentName}: ${err.message}`);
         });
+
         recentAgentRuns.set(recentRunKey, Date.now());
         console.log(`[closedloop] Triggered wakeup for ${agentName} on ${issue.identifier || issue.id.slice(0, 8)}`);
       } catch (err: any) {

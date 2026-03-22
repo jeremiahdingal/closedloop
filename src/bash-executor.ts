@@ -43,7 +43,7 @@ export async function executeBashBlocks(
     // Safety check
     if (BLOCKED_COMMANDS.some((rx) => rx.test(command))) {
       console.log(`[bash] BLOCKED dangerous command: ${command}`);
-      await postComment(issueId, agentId, `_Blocked dangerous command: \`${command}\`_`);
+      await postComment(issueId, null, `_Blocked dangerous command: \`${command}\`_`);
       continue;
     }
 
@@ -59,7 +59,7 @@ export async function executeBashBlocks(
       const truncOutput = truncate(output, 2000);
       await postComment(
         issueId,
-        agentId,
+        null,
         `_Command: \`${command}\`_\n_Exit code: 0_\n\`\`\`\n${truncOutput}\n\`\`\``
       );
       commandsExecuted++;
@@ -71,7 +71,7 @@ export async function executeBashBlocks(
 
       await postComment(
         issueId,
-        agentId,
+        null,
         `_Command: \`${command}\`_\n_Exit code: ${exitCode}_\n\`\`\`\n${truncOutput}\n\`\`\``
       );
       commandsExecuted++;

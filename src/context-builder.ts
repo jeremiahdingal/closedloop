@@ -152,85 +152,194 @@ export async function buildIssueContext(
   return briefing;
 }
 
+// Tier 1: Shared files that almost every feature touches.
+// Always injected so the builder sees existing types/enums and EXTENDS, not overwrites.
+const TIER1_SHARED_FILES = [
+  'packages/app/types/db.types.ts',
+  'packages/app/types/services.enum.ts',
+  'api/src/index.ts',
+];
+
+/**
+ * Read a workspace file safely, return content or null.
+ */
+function readWorkspaceFile(relativePath: string, maxLen = 3000): string | null {
+  try {
+    const fullPath = path.join(WORKSPACE, relativePath);
+    if (!fs.existsSync(fullPath)) return null;
+    const content = fs.readFileSync(fullPath, 'utf8');
+    if (!content.trim()) return null;
+    return truncate(content, maxLen);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract the service domain name from an issue title/description.
+ * e.g., "Cash Shifts CRUD API" → "cash-shifts"
+ */
+function extractDomainFromIssue(title: string, description: string): string | null {
+  // Try entity: field first (scaffold convention)
+  const entityMatch = description.match(/entity:\s*([\w-]+)/i);
+  if (entityMatch) return entityMatch[1];
+
+  // Try table: field
+  const tableMatch = description.match(/table:\s*(\w+)/i);
+  if (tableMatch) return tableMatch[1].replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+
+  // Try to extract from title pattern like "[Phase X] ... : <Domain> CRUD API"
+  const titleMatch = title.match(/:\s*([\w\s]+?)\s*CRUD/i);
+  if (titleMatch) return titleMatch[1].trim().toLowerCase().replace(/\s+/g, '-');
+
+  return null;
+}
+
+/**
+ * Detect if this is a fix pass (Reviewer sent it back) by checking comment history.
+ * Returns file paths mentioned in the Reviewer's rejection, plus the Reviewer's feedback.
+ */
+function detectFixPass(comments: Array<{ authorAgentId?: string; body: string }>): {
+  isFixPass: boolean;
+  reviewerFeedback: string | null;
+  mentionedFiles: string[];
+} {
+  const filePathRegex = /[`']?([\w./\\-]+\.(tsx?|json|ts))[`']?/g;
+
+  // Look for Reviewer comments (newest first) that indicate rejection
+  for (const comment of comments) {
+    const body = comment.body || '';
+    const isReviewer = body.startsWith('**Reviewer') || comment.authorAgentId === AGENTS.reviewer;
+    const isRejection = body.toLowerCase().includes('send back') ||
+      body.toLowerCase().includes('reject') ||
+      body.toLowerCase().includes('fix') ||
+      (body.toLowerCase().includes('issue') && !body.toLowerCase().includes('approved'));
+
+    if (isReviewer && isRejection) {
+      const files: string[] = [];
+      for (const match of body.matchAll(filePathRegex)) {
+        if (match[1].match(/\.(tsx?|json)$/)) files.push(match[1]);
+      }
+      return { isFixPass: true, reviewerFeedback: truncate(body, 2000), mentionedFiles: files };
+    }
+  }
+
+  return { isFixPass: false, reviewerFeedback: null, mentionedFiles: [] };
+}
+
 /**
  * Build enhanced context for Local Builder including RAG-retrieved files.
+ *
+ * Context tiers:
+ *   Tier 1 — Shared mutation targets (always injected, full contents)
+ *   Tier 2 — Pattern exemplar from RAG (similar domain's full service files)
+ *   Tier 3 — Fix-pass files (current disk state of files the builder touched)
  */
 export async function buildLocalBuilderContext(
   issueId: string,
-  currentAgentId: string
+  currentAgentId: string,
+  contextBudget: 'normal' | 'burst' = 'normal'
 ): Promise<string | null> {
   const baseContext = await buildIssueContext(issueId, currentAgentId);
   if (!baseContext) return null;
 
-  // Get comments to find which files are being discussed
+  const maxPerFile = contextBudget === 'burst' ? 4000 : 2500;
+  const issue = await getIssueDetails(issueId);
   const comments = await getIssueComments(issueId);
-  const filesToRead = new Set<string>();
+  const sortedComments = comments.sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
 
-  // Extract file paths from Tech Lead's task assignment (most recent relevant comment)
-  const filePathRegex = /[`']?([\w./\\-]+\.(tsx?|json))[`']?/g;
-  for (const comment of comments.slice(0, 5)) {
-    if (comment.authorAgentId === AGENTS['tech lead']) {
-      const matches = comment.body.matchAll(filePathRegex);
-      for (const match of matches) {
-        const filePath = match[1];
-        if (filePath.match(/\.(tsx?|json)$/)) {
-          filesToRead.add(filePath);
-        }
-      }
-      break;
+  let fileContext = '';
+
+  // ── TIER 1: Shared mutation targets ──
+  // These files get modified by every feature. Builder MUST see current state.
+  fileContext += '\n\n== SHARED FILES (you MUST extend these, never overwrite) ==\n';
+  let tier1Count = 0;
+  for (const sharedFile of TIER1_SHARED_FILES) {
+    const content = readWorkspaceFile(sharedFile, maxPerFile);
+    if (content) {
+      fileContext += `\n--- ${sharedFile} (CURRENT - add to this, do NOT replace) ---\n${content}\n`;
+      tier1Count++;
     }
   }
-
-  // Build file context section
-  let fileContext = '\n\n== EXISTING FILES (for reference ONLY - DO NOT re-analyze) ==\n';
-  fileContext += 'QUICK IMPLEMENTATION GUIDE: Look at these files to understand the current structure.\n';
-  fileContext += 'Then IMPLEMENT the required changes directly. DO NOT write analysis or summaries.\n';
-  fileContext += 'Output code using FILE: path/to/file.ext format.\n\n';
-
-  let hasFiles = false;
-  for (const filePath of filesToRead) {
-    const fullPath = path.join(WORKSPACE, filePath);
-    if (fs.existsSync(fullPath)) {
-      try {
-        const content = fs.readFileSync(fullPath, 'utf8');
-        const truncated = truncate(content, 1500);
-        fileContext += `\n--- ${filePath} (current) ---\n${truncated}\n`;
-        hasFiles = true;
-      } catch (err: any) {
-        console.log(`[context] Could not read ${filePath}: ${err.message}`);
-      }
-    }
+  if (tier1Count === 0) {
+    fileContext += '(Shared files not found — you may be creating them)\n';
   }
 
-  if (!hasFiles) {
-    fileContext += '(No existing files - you are creating new files)\n';
-  }
-
-  // Add RAG-retrieved context if available
-  if (ragIndexer) {
+  // ── TIER 2: Pattern exemplar from RAG ──
+  // Find a complete existing service domain as reference implementation.
+  const domain = extractDomainFromIssue(issue?.title || '', issue?.description || '');
+  if (domain && ragIndexer) {
     try {
-      const issue = await getIssueDetails(issueId);
-      const keywords = extractKeywords(issue?.description || issue?.title || '');
-      const relevantFiles = await ragIndexer.search(keywords.join(' '), { limit: 10 });
-
-      if (relevantFiles && relevantFiles.length > 0) {
-        fileContext += '\n\n== RAG-RETRIEVED RELEVANT FILES ==\n';
-        for (const result of relevantFiles) {
-          fileContext += `- ${result.metadata.path}: ${result.metadata.purpose}\n`;
-          fileContext += `  Exports: ${result.metadata.exports}\n`;
+      const exemplar = ragIndexer.findDomainExemplar(domain, { maxContentPerFile: maxPerFile });
+      if (exemplar) {
+        fileContext += `\n\n== PATTERN EXEMPLAR: "${exemplar.domain}" service (follow this pattern) ==\n`;
+        for (const file of exemplar.files) {
+          fileContext += `\n--- ${file.path} ---\n${truncate(file.content, maxPerFile)}\n`;
         }
+        console.log(`[context] RAG exemplar: ${exemplar.domain} (${exemplar.files.length} files) for target domain "${domain}"`);
       }
     } catch (err: any) {
-      console.log(`[context] RAG search error: ${err.message}`);
+      console.log(`[context] RAG exemplar search error: ${err.message}`);
     }
   }
 
-  // Add strong implementation directive
+  // ── TIER 3: Fix-pass context ──
+  // If Reviewer sent this back, inject the CURRENT disk state of mentioned files.
+  const fixInfo = detectFixPass(sortedComments);
+  if (fixInfo.isFixPass) {
+    fileContext += '\n\n== FIX PASS — Reviewer sent this back for fixes ==\n';
+    fileContext += 'The Reviewer found issues with your previous output. Fix ONLY what they flagged.\n';
+    fileContext += 'Read their feedback carefully and make targeted edits.\n\n';
+
+    if (fixInfo.reviewerFeedback) {
+      fileContext += `== REVIEWER FEEDBACK ==\n${fixInfo.reviewerFeedback}\n\n`;
+    }
+
+    // Read current state of files mentioned by Reviewer
+    if (fixInfo.mentionedFiles.length > 0) {
+      fileContext += '== CURRENT STATE OF FLAGGED FILES (on disk) ==\n';
+      for (const filePath of fixInfo.mentionedFiles) {
+        const content = readWorkspaceFile(filePath, maxPerFile);
+        if (content) {
+          fileContext += `\n--- ${filePath} (current on disk — edit this) ---\n${content}\n`;
+        }
+      }
+    }
+  } else {
+    // First pass — also inject Tech Lead file references (existing behavior)
+    const techLeadFiles = new Set<string>();
+    const filePathRegex = /[`']?([\w./\\-]+\.(tsx?|json))[`']?/g;
+    for (const comment of sortedComments) {
+      if (comment.authorAgentId === AGENTS['tech lead']) {
+        for (const match of comment.body.matchAll(filePathRegex)) {
+          if (match[1].match(/\.(tsx?|json)$/)) techLeadFiles.add(match[1]);
+        }
+        break;
+      }
+    }
+    if (techLeadFiles.size > 0) {
+      fileContext += '\n\n== TECH LEAD FILE REFERENCES ==\n';
+      for (const filePath of techLeadFiles) {
+        const content = readWorkspaceFile(filePath, maxPerFile);
+        if (content) {
+          fileContext += `\n--- ${filePath} (current) ---\n${content}\n`;
+        }
+      }
+    }
+  }
+
+  // ── Implementation directive ──
   fileContext += '\n\n== IMPLEMENTATION INSTRUCTION ==\n';
   fileContext += 'DO NOT write analysis, summaries, or "let me check" messages.\n';
   fileContext += 'DO NOT describe what you will do - JUST DO IT.\n';
   fileContext += 'Output each file using: FILE: path/to/file.ext\\n```lang\\ncode\\n```\n';
   fileContext += 'Write ALL required files in ONE response.\n';
+  fileContext += 'When modifying shared files (db.types.ts, services.enum.ts, index.ts):\n';
+  fileContext += '  - KEEP all existing content\n';
+  fileContext += '  - ADD your new entries alongside existing ones\n';
+  fileContext += '  - Do NOT remove or replace existing exports/types/imports\n';
 
   return baseContext + fileContext;
 }

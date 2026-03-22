@@ -15,7 +15,7 @@ const GH_CLI = 'C:\\Program Files\\GitHub CLI\\gh';
 const SCREENSHOT_BASE = path.join(__dirname, '..', '.screenshots');
 
 /** Detect default branch name (main vs master) */
-function getDefaultBranch(): string {
+export function getDefaultBranch(): string {
   try {
     const result = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
       cwd: WORKSPACE, stdio: 'pipe', timeout: 5000,

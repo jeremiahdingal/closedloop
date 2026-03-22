@@ -11,6 +11,7 @@ import { execSync } from 'child_process';
 import { getWorkspace } from './config';
 import { getIssueComments, postComment } from './paperclip-api';
 import { AGENTS } from './agent-types';
+import { getDefaultBranch } from './git-ops';
 
 const WORKSPACE = getWorkspace();
 
@@ -44,7 +45,8 @@ export async function runDiffGuardian(issueId: string): Promise<DiffGuardianResu
 
   try {
     // 1. Get changed files
-    const changedFiles = execSync('git diff master..HEAD --name-only', opts)
+    const defaultBranch = getDefaultBranch();
+    const changedFiles = execSync(`git diff ${defaultBranch}..HEAD --name-only`, opts)
       .split('\n')
       .filter(f => f.trim());
 
@@ -54,7 +56,7 @@ export async function runDiffGuardian(issueId: string): Promise<DiffGuardianResu
     }
 
     // 2. Get diff stats
-    const diffStats = execSync('git diff master..HEAD --numstat', opts);
+    const diffStats = execSync(`git diff ${defaultBranch}..HEAD --numstat`, opts);
     const lines = diffStats.split('\n').filter(l => l.trim());
 
     let totalAdditions = 0;
@@ -152,7 +154,7 @@ export async function runDiffGuardian(issueId: string): Promise<DiffGuardianResu
             // Post findings as comment
             await postComment(
               issueId,
-              AGENTS.reviewer,
+              null,
               buildDiffGuardianReport(issues, fixesApplied, llmResult.feedback, true)
             );
             
@@ -166,7 +168,7 @@ export async function runDiffGuardian(issueId: string): Promise<DiffGuardianResu
             console.log(`[DiffGuardian] LLM rejected fixes for ${issueId.slice(0, 8)}`);
             await postComment(
               issueId,
-              AGENTS.reviewer,
+              null,
               buildDiffGuardianReport(issues, fixesApplied, llmResult.feedback, false)
             );
             
@@ -181,7 +183,7 @@ export async function runDiffGuardian(issueId: string): Promise<DiffGuardianResu
       }
 
       // Issues not auto-fixable or LLM rejected
-      await postComment(issueId, AGENTS.reviewer, buildDiffGuardianReport(issues, [], undefined, false));
+      await postComment(issueId, null, buildDiffGuardianReport(issues, [], undefined, false));
       return { approved: false, issues };
     }
 

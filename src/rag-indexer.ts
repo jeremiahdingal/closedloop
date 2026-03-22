@@ -150,6 +150,71 @@ export class RAGIndexer {
   }
 
   /**
+   * Find the best matching service domain and return all its files with full contents.
+   * e.g., query "cash-shifts" might match "orders" domain as pattern exemplar.
+   */
+  findDomainExemplar(
+    targetDomain: string,
+    options: { maxContentPerFile?: number } = {}
+  ): { domain: string; files: Array<{ path: string; content: string }> } | null {
+    if (!this.initialized || this.index.documents.length === 0) return null;
+
+    const maxContent = options.maxContentPerFile || 3000;
+    const targetLower = targetDomain.toLowerCase();
+
+    // Extract all unique service domains from api/src/services/*/
+    const domainFiles = new Map<string, RAGDocument[]>();
+    for (const doc of this.index.documents) {
+      const match = doc.path.match(/api[\/\\]src[\/\\]services[\/\\]([^\/\\]+)[\/\\]/);
+      if (match) {
+        const domain = match[1];
+        // Skip the target domain itself — we want a DIFFERENT domain as exemplar
+        if (domain.toLowerCase() === targetLower) continue;
+        if (!domainFiles.has(domain)) domainFiles.set(domain, []);
+        domainFiles.get(domain)!.push(doc);
+      }
+    }
+
+    if (domainFiles.size === 0) return null;
+
+    // Score each domain by how many file types it has (routes, service, schema, migration)
+    // Prefer complete domains with all 4 file types
+    let bestDomain = '';
+    let bestScore = 0;
+    for (const [domain, files] of domainFiles) {
+      let score = files.length;
+      const fileTypes = files.map(f => path.basename(f.path).toLowerCase());
+      if (fileTypes.some(f => f.includes('routes'))) score += 3;
+      if (fileTypes.some(f => f.includes('service'))) score += 3;
+      if (fileTypes.some(f => f.includes('schema'))) score += 3;
+      if (fileTypes.some(f => f.includes('migration'))) score += 2;
+      if (score > bestScore) {
+        bestScore = score;
+        bestDomain = domain;
+      }
+    }
+
+    if (!bestDomain) return null;
+
+    const exemplarFiles = domainFiles.get(bestDomain)!.map(doc => ({
+      path: doc.path,
+      content: doc.content.substring(0, maxContent),
+    }));
+
+    return { domain: bestDomain, files: exemplarFiles };
+  }
+
+  /**
+   * Get a document by its file path (for direct content retrieval)
+   */
+  getByPath(filePath: string): RAGDocument | undefined {
+    const normalized = filePath.replace(/\\/g, '/');
+    return this.index.documents.find(
+      doc => doc.path.replace(/\\/g, '/') === normalized
+    );
+  }
+
+  /**
    * Get all files with given extensions
    */
   getAllFiles(dir: string, ...extensions: string[]): string[] {

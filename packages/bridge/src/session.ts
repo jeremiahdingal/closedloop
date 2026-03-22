@@ -594,6 +594,28 @@ function handleValidationWork(
   });
 }
 
+/**
+ * Read a workspace file safely, return content or null.
+ */
+function readFileFromDisk(workspace: string, relativePath: string, maxLen = 2500): string | null {
+  try {
+    const fullPath = join(workspace, relativePath);
+    if (!existsSync(fullPath)) return null;
+    const content = readFileSync(fullPath, 'utf8');
+    if (!content.trim()) return null;
+    return content.length > maxLen ? content.substring(0, maxLen) + '\n// ... truncated' : content;
+  } catch {
+    return null;
+  }
+}
+
+// Shared files that almost every feature touches — builder must see these to avoid overwrites
+const SHARED_MUTATION_TARGETS = [
+  'packages/app/types/db.types.ts',
+  'packages/app/types/services.enum.ts',
+  'api/src/index.ts',
+];
+
 function buildFixPrompt(
   errorContext: string,
   originalPrompt: string,
@@ -605,7 +627,26 @@ function buildFixPrompt(
     line.includes('Module not found') || line.includes('error') || line.includes('Failed')
   ) || errorContext.substring(0, 500);
 
-  const touchedFiles = state.lastChangedFiles.length > 0 ? state.lastChangedFiles.join('\n') : '(unknown)';
+  const touchedFiles = state.lastChangedFiles.length > 0 ? state.lastChangedFiles : [];
+
+  // Read current disk state of touched files so the builder sees what it actually wrote
+  let fileContents = '';
+  for (const filePath of touchedFiles) {
+    const content = readFileFromDisk(workspace, filePath);
+    if (content) {
+      fileContents += `\n--- ${filePath} (current on disk) ---\n${content}\n`;
+    }
+  }
+
+  // Also inject shared mutation targets so builder doesn't overwrite them
+  for (const sharedFile of SHARED_MUTATION_TARGETS) {
+    // Skip if already in touched files
+    if (touchedFiles.some(f => f.replace(/\\/g, '/') === sharedFile)) continue;
+    const content = readFileFromDisk(workspace, sharedFile);
+    if (content) {
+      fileContents += `\n--- ${sharedFile} (shared — EXTEND, do not overwrite) ---\n${content}\n`;
+    }
+  }
 
   return `BUILD ERROR - ${state.mode.toUpperCase()} MODE
 
@@ -620,7 +661,8 @@ Do not create new files unless the build error requires it.
 Prefer editing the smallest possible set of existing files.
 
 Known touched files:
-${touchedFiles}
+${touchedFiles.join('\n') || '(unknown)'}
+${fileContents ? '\n== CURRENT FILE CONTENTS ON DISK ==' + fileContents : ''}
 
 Original task:
 ${originalPrompt}
@@ -633,31 +675,15 @@ CRITICAL RULES - MUST FOLLOW:
 2. Prefer the smallest possible edit set.
 3. Do not create unrelated new files.
 4. Preserve existing project patterns and naming.
-5. Stay in repair mode if the same fingerprint repeats.
+5. When modifying shared files (db.types.ts, services.enum.ts, index.ts): KEEP all existing content, ADD your new entries.
+6. Stay in repair mode if the same fingerprint repeats.
 
-EXAMPLE - Write components like this:
-
-\`\`\`typescript
-// packages/ui/src/components/Button.tsx
-import React from 'react';
-export const Button = ({ children, onClick, variant = 'primary' }: any) => (
-  <button
-    onClick={onClick}
-    style={{
-      padding: '8px 16px',
-      borderRadius: '4px',
-      border: 'none',
-      cursor: 'pointer',
-      backgroundColor: variant === 'primary' ? '#007bff' : '#6c757d',
-      color: 'white',
-    }}
-  >
-    {children}
-  </button>
-);
+Output each file using: FILE: path/to/file.ext
+\`\`\`lang
+code
 \`\`\`
 
-Write the missing component files now. Use ONLY inline styles. NO CSS imports:`;
+Write the fixed files now:`;
 }
 
 function analyzeValidationSummary(role: string, workspace: string, state: SessionState): ValidationSummary {
