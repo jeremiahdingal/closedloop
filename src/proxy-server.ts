@@ -19,7 +19,7 @@ import { runArtistStage } from './artist-recorder';
 import { runDiffGuardian } from './diff-guardian';
 import { ragIndexer } from './rag-indexer';
 import { OllamaRequest } from './types';
-import { detectScaffoldConfig, ScaffoldConfig } from './scaffold-engine';
+import { detectScaffoldConfig, ScaffoldConfig, parseArchitectOutput } from './scaffold-engine';
 import { executeScaffold, formatScaffoldComment } from './scaffold-executor';
 import { scoreComplexity, callRemoteArchitect } from './complexity-router';
 import { execSync } from 'child_process';
@@ -193,6 +193,151 @@ export function createProxy(): http.Server {
       setImmediate(async () => {
         await runArtistStage(issueId);
       });
+      return;
+    }
+
+    // ─── SCAFFOLD ARCHITECT HANDLER ───
+    // Scaffold Architect runs on LLM, outputs SCAFFOLD_CONFIG JSON or NOT_SCAFFOLDABLE.
+    // We intercept its response, parse the config, and execute the scaffold engine.
+    if (issueId && agentId === AGENTS['scaffold architect']) {
+      console.log(`[proxy:${proxyPort}] Scaffold Architect -> ollama | issue=${issueId.slice(0, 8)}`);
+
+      // Build context and call Ollama
+      const saIssue = await getIssueDetails(issueId);
+      const saPromptPath = require('path').join(__dirname, '..', 'prompts', 'scaffold-architect.txt');
+      let saSystemPrompt = '';
+      try {
+        saSystemPrompt = require('fs').readFileSync(saPromptPath, 'utf8');
+      } catch {
+        saSystemPrompt = 'You are the Scaffold Architect. Extract a SCAFFOLD_CONFIG JSON from the issue description, or respond NOT_SCAFFOLDABLE.';
+      }
+
+      const saModel = getAgentModel('scaffold architect') || 'qwen3:4b';
+      const saPayload = {
+        model: saModel,
+        stream: false,
+        messages: [
+          { role: 'system', content: saSystemPrompt },
+          { role: 'user', content: `Issue: ${saIssue?.title || ''}\n\n${saIssue?.description || ''}` },
+        ],
+      };
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ message: { role: 'assistant', content: '_Scaffold Architect processing..._' } }));
+
+      setImmediate(async () => {
+        try {
+          const timeoutConfig = loadConfig().ollama.timeouts;
+          const timeoutSec = timeoutConfig['scaffold architect'] || 120;
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), timeoutSec * 1000);
+
+          const ollamaRes = await fetch(`http://127.0.0.1:${ollamaPort}/api/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(saPayload),
+            signal: controller.signal,
+          });
+          const ollamaData = await ollamaRes.json() as any;
+          clearTimeout(timeoutId);
+
+          const content = ollamaData.message?.content || ollamaData.response || '';
+          console.log(`[scaffold-architect] LLM response (${content.length} chars)`);
+
+          // Post the architect's output as a comment
+          await postComment(issueId, null, `**Scaffold Architect:**\n\n${content.trim()}`);
+
+          // Parse SCAFFOLD_CONFIG from response
+          const configMatch = content.match(/SCAFFOLD_CONFIG:\s*```(?:json)?\s*([\s\S]*?)```/);
+          const notScaffoldable = content.match(/NOT_SCAFFOLDABLE:\s*(.+)/);
+
+          if (configMatch) {
+            try {
+              const parsed = JSON.parse(configMatch[1].trim());
+              const scaffoldConfig = parseArchitectOutput(parsed);
+
+              console.log(`[scaffold-architect] Extracted config: ${scaffoldConfig.entityPascal} (${scaffoldConfig.fields.length} fields)`);
+              await postComment(issueId, null,
+                `_Scaffold Architect extracted config: **${scaffoldConfig.entityPascal}** with ${scaffoldConfig.fields.length} fields. Running scaffold engine..._`
+              );
+
+              // Execute scaffold engine (deterministic)
+              const workspace = getWorkspace();
+              const scaffoldResult = executeScaffold(scaffoldConfig, workspace);
+              const comment = formatScaffoldComment(scaffoldConfig, scaffoldResult);
+              await postComment(issueId, null, comment);
+
+              if (scaffoldResult.success) {
+                const allFiles = [...scaffoldResult.filesWritten, ...scaffoldResult.filesPatched];
+                const newFilesWritten = scaffoldResult.filesWritten.filter(f => !f.includes('skipped'));
+                const allSkipped = newFilesWritten.length === 0;
+
+                if (allSkipped) {
+                  console.log(`[scaffold-architect] All files exist. Sending to Reviewer.`);
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer, status: 'in_progress' });
+                } else {
+                  // Git branch/commit/push
+                  const workspace = getWorkspace();
+                  const branchName = await getBranchName(issueId);
+                  const opts = { cwd: workspace, stdio: 'pipe' as const, timeout: 30000 };
+
+                  try {
+                    let defaultBranch = 'main';
+                    try { execSync('git rev-parse --verify main', { ...opts, stdio: 'pipe' }); } catch { defaultBranch = 'master'; }
+
+                    try { execSync(`git checkout -b ${branchName} ${defaultBranch}`, opts); } catch { execSync(`git checkout ${branchName}`, opts); }
+
+                    for (const f of allFiles) {
+                      const cleanPath = f.replace(' (skipped - already exists)', '');
+                      try { execSync(`git add "${cleanPath}"`, opts); } catch {}
+                    }
+
+                    const identifier = saIssue?.identifier || issueId.slice(0, 8);
+                    const commitMsg = `${identifier}: ${saIssue?.title || 'scaffold'} (scaffold-architect)`;
+                    execSync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, opts);
+                    execSync(`git push -u origin ${branchName}`, { ...opts, timeout: 60000 });
+
+                    await postComment(issueId, null,
+                      `_Code committed to branch \`${branchName}\` (scaffold-architect)_\n\nFiles:\n${allFiles.map(f => '- `' + f + '`').join('\n')}`
+                    );
+
+                    execSync(`git checkout ${defaultBranch}`, opts);
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer, status: 'in_progress' });
+                    console.log(`[scaffold-architect] Committed and pushed. Sent to Reviewer.`);
+                  } catch (gitErr: any) {
+                    console.error(`[scaffold-architect] Git failed:`, gitErr.message);
+                    await postComment(issueId, null, `_Scaffold files written but git failed: ${gitErr.message}. Sending to Local Builder._`);
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'], status: 'in_progress' });
+                  }
+                }
+              } else {
+                // Scaffold engine failed — fall back to Strategist
+                console.log(`[scaffold-architect] Scaffold engine had errors. Falling back to Strategist.`);
+                await postComment(issueId, null, `_Scaffold engine failed. Routing to Strategist for manual implementation._`);
+                await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+              }
+            } catch (parseErr: any) {
+              console.error(`[scaffold-architect] JSON parse failed:`, parseErr.message);
+              await postComment(issueId, null, `_Scaffold Architect produced invalid JSON: ${parseErr.message}. Routing to Strategist._`);
+              await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+            }
+          } else if (notScaffoldable) {
+            console.log(`[scaffold-architect] NOT_SCAFFOLDABLE: ${notScaffoldable[1]}`);
+            await postComment(issueId, null, `_Scaffold Architect: not scaffoldable — ${notScaffoldable[1].trim()}. Routing to Strategist._`);
+            await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+          } else {
+            // Could not parse response — fall back to Strategist
+            console.log(`[scaffold-architect] Could not parse response. Falling back to Strategist.`);
+            await postComment(issueId, null, `_Scaffold Architect response could not be parsed. Routing to Strategist._`);
+            await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+          }
+        } catch (err: any) {
+          console.error(`[scaffold-architect] Error:`, err.message);
+          await postComment(issueId, null, `_Scaffold Architect failed: ${err.message}. Routing to Strategist._`);
+          await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+        }
+      });
+
       return;
     }
 
@@ -380,6 +525,29 @@ export function createProxy(): http.Server {
 
         // Scaffold failed — fall through to Strategist
         console.log(`[complexity-router] Scaffold had errors, falling through to Strategist`);
+      } else {
+        // No regex match — check if this LOOKS like a CRUD task (natural language)
+        // If so, route to Scaffold Architect for NL → ScaffoldConfig extraction
+        const crudSignals = ['crud', 'api', 'service', 'endpoint', 'create', 'read', 'update', 'delete'];
+        const textLower = (title + ' ' + description).toLowerCase();
+        const crudScore = crudSignals.filter(s => textLower.includes(s)).length;
+
+        if (crudScore >= 2 && AGENTS['scaffold architect']) {
+          console.log(`[complexity-router] CRUD signals detected (score: ${crudScore}) but no regex match. Routing to Scaffold Architect for NL extraction.`);
+          await postComment(issueId, null,
+            `_Complexity Router: CRUD signals detected (score: ${crudScore}). Routing to **Scaffold Architect** for config extraction from natural language._`
+          );
+          await patchIssue(issueId, {
+            assigneeAgentId: AGENTS['scaffold architect'],
+            status: 'in_progress',
+          });
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            message: { role: 'assistant', content: '_Routed to Scaffold Architect._' },
+          }));
+          return;
+        }
       }
 
       // Path 2 & 3: Score complexity

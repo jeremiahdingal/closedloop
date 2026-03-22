@@ -37,6 +37,7 @@ export const AGENT_ALIASES: Record<string, string> = {
   'visual reviewer': AGENTS['visual reviewer'],
   'visual reviewer (ui/ux)': AGENTS['visual reviewer'],
   'complexity router': AGENTS['complexity router'],
+  'scaffold architect': AGENTS['scaffold architect'],
 };
 
 // Agents allowed to execute bash commands

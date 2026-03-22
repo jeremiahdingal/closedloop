@@ -655,6 +655,63 @@ export function detectScaffoldConfig(title: string, description: string): Scaffo
   };
 }
 
+/**
+ * Convert Scaffold Architect's simplified JSON output into a full ScaffoldConfig.
+ * The architect outputs a minimal format; this expands it into what the engine needs.
+ */
+export function parseArchitectOutput(json: {
+  entity: string;
+  table: string;
+  fields: Array<{
+    name: string;
+    type: 'text' | 'integer' | 'real';
+    required: boolean;
+    enum?: string[];
+    foreignKey?: string;
+  }>;
+  auth?: boolean;
+  mutation?: boolean;
+}): ScaffoldConfig {
+  const entity = json.entity.toLowerCase(); // ensure kebab-case
+  const entityCamel = kebabToCamel(entity);
+  const entityPascal = kebabToPascal(entity);
+  const entitySingular = entityCamel.replace(/s$/, '');
+  const table = json.table || entityPascal;
+  const idField = entitySingular + 'Id';
+
+  const fields: ScaffoldField[] = json.fields.map(f => {
+    const zodType = f.enum
+      ? `z.enum([${f.enum.map(v => `'${v}'`).join(', ')}])`
+      : f.type === 'integer' || f.type === 'real'
+        ? 'z.number()'
+        : 'z.string()';
+    const tsType = f.type === 'integer' || f.type === 'real' ? 'number' : 'string';
+
+    return {
+      name: f.name,
+      type: f.type,
+      zodType: f.required ? zodType : `${zodType}.nullable()`,
+      tsType: f.required ? tsType : `${tsType} | null`,
+      notNull: f.required,
+    };
+  });
+
+  return {
+    entity,
+    entityCamel,
+    entityPascal,
+    entitySingular,
+    table,
+    idField,
+    fields,
+    routes: defaultCrudRoutes(entity, idField),
+    middleware: {
+      auth: json.auth !== false,
+      mutation: json.mutation !== false,
+    },
+  };
+}
+
 // ────────────────────── Helpers ──────────────────────
 
 function capitalize(s: string): string {

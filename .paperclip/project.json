@@ -102,7 +102,8 @@
       "visual reviewer": "787cbd9e-d10b-4bca-b486-e7f5fd99d184",
       "sentinel": "c7fb4dae-8ac3-4795-b1f6-d14db2021035",
       "deployer": "5e234916-47ef-41a2-8c07-e9376ee6aa9c",
-      "complexity router": "093ee390-cfbf-4129-81d6-aeeb638c7d71"
+      "complexity router": "093ee390-cfbf-4129-81d6-aeeb638c7d71",
+      "scaffold architect": "f5366415-528e-4323-a029-8867cd47ffca"
     },
     "agentKeys": {
       "a90b07a4-f18c-4509-9d7b-b9f16eb098d6": "pcp_48d784f6edd3a907e7700cda9f93e36fc0d1030f4a6b6d04",
@@ -114,7 +115,8 @@
       "c7fb4dae-8ac3-4795-b1f6-d14db2021035": "pcp_268a568963f01698e27a232c9b911d96fa3504b214232b97",
       "5e234916-47ef-41a2-8c07-e9376ee6aa9c": "pcp_ad33d0ec65c082f7b46feef3233872548ac64b606e0e7541",
       "787cbd9e-d10b-4bca-b486-e7f5fd99d184": "pcp_6b6711a3a014c59c92416ec479077557a021087ba08bc280",
-      "093ee390-cfbf-4129-81d6-aeeb638c7d71": ""
+      "093ee390-cfbf-4129-81d6-aeeb638c7d71": "",
+      "f5366415-528e-4323-a029-8867cd47ffca": ""
     },
     "blockedAgents": ["954ce225-6dc8-4df7-8917-b597afbae60b"],
     "apiUrl": "http://127.0.0.1:3100"
@@ -130,6 +132,7 @@
       "local builder": "deepcoder:14b",
       "local builder burst": "qwen3-coder:30b",
       "reviewer": "glm-4.7-flash:latest",
+      "scaffold architect": "qwen3:4b",
       "diff guardian": "qwen3:4b",
       "visual reviewer": "qwen3-vl:8b",
       "sentinel": "deepseek-r1:8b",
@@ -140,6 +143,7 @@
       "tech lead": 900,
       "local builder": 3600,
       "reviewer": 1800,
+      "scaffold architect": 120,
       "diff guardian": 60,
       "sentinel": 600,
       "deployer": 600,
@@ -155,7 +159,8 @@
   },
   
   "delegationRules": {
-    "complexity router": ["strategist"],
+    "complexity router": ["strategist", "scaffold architect"],
+    "scaffold architect": ["strategist"],
     "strategist": ["tech lead", "reviewer", "sentinel", "visual reviewer"],
     "tech lead": ["local builder"],
     "reviewer": ["diff guardian"],

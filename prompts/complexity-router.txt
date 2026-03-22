@@ -7,14 +7,20 @@ It does NOT call the LLM. This file is documentation only.
 
 ### Path 1: SCAFFOLD (Free, Instant, Deterministic)
 Trigger: Issue description contains structured entity/field definitions matching CRUD patterns.
-Detection: detectScaffoldConfig() in src/scaffold-engine.ts
-Action: Generates all files deterministically (schema, service, routes, migration, patches shared files).
-         Then sends to Local Builder for build verification only (no code generation).
-         On build success → Reviewer → Diff Guardian → Visual Reviewer → PR.
-Cost: Zero LLM tokens.
+
+**Step 1a — Regex detection (free, instant):**
+If the issue uses structured format (entity: X, table: Y, fields: ...), detectScaffoldConfig() parses it directly.
+Action: Generates all files deterministically, commits to branch, sends to Reviewer.
+
+**Step 1b — Natural language CRUD (Scaffold Architect, small LLM):**
+If the issue has CRUD signals (score >= 2) but no regex match, it's likely a natural language CRUD task.
+Action: Routes to Scaffold Architect agent, which extracts a SCAFFOLD_CONFIG JSON from the NL description.
+         If valid config → scaffold engine generates files → git commit → Reviewer.
+         If NOT_SCAFFOLDABLE or invalid → falls back to Strategist (Path 2).
+Cost: One small LLM call (~4-8 seconds on qwen3:4b).
 
 ### Path 2: LOCAL (Cheap, Local LLM)
-Trigger: Complexity score < 7 and no scaffold match.
+Trigger: Complexity score < 7, no scaffold match, and not CRUD.
 Detection: scoreComplexity() in src/complexity-router.ts
 Action: Routes directly to Strategist for decomposition via local Ollama models.
 Cost: Local compute only.
@@ -47,16 +53,19 @@ Decreases:
 -1: cosmetic, spacing, padding
 -1: crud, simple api, basic endpoint
 
-## Scaffold-able Ticket Format
-For the scaffold engine to detect and generate code, tickets should include:
-- Entity name (kebab-case): entity: payment-types
-- Table name (PascalCase): table: PaymentTypes
-- Fields list with types:
-  - name: text
-  - amount: integer
-  - shopId: text
-- CRUD signals in title/description
+## Scaffold Flow
+
+```
+Natural language ticket
+  → Complexity Router
+    1. Try regex detection (free, instant)
+    2. If CRUD signals but no regex → Scaffold Architect (qwen3:4b)
+       → Extracts SCAFFOLD_CONFIG JSON
+       → If valid → scaffold engine → git commit → Reviewer
+       → If not scaffoldable → Strategist
+    3. If no CRUD signals → score complexity → LOCAL or REMOTE
+```
 
 ## ORG CHART
 - Complexity Router is the first agent to see every new issue
-- Outputs to: Scaffold Engine (path 1), Strategist (path 2), Remote Architect → Strategist (path 3)
+- Outputs to: Scaffold Engine (path 1a), Scaffold Architect (path 1b), Strategist (path 2), Remote Architect → Strategist (path 3)
