@@ -125,11 +125,11 @@ function createDefaultConfig(): ProjectConfig {
       ollamaPort: 11434,
       models: {
         'complexity router': 'qwen3:4b',
-        strategist: 'qwen3:8b',
+        strategist: 'qwen3.5:9b',
         'tech lead': 'deepcoder:14b',
         'local builder': 'deepcoder:14b',
         'local builder burst': 'qwen3-coder:30b',
-        reviewer: 'rnj-1:8b',
+        reviewer: 'glm-4.7:flash',
         'diff guardian': 'qwen3:4b',
         'visual reviewer': 'qwen3-vl:8b',
         sentinel: 'deepseek-r1:8b',

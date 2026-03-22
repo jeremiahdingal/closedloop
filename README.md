@@ -122,7 +122,7 @@ Think of it as your own private AI engineering team:
 │  │  AI Platform  │◄──►│                                              │   │
 │  │  (port 3100)  │    │  ┌────────────┐  ┌────────────────────────┐ │   │
 │  └──────────────┘    │  │ 🧠 RAG     │  │ 🔀 Delegation Engine  │ │   │
-│                       │  │ (ChromaDB)  │  │ (Org Chart Routing)   │ │   │
+│                       │  │ (AST+KW)   │  │ (Org Chart Routing)   │ │   │
 │  ┌──────────────┐    │  └────────────┘  └────────────────────────┘ │   │
 │  │  🦙 Ollama   │    │  ┌────────────┐  ┌────────────────────────┐ │   │
 │  │  LLM Server  │◄──►│  │ 📦 Git Ops │  │ 🏗️ Scaffold Engine    │ │   │
@@ -154,10 +154,10 @@ Each agent runs a different local model sized to its job — small models for ro
 | Agent | Role | Model | Why This Model |
 |-------|------|-------|----------------|
 | 🧭 **Complexity Router** | Classifies incoming issues (bug vs. feature vs. epic) | `qwen3:4b` | Fast triage — only needs to output one routing decision |
-| 🧠 **Strategist** | CTO — analyzes, plans, decomposes work | `qwen3:8b` | Needs reasoning for task breakdown, not code generation |
+| 🧠 **Strategist** | CTO — analyzes, plans, decomposes work | `qwen3.5:9b` | Newer architecture for better reasoning; planning doesn't need code-gen size |
 | 📐 **Tech Lead** | Architect — specs, file lists, patterns | `deepcoder:14b` | Must understand codebase structure and dependencies |
 | 🔨 **Local Builder** | Engineer — writes actual code | `deepcoder:14b` | Core code generation, burst mode uses `qwen3-coder:30b` |
-| 📝 **Reviewer** | Quality gate — code review + build check | `rnj-1:8b` | Review is judgment, not generation — smaller model suffices |
+| 📝 **Reviewer** | Quality gate — code review + build check | `glm-4.7:flash` | Fast, high-quality judgment for approve/reject decisions |
 | 🛡️ **Diff Guardian** | Policy enforcer — mechanical diff validation | `qwen3:4b` | Checklist evaluation, no creative work needed |
 | 👁️ **Visual Reviewer** | UI/UX auditor — screenshot analysis | `qwen3-vl:8b` | Vision model for visual regression and accessibility checks |
 | 🔐 **Sentinel** | DevOps — CI/CD monitoring, security scans | `deepseek-r1:8b` | Reasoning model for root-cause analysis |
@@ -188,7 +188,7 @@ Agents follow a strict hierarchy — no agent can skip levels:
 ### 🧠 RAG-Enhanced Code Generation
 > **Problem:** LLMs hallucinate file paths, invent non-existent APIs, and ignore your project conventions.
 >
-> **Solution:** Before generating any code, ClosedLoop queries a ChromaDB vector index of your entire codebase. The builder sees the top 10 most relevant existing files, their exports, and patterns — grounding every generation in reality.
+> **Solution:** Before generating any code, ClosedLoop queries an AST-enhanced index of your entire codebase. The builder sees the top 10 most relevant existing files — their exports, function signatures, interface shapes, and patterns — grounding every generation in reality.
 
 ```bash
 npm run rag-index   # Index your codebase (run once, re-run after major changes)
@@ -269,7 +269,7 @@ npm run rag-index   # Index your codebase (run once, re-run after major changes)
 >
 > **Solution:** First pass of a greenfield scaffold task uses `qwen3-coder:30b` (burst mode) for maximum generation quality. Subsequent repair passes drop to `deepcoder:14b` for fast iteration. Best of both worlds — quality for the initial generation, speed for fixes.
 
-### 🧪 78-Test Safety Net
+### 🧪 134-Test Safety Net
 > **Problem:** Rapid refactoring across 15+ modules risks breaking things silently.
 >
 > **Solution:** Comprehensive test suite covering all pure-logic modules:
@@ -279,6 +279,10 @@ npm run rag-index   # Index your codebase (run once, re-run after major changes)
 > - `epic-decomposer.test.ts` — ticket parsing from various formats
 > - `delegation.test.ts` — org chart enforcement, remote flag propagation
 > - `code-extractor.test.ts` — package.json validation, destructive change detection
+> - `agent-contracts.test.ts` — JSON contract parsing, formatting, keyword fallback
+> - `test-first.test.ts` — acceptance test spec parsing, vitest output parsing
+> - `ast-indexer.test.ts` — function/interface/enum/import extraction
+> - `success-tracker.test.ts` — outcome recording, model stats, threshold recommendations
 
 ### 🖥️ Control Panel (closedloop.cmd)
 > **Problem:** Managing Ollama + Paperclip + ClosedLoop + Bridge manually is tedious.
@@ -311,9 +315,9 @@ npm install
 
 # 3. Pull the models you need (pick based on your VRAM)
 ollama pull qwen3:4b            # Routing + Diff Guardian (2.5GB)
-ollama pull qwen3:8b            # Strategist + Deployer (5GB)
+ollama pull qwen3.5:9b          # Strategist (6.6GB) — newest architecture for planning
 ollama pull deepcoder:14b       # Tech Lead + Local Builder (9GB)
-ollama pull rnj-1:8b            # Reviewer (5GB)
+ollama pull glm-4.7:flash       # Reviewer — fast approve/reject decisions
 ollama pull qwen3-vl:8b         # Visual Reviewer (5GB)
 ollama pull nomic-embed-text    # RAG embeddings (300MB)
 
@@ -357,11 +361,11 @@ Edit `.paperclip/project.json`:
     "proxyPort": 3201,
     "ollamaPort": 11434,
     "models": {
-      "strategist": "qwen3:8b",
+      "strategist": "qwen3.5:9b",
       "tech lead": "deepcoder:14b",
       "local builder": "deepcoder:14b",
       "local builder burst": "qwen3-coder:30b",
-      "reviewer": "rnj-1:8b",
+      "reviewer": "glm-4.7:flash",
       "diff guardian": "qwen3:4b",
       "visual reviewer": "qwen3-vl:8b",
       "complexity router": "qwen3:4b"
@@ -394,7 +398,11 @@ closedloop/
 │   ├── config.ts             # ⚙️  Project configuration loader
 │   ├── types.ts              # 📝 TypeScript interfaces
 │   ├── context-builder.ts    # 🧠 RAG-enhanced prompt building
-│   ├── rag-indexer.ts        # 📊 ChromaDB vector indexing
+│   ├── rag-indexer.ts        # 📊 File-based RAG indexing with AST boost
+│   ├── ast-indexer.ts        # 🌳 Regex-based AST extraction (functions, interfaces, enums)
+│   ├── agent-contracts.ts    # 📐 Typed JSON schemas for inter-agent communication
+│   ├── test-first.ts         # 🧪 Acceptance test parsing, writing, and execution
+│   ├── success-tracker.ts    # 📈 Model success rate tracking and threshold tuning
 │   ├── code-extractor.ts     # 📦 Parse FILE: blocks from LLM output
 │   ├── git-ops.ts            # 🔀 Branch, commit, PR creation
 │   ├── bash-executor.ts      # 💻 Safe shell command execution
@@ -429,7 +437,7 @@ closedloop/
 ## 🧪 Testing
 
 ```bash
-# Run all 78 tests
+# Run all 134 tests
 npx vitest run
 
 # Watch mode during development
@@ -444,6 +452,10 @@ npx vitest --watch
 | `epic-decomposer.test.ts` | 7 | Ticket parsing from markdown/numbered lists |
 | `delegation.test.ts` | 7 | Org chart enforcement, remote flag propagation |
 | `code-extractor.test.ts` | 9 | Package.json validation, destructive change detection |
+| `agent-contracts.test.ts` | 16 | JSON contract parsing, formatting, keyword fallback |
+| `test-first.test.ts` | 11 | Acceptance test spec parsing, vitest output parsing |
+| `ast-indexer.test.ts` | 16 | Function/interface/enum/import AST extraction |
+| `success-tracker.test.ts` | 13 | Outcome recording, model stats, threshold tuning |
 
 ---
 
@@ -472,15 +484,34 @@ npx vitest --watch
 
 ---
 
+### 📐 Structured JSON Communication (MetaGPT Pattern)
+> **Problem:** Agents pass instructions in freeform text. Small local models misinterpret vague instructions, causing extra review loops.
+>
+> **Solution:** Typed JSON contracts between agents — `TicketSpec` (Strategist → Tech Lead), `BuildManifest` (Tech Lead → Builder), `ReviewVerdict` (Reviewer), `DiffVerdict` (Diff Guardian). Parsers extract JSON from LLM output with keyword fallback for when the model outputs freeform text instead.
+
+### 🧪 Test-First Workflow
+> **Problem:** "Build passes" is a weak exit condition — code can build but be logically wrong.
+>
+> **Solution:** Tech Lead can define acceptance tests (`TEST:` blocks) before the builder writes code. Tests are written to the workspace and run alongside the build. The builder's exit condition becomes "build passes AND tests pass." Test results are injected into retry prompts.
+
+### 🌳 AST-Based RAG Indexing
+> **Problem:** Flat text search misses structural queries like "find all functions that accept orderId."
+>
+> **Solution:** RAG index now extracts function signatures (with params and return types), interface field shapes, enum values, and import relationships using regex-based AST parsing. AST matches get a 2x scoring boost in RAG queries, surfacing structurally relevant files first.
+
+### 📈 Success Rate Tracking
+> **Problem:** The complexity routing threshold (score >= 7 → remote) is a static guess. No data on whether it's right.
+>
+> **Solution:** Every task outcome is recorded: model used, complexity score, pass count, whether rescue was needed. A threshold recommendation engine analyzes boundary performance and suggests raising/lowering the threshold based on real data. Confidence levels (low/medium/high) prevent premature adjustments.
+
+---
+
 ## 🗺️ Roadmap
 
 See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full backlog. Highlights:
 
-- 📐 **Structured JSON inter-agent communication** — Replace natural language handoffs with typed contracts
-- 🧪 **Test-first workflow** — Strategist generates acceptance tests before builder writes code
-- 🌳 **AST-based RAG** — Index by function signatures, not flat text
-- 📈 **Success rate tracking** — Auto-tune complexity thresholds from real pass/fail data
 - 🔀 **Parallel worktree exploration** — Spawn multiple builder instances, pick the best result
+- 🧪 **Property-based testing in Diff Guardian** — Generate Hypothesis-style property tests for changed code
 - 📜 **Event-sourced state** — Full audit trail, replay from any point
 
 ---
