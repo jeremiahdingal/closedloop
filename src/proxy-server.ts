@@ -7,7 +7,7 @@
  */
 
 import * as http from 'http';
-import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getBurstModel } from './config';
+import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getBurstModel, getWorkspace } from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
 import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES } from './agent-types';
 import { extractIssueId, extractAgentId } from './utils';
@@ -19,6 +19,9 @@ import { runArtistStage } from './artist-recorder';
 import { runDiffGuardian } from './diff-guardian';
 import { ragIndexer } from './rag-indexer';
 import { OllamaRequest } from './types';
+import { detectScaffoldConfig, ScaffoldConfig } from './scaffold-engine';
+import { executeScaffold, formatScaffoldComment } from './scaffold-executor';
+import { scoreComplexity, callRemoteArchitect } from './complexity-router';
 
 const { proxyPort, ollamaPort } = getOllamaPorts();
 const PAPERCLIP_API = getPaperclipApiUrl();
@@ -203,6 +206,107 @@ export function createProxy(): http.Server {
         res.end(JSON.stringify({ error: `Bridge unreachable: ${err.message}` }));
       }
 
+      return;
+    }
+
+    // ─── THREE-WAY COMPLEXITY ROUTER GATE ───
+    // When Complexity Router is assigned, classify the issue into one of:
+    //   1. SCAFFOLD — deterministic template (free, instant, zero LLM)
+    //   2. LOCAL    — simple non-template task, route to Strategist → local LLM
+    //   3. REMOTE   — genuinely novel/complex, call GLM-5 Remote Architect first
+    if (issueId && agentId === AGENTS['complexity router']) {
+      const issue = await getIssueDetails(issueId);
+      const title = issue?.title || '';
+      const description = issue?.description || '';
+
+      console.log(`[complexity-router] Classifying: ${title.slice(0, 60)}`);
+
+      // Path 1: Template scaffold detection
+      const scaffoldConfig = detectScaffoldConfig(title, description);
+      if (scaffoldConfig) {
+        console.log(`[complexity-router] SCAFFOLD match: ${scaffoldConfig.entityPascal}`);
+        await postComment(issueId, null,
+          `_Complexity Router: **SCAFFOLD** path detected for ${scaffoldConfig.entityPascal} CRUD API. Generating deterministic code..._`
+        );
+
+        const workspace = getWorkspace();
+        const scaffoldResult = executeScaffold(scaffoldConfig, workspace);
+        const comment = formatScaffoldComment(scaffoldConfig, scaffoldResult);
+        await postComment(issueId, null, comment);
+
+        if (scaffoldResult.success) {
+          // Scaffold succeeded — skip Strategist/TechLead/Builder entirely, go to Reviewer
+          console.log(`[complexity-router] Scaffold complete. Forwarding to Local Builder for build verification.`);
+
+          // Send to Local Builder just for build verification (no code gen needed)
+          const bridgeUrl = getBridgeUrl();
+          const allFiles = [...scaffoldResult.filesWritten, ...scaffoldResult.filesPatched];
+
+          await fetch(`${bridgeUrl}/webhook/issue-assigned`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              issueId,
+              assigneeAgentId: AGENTS['local builder'],
+              title: `Build verification: ${title}`,
+              description: `Scaffold has already written all files. Just run the build to verify.\n\nFiles written:\n${allFiles.map(f => '- ' + f).join('\n')}\n\nIf build fails, fix only the import/type errors. Do NOT rewrite the scaffolded files.`,
+            }),
+          }).catch((err: any) => {
+            console.error(`[complexity-router] Bridge forward failed:`, err.message);
+          });
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            message: { role: 'assistant', content: '_Scaffold complete. Forwarded to Local Builder for build verification._' },
+          }));
+          return;
+        }
+
+        // Scaffold failed — fall through to Strategist
+        console.log(`[complexity-router] Scaffold had errors, falling through to Strategist`);
+      }
+
+      // Path 2 & 3: Score complexity
+      const complexityScore = scoreComplexity(title, description);
+      console.log(`[complexity-router] Complexity score: ${complexityScore}`);
+
+      if (complexityScore >= 7) {
+        // Path 3: REMOTE — genuinely complex, call Remote Architect
+        console.log(`[complexity-router] REMOTE path: score ${complexityScore} >= 7`);
+        await postComment(issueId, null,
+          `_Complexity Router: **REMOTE** path (score: ${complexityScore}/10). Calling GLM-5 Remote Architect for architecture spec..._`
+        );
+
+        const archSpec = await callRemoteArchitect(issueId, title, description);
+        if (archSpec) {
+          // Update issue description with arch spec, then route to Strategist
+          await patchIssue(issueId, {
+            description: description + '\n\n---\n## Architecture Spec (GLM-5)\n\n' + archSpec,
+            assigneeAgentId: AGENTS.strategist,
+          });
+        } else {
+          // Remote failed — route to Strategist anyway
+          await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          message: { role: 'assistant', content: `_Routed to ${archSpec ? 'Strategist (with arch spec)' : 'Strategist (remote unavailable)'}._` },
+        }));
+        return;
+      }
+
+      // Path 2: LOCAL — simple, route directly to Strategist
+      console.log(`[complexity-router] LOCAL path: score ${complexityScore} < 7`);
+      await postComment(issueId, null,
+        `_Complexity Router: **LOCAL** path (score: ${complexityScore}/10). Routing to Strategist._`
+      );
+      await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        message: { role: 'assistant', content: '_Routed to Strategist via local path._' },
+      }));
       return;
     }
 

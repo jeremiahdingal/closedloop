@@ -360,6 +360,34 @@ async function spawnPiMono(config: any, sessionDir: string, logPath: string, rol
     appendFileSync(logPath, '\n[LLM STARTING]\n');
     appendFileSync(logPath, '[STATE] mode=' + state.mode + ' attempt=' + state.attemptCount + '/' + state.maxPasses + '\n');
 
+    // SCAFFOLD MODE: If files were already written by scaffold engine, just run build verification
+    const isScaffoldMode = (config.description || '').includes('Scaffold has already written all files');
+    if (isScaffoldMode && role === 'builder') {
+      appendFileSync(logPath, '\n[SCAFFOLD MODE] Skipping LLM — running build verification only\n');
+      const workspace = config.workspace || WORKSPACE;
+
+      runBuild(workspace, logPath, async (buildError, buildResult) => {
+        if (buildError) {
+          appendFileSync(logPath, '[SCAFFOLD BUILD FAILED]\n');
+          const errorText = buildResult?.stderr || buildResult?.stdout || (buildError as Error).message;
+          appendFileSync(logPath, errorText.substring(0, 1000) + '\n');
+
+          // Build failed — fall through to normal LLM iteration for repair
+          appendFileSync(logPath, '[SCAFFOLD] Falling back to LLM for build repair\n');
+          const fixPrompt = `The scaffold engine wrote files but the build failed. Fix the build errors.\n\nBuild error:\n${errorText.substring(0, 500)}\n\nOriginal task: ${config.title}\n${config.description}`;
+          runLlmIteration(config.issueId, fixPrompt, role, workspace, sessionDir, logPath, state, completionHandler);
+          return;
+        }
+
+        appendFileSync(logPath, '\n[SCAFFOLD BUILD SUCCESS]\n');
+        state.lastBuildSucceeded = true;
+        state.mode = 'implementation';
+        touchSessionState(sessionDir, state);
+        onComplete(config.issueId, role, 0).then(resolve).catch(reject);
+      });
+      return;
+    }
+
     const taskPrompt = buildTaskPrompt(config, role);
     appendFileSync(logPath, '[TASK PROMPT]\n' + taskPrompt + '\n\n');
 
@@ -368,7 +396,9 @@ async function spawnPiMono(config: any, sessionDir: string, logPath: string, rol
       appendFileSync(logPath, '[BURST MODEL] ' + modelOverride + '\n');
     }
 
-    runLlmIteration(config.issueId, taskPrompt, role, config.workspace || WORKSPACE, sessionDir, logPath, state, (finalError, completion) => {
+    runLlmIteration(config.issueId, taskPrompt, role, config.workspace || WORKSPACE, sessionDir, logPath, state, completionHandler);
+
+    function completionHandler(finalError: any, completion: SessionCompletionResult) {
       if (finalError && completion.reason === 'max-passes') {
         const errorText = completion.finalErrorText || (finalError as Error).message || 'Unknown error';
         state.mode = 'escalated';
@@ -393,7 +423,7 @@ async function spawnPiMono(config: any, sessionDir: string, logPath: string, rol
       }
 
       onComplete(config.issueId, role, state.attemptCount).then(resolve).catch(reject);
-    });
+    }
   });
 }
 
