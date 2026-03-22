@@ -8,6 +8,7 @@
 import { createProxy, checkAssignedIssues, initializeRAG } from './proxy-server';
 import { ragIndexer } from './rag-indexer';
 import { getConfig } from './config';
+import { checkGoalsForDecomposition } from './epic-decomposer';
 
 // Load configuration
 const config = getConfig();
@@ -26,9 +27,19 @@ setInterval(() => {
   checkAssignedIssues().catch(() => {});
 }, 60000);
 
+// Run epic decomposer every 2 minutes
+setInterval(() => {
+  checkGoalsForDecomposition().catch(() => {});
+}, 120000);
+
 // Run immediately on startup
 setTimeout(() => {
   checkAssignedIssues().catch(() => {});
 }, 5000);
+
+// Check for epics shortly after startup
+setTimeout(() => {
+  checkGoalsForDecomposition().catch(() => {});
+}, 10000);
 
 console.log('[closedloop] ClosedLoop started.');
