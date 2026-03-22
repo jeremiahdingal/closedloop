@@ -67,6 +67,9 @@ export function normalizeRoute(route?: string): string {
 }
 
 export function extractIssueId(body: any): string | null {
+  // Check top-level issueId first (used by background checker and manual triggers)
+  if (body.issueId) return body.issueId;
+  // Then check nested context (Paperclip adapter format)
   const ctx = body.context;
   if (!ctx) return null;
   return ctx.issueId || ctx.taskId || ctx.taskKey || null;
