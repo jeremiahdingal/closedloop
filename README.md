@@ -8,7 +8,7 @@
 ```
 
 <p align="center">
-  <strong>Local AI agents are dumb. They hallucinate, break code, and get stuck in loops.</strong>
+  <strong>⚠️ Local AI agents are dumb. They hallucinate, break code, and get stuck in loops.</strong>
 </p>
 
 <p align="center">
@@ -16,57 +16,72 @@
 </p>
 
 <p align="center">
-  <a href="#-quick-start">Quick Start</a> &bull;
-  <a href="#-how-it-works">How It Works</a> &bull;
-  <a href="#-key-features">Key Features</a> &bull;
-  <a href="#-cost-comparison">Cost Comparison</a>
+  <a href="#-quick-start">⚡ Quick Start</a> &bull;
+  <a href="#-how-it-works">🔄 How It Works</a> &bull;
+  <a href="#-key-features">✨ Key Features</a> &bull;
+  <a href="#-cost-comparison">📊 Cost Comparison</a>
 </p>
 
 ---
 
-## The Problem
+## 💡 The Problem
 
 You've tried local AI coding. You know the pain:
 
-- **Hallucinates imports** — generates code for APIs that don't exist
-- **Breaks existing code** — deletes exports, ignores your patterns
-- **Spins in circles** — tries the same broken fix 5 times
-- **Can't handle multi-file work** — loses context across files
+- ❌ **Hallucinates imports** — generates code for APIs that don't exist
+- ❌ **Breaks existing code** — deletes exports, ignores your patterns
+- ❌ **Spins in circles** — tries the same broken fix 5 times
+- ❌ **Can't handle multi-file work** — loses context across files
 
-This isn't the model's fault. It's the workflow.
+**This isn't the model's fault. It's the workflow.**
 
 ClosedLoop is an **orchestration layer** that makes small local models produce production-quality results. Think of it as the difference between giving a junior dev a task and giving them a task *plus* a tech lead, code review, CI/CD, and institutional memory.
 
-**Orchestration > Model Size. The system is the product.**
+**🧠 Orchestration > Model Size. The system is the product.**
 
 ---
 
-## Who Is This For
+## 🎯 Who Is This For
 
-- **Solo devs** who want continuous AI development without $300/month API bills
-- **Privacy-conscious teams** who can't send proprietary code to cloud APIs
-- **Tinkerers** who want to push local LLMs beyond what a single Ollama call can do
-- **Anyone with a decent GPU** (16GB+ VRAM) who wants hands-free issue-to-PR automation
+- 💻 **Solo devs** who want continuous AI development without $300/month API bills
+- 🔒 **Privacy-conscious teams** who can't send proprietary code to cloud APIs
+- 🔧 **Tinkerers** who want to push local LLMs beyond what a single Ollama call can do
+- 🖥️ **Anyone with a decent GPU** (16GB+ VRAM) who wants hands-free issue-to-PR automation
 
 ---
 
-## How It Works
+## 📊 Cost Comparison
 
-ClosedLoop orchestrates **9 specialized AI agents** running locally via [Ollama](https://ollama.ai). Each agent runs a right-sized model — small models for routing, bigger models for code generation. A ticket enters, a PR comes out.
+| Approach | Monthly Cost | Privacy | Offline | Unlimited |
+|----------|-------------|---------|---------|-----------|
+| GPT-4 API | $50-500+ | ❌ Code sent to OpenAI | ❌ | ❌ Rate limited |
+| Claude API | $50-300+ | ❌ Code sent to Anthropic | ❌ | ❌ Rate limited |
+| GitHub Copilot | $19/user | ❌ Code sent to GitHub | ❌ | ⚠️ Fair use limits |
+| Cursor Pro | $20/user | ❌ Code sent to cloud | ❌ | ⚠️ Fast request limits |
+| **ClosedLoop** | **~$0** | ✅ **Fully local** | ✅ **Yes** | ✅ **Unlimited** |
+
+*💰 One-time cost: a GPU that can run 14B+ models (RTX 3060 12GB ~$200 used, RTX 4060 Ti 16GB ~$400).*
+*🆘 Optional: Remote rescue (GLM-5 via z.ai) is pay-per-use for when local models get stuck — most tasks complete without it.*
+
+---
+
+## 🔄 How It Works
+
+ClosedLoop orchestrates **9 specialized AI agents** running locally via [Ollama](https://ollama.ai). Each agent runs a right-sized model — small models for routing, bigger models for code generation. A ticket enters, a PR comes out. **Zero human intervention.**
 
 ```mermaid
 sequenceDiagram
-    participant GH as Issue
-    participant CR as Complexity Router<br/>(qwen3:4b)
-    participant ST as Strategist<br/>(qwen3.5:9b)
-    participant TL as Tech Lead<br/>(qwen2.5-coder:14b)
-    participant RAG as RAG Index<br/>(AST+KW)
-    participant BL as Local Builder<br/>(qwen2.5-coder:14b)
-    participant BRG as Bridge<br/>(Build Loop)
-    participant RV as Reviewer<br/>(glm-4.7-flash)
-    participant DG as Diff Guardian<br/>(qwen3:4b)
-    participant VR as Visual Reviewer<br/>(qwen3-vl:8b)
-    participant PR as Git / PR
+    participant GH as 📋 Issue
+    participant CR as 🧭 Complexity Router<br/>(qwen3:4b)
+    participant ST as 🧠 Strategist<br/>(qwen3.5:9b)
+    participant TL as 📐 Tech Lead<br/>(qwen2.5-coder:14b)
+    participant RAG as 📊 RAG Index<br/>(AST+KW)
+    participant BL as 🔨 Local Builder<br/>(qwen2.5-coder:14b)
+    participant BRG as 🌉 Bridge<br/>(Build Loop)
+    participant RV as 📝 Reviewer<br/>(glm-4.7-flash)
+    participant DG as 🛡️ Diff Guardian<br/>(qwen3:4b)
+    participant VR as 👁️ Visual Reviewer<br/>(qwen3-vl:8b)
+    participant PR as 🔀 Git / PR
 
     GH->>CR: "Add dark mode toggle to settings page"
 
@@ -96,7 +111,7 @@ sequenceDiagram
     BL->>BRG: FILE: blocks for 3 files
 
     BRG->>BRG: yarn build
-    Note over BRG: BUILD FAILED<br/>TS2345: ThemeContext.setTheme<br/>expects 'light'|'dark', got string
+    Note over BRG: ❌ BUILD FAILED<br/>TS2345: ThemeContext.setTheme<br/>expects 'light'|'dark', got string
 
     BRG->>BRG: Record attempt fingerprint<br/>+ error in tried-approaches memory
 
@@ -107,162 +122,164 @@ sequenceDiagram
     BL->>BRG: FILE: blocks (revised)
 
     BRG->>BRG: yarn build + vitest (acceptance tests)
-    Note over BRG: BUILD PASSED<br/>Tests passed<br/>Checkpoint saved
+    Note over BRG: ✅ BUILD PASSED<br/>Tests passed<br/>Checkpoint saved
 
     BRG->>RV: Diff + build log + test results
 
     Note over RV: Reviews: logic correct,<br/>no hallucinated APIs, patterns consistent
 
-    RV->>DG: Approve → forward diff for policy check
+    RV->>DG: ✅ Approve → forward diff for policy check
 
     Note over DG: Mechanical checklist:<br/>✓ .ts/.tsx only  ✓ no secrets<br/>✓ no console.log  ✓ exports preserved<br/>✓ deletion ratio < 70%  ✓ scope matches
 
-    DG->>VR: Policy PASSED → trigger visual check
+    DG->>VR: ✅ Policy PASSED → trigger visual check
 
     BRG->>VR: Playwright screenshots<br/>(settings route, light + dark)
 
     Note over VR: Vision model checks:<br/>toggle visible, contrast >= 4.5:1,<br/>touch target >= 44px, layout stable
 
-    VR->>PR: Visual APPROVED
+    VR->>PR: ✅ Visual APPROVED
 
     PR->>PR: git commit + push branch
-    PR->>GH: Pull request opened & merged
-    Note over GH: Issue closed<br/>2 build passes, 0 human touches
+    PR->>GH: 🎉 Pull request opened & merged
+    Note over GH: Issue closed ✓<br/>2 build passes, 0 human touches
 ```
 
-### The Pipeline
+### 🏗️ The Pipeline
 
 ```
-  Issue Created
+  📋 Issue Created
        │
        ▼
   ┌─────────────────┐
-  │ Complexity       │──── Simple task?    ──▶ Strategist (local pipeline)
-  │ Router (4B)      │──── Greenfield app? ──▶ Remote Architect (GLM-5, optional)
+  │ 🧭 Complexity   │──── Simple task?    ──▶ Strategist (local pipeline)
+  │    Router (4B)   │──── Greenfield app? ──▶ Remote Architect (GLM-5, optional)
   └────────┬────────┘──── CRUD entity?    ──▶ Scaffold Engine (zero-shot, no LLM)
            │
            ▼
-  Strategist (9B) ──▶ Tech Lead (14B) ──▶ Local Builder (14B)
-                                                  │
-                              RAG Context + Reflection Memory
-                                                  │
-                     ┌────────────────────────────┤
-                     │     Build Loop (up to 20 passes)
-                     ▼                            ▼
-  Reviewer (19B) ──▶ Diff Guardian (4B) ──▶ Visual Reviewer (8B)
-                                                  │
-                                                  ▼
-                                           PR Created & Merged
+  🧠 Strategist (9B) ──▶ 📐 Tech Lead (14B) ──▶ 🔨 Local Builder (14B)
+                                                        │
+                                    RAG Context + Reflection Memory
+                                                        │
+                     ┌──────────────────────────────────┤
+                     │     🔁 Build Loop (up to 20 passes)
+                     ▼                                  ▼
+  📝 Reviewer (19B) ──▶ 🛡️ Diff Guardian (4B) ──▶ 👁️ Visual Reviewer (8B)
+                                                        │
+                                                        ▼
+                                                 🎉 PR Created & Merged
 ```
 
-### The Agent Team
+### 🤖 The Agent Team
+
+Each agent runs a different local model, sized to its job:
 
 | Agent | Role | Model | Size |
 |-------|------|-------|------|
-| **Complexity Router** | Classifies issues, picks pipeline path | `qwen3:4b` | 2.5GB |
-| **Strategist** | CTO — analyzes, plans, decomposes | `qwen3.5:9b` | 6.6GB |
-| **Tech Lead** | Architect — specs, file lists, patterns | `qwen2.5-coder:14b` | 9GB |
-| **Local Builder** | Engineer — writes code | `qwen2.5-coder:14b` | 9GB |
-| **Reviewer** | Quality gate — approve/reject | `glm-4.7-flash` | 19GB |
-| **Diff Guardian** | Policy enforcer — mechanical checklist | `qwen3:4b` | 2.5GB |
-| **Visual Reviewer** | UI/UX auditor — screenshot analysis | `qwen3-vl:8b` | 5GB |
-| **Sentinel** | DevOps — CI/CD, security scans | `deepseek-r1:8b` | 5GB |
-| **Deployer** | Infrastructure — deployment execution | `qwen3:8b` | 5GB |
+| 🧭 **Complexity Router** | Classifies issues, picks pipeline path | `qwen3:4b` | 2.5GB |
+| 🧠 **Strategist** | CTO — analyzes, plans, decomposes | `qwen3.5:9b` | 6.6GB |
+| 📐 **Tech Lead** | Architect — specs, file lists, patterns | `qwen2.5-coder:14b` | 9GB |
+| 🔨 **Local Builder** | Engineer — writes actual code | `qwen2.5-coder:14b` | 9GB |
+| 📝 **Reviewer** | Quality gate — approve/reject | `glm-4.7-flash` | 19GB |
+| 🛡️ **Diff Guardian** | Policy enforcer — mechanical checklist | `qwen3:4b` | 2.5GB |
+| 👁️ **Visual Reviewer** | UI/UX auditor — screenshot analysis | `qwen3-vl:8b` | 5GB |
+| 🔐 **Sentinel** | DevOps — CI/CD, security scans | `deepseek-r1:8b` | 5GB |
+| 🚀 **Deployer** | Infrastructure — deployment execution | `qwen3:8b` | 5GB |
 
 ---
 
-## Cost Comparison
+## ✨ Key Features
 
-| Approach | Monthly Cost | Privacy | Offline | Unlimited |
-|----------|-------------|---------|---------|-----------|
-| GPT-4 API | $50-500+ | Code sent to OpenAI | No | Rate limited |
-| Claude API | $50-300+ | Code sent to Anthropic | No | Rate limited |
-| GitHub Copilot | $19/user | Code sent to GitHub | No | Fair use limits |
-| Cursor Pro | $20/user | Code sent to cloud | No | Fast request limits |
-| **ClosedLoop** | **~$0** | **Fully local** | **Yes** | **Unlimited** |
+### 🧠 RAG-Grounded Code Generation
+> **Problem:** LLMs hallucinate file paths and invent APIs that don't exist.
+>
+> **Solution:** Before generating any code, ClosedLoop queries an AST-enhanced index of your codebase. The builder sees the top 10 most relevant files — exports, function signatures, interface shapes — grounding every generation in reality.
 
-*One-time cost: a GPU that can run 14B+ models (RTX 3060 12GB ~$200 used, RTX 4060 Ti 16GB ~$400).*
-*Optional: Remote rescue (GLM-5 via z.ai) is pay-per-use for when local models get stuck — most tasks complete without it.*
+### 🔁 Build-Green Loop with Tried-Approaches Memory
+> **Problem:** The builder writes code, the build fails, it tries the same broken approach again in circles.
+>
+> **Solution:** Code doesn't leave the builder until `yarn build` passes. Every failed attempt is recorded with its fingerprint and error. On retry, the builder sees what it already tried and must take a different approach. Up to 20 passes before escalation.
 
----
+### 📝 Reflection Memory
+> **Problem:** The reviewer rejects code for "wrong import path" on Monday. On Tuesday, the builder makes the same mistake.
+>
+> **Solution:** Every rejection saves a reflection to `.reflections/{component}.md`. On future builds touching those files, past feedback is injected into the prompt. The system learns from its mistakes across sessions.
 
-## Key Features
+### 🧭 Three-Way Complexity Router
+> **Problem:** A bug fix and "build a whole app from scratch" are fundamentally different tasks, but they enter the same pipeline.
+>
+> **Solution:** Every issue gets a complexity score (0-10). Score < 7 + CRUD signals? Zero-shot scaffold, no LLM needed. Score < 7? Standard local pipeline. Score >= 7? Remote architect specs the work first, then decomposes into sub-tickets.
 
-### RAG-Grounded Code Generation
-LLMs hallucinate file paths and invent APIs. Before generating any code, ClosedLoop queries an AST-enhanced index of your codebase. The builder sees the top 10 most relevant files — exports, function signatures, interface shapes — grounding every generation in reality.
+### 🛡️ Diff Guardian (Mechanical Policy Gate)
+> **Problem:** The reviewer says "looks good" but the diff has `console.log` spam and deleted exports.
+>
+> **Solution:** Diff Guardian runs an objective checklist: `.ts`/`.tsx` only, no secrets, no debug code, deletion ratio < 70%, all exports preserved, scope matches issue.
 
-### Build-Green Loop with Tried-Approaches Memory
-Code doesn't leave the builder until `yarn build` passes. Every failed attempt is recorded with its fingerprint and error. On retry, the builder sees what it already tried and must take a different approach. Up to 20 passes before escalation.
-
-### Reflection Memory
-Every reviewer rejection saves a reflection to `.reflections/{component}.md`. On future builds touching those files, past feedback is injected into the builder's prompt. The system learns from its mistakes across sessions.
-
-### Three-Way Complexity Router
-Every issue gets a complexity score (0-10). Score < 7 + CRUD signals? Zero-shot scaffold, no LLM needed. Score < 7? Standard local pipeline. Score >= 7? Remote architect specs the work first, then decomposes into sub-tickets.
-
-### Diff Guardian (Mechanical Policy Gate)
-The reviewer says "looks good" but the diff has `console.log` spam and deleted exports. Diff Guardian runs an objective checklist: `.ts`/`.tsx` only, no secrets, no debug code, deletion ratio < 70%, all exports preserved, scope matches issue.
-
-### Communicative Dehallucination
-Before writing code, the builder must list which files it will modify vs. create and state its assumptions. This pre-flight check forces the model to reason about the codebase before generating, catching misunderstandings early.
+### 💬 Communicative Dehallucination
+> **Problem:** The builder assumes wrong things about the codebase and generates code based on those assumptions.
+>
+> **Solution:** Before writing code, the builder must list which files it will modify vs. create and state its assumptions. This pre-flight check forces the model to reason about the codebase before generating, catching misunderstandings early.
 
 <details>
-<summary><strong>All Features</strong></summary>
+<summary><strong>📋 All Features (18 total)</strong></summary>
 
-### Scaffold Engine (Zero-Shot CRUD)
-CRUD APIs are boilerplate. When the router detects a CRUD ticket (entity + fields + table), the Scaffold Engine generates all files deterministically in one shot — routes, service layer, Zod schemas, DB types, enum entries. No LLM needed.
+### 🔨 Scaffold Engine (Zero-Shot CRUD)
+> CRUD APIs are boilerplate. When the router detects a CRUD ticket (entity + fields + table), the Scaffold Engine generates all files deterministically in one shot — routes, service layer, Zod schemas, DB types, enum entries. No LLM needed.
 
-### Goal/Epic Decomposition
-Issues tagged `[Goal]` or `[Epic]` (or scoring >= 7) are decomposed into narrow, buildable sub-tickets. Each gets its own issue, `.tickets/` spec, and parent tracking. The parent auto-completes when all children finish.
+### 📋 Goal/Epic Decomposition
+> Issues tagged `[Goal]` or `[Epic]` (or scoring >= 7) are decomposed into narrow, buildable sub-tickets. Each gets its own issue, `.tickets/` spec, and parent tracking. The parent auto-completes when all children finish.
 
-### Remote Rescue (GLM-5 Fallback)
-When the same build error repeats 3+ times, ClosedLoop calls GLM-5 (via z.ai API) for a rescue fix. Also fires as a last resort at 20 passes. **100% optional** — without an API key, the system continues locally.
+### 🆘 Remote Rescue (GLM-5 Fallback)
+> When the same build error repeats 3+ times, ClosedLoop calls GLM-5 (via z.ai API) for a rescue fix. **100% optional** — without an API key, the system continues locally.
 
-### Visual Reviewer (Playwright Screenshots)
-A vision LLM (`qwen3-vl:8b`) analyzes Playwright screenshots of every route. Checks layout, color harmony, WCAG AA contrast (4.5:1), touch targets (44px+), and design system adherence.
+### 👁️ Visual Reviewer (Playwright Screenshots)
+> A vision LLM (`qwen3-vl:8b`) analyzes Playwright screenshots of every route. Checks layout, color harmony, WCAG AA contrast (4.5:1), touch targets (44px+), and design system adherence.
 
-### Auto-Revert on Rejection
-When code is rejected, the workspace reverts to the last green checkpoint. The builder always starts fresh from known-good state.
+### ⏪ Auto-Revert on Rejection
+> When code is rejected, the workspace reverts to the last green checkpoint. The builder always starts fresh from known-good state.
 
-### Burst Model Support
-First pass of a greenfield task uses `qwen3-coder:30b` (burst mode) for quality. Subsequent repair passes drop to `qwen2.5-coder:14b` for speed.
+### 💥 Burst Model Support
+> First pass of a greenfield task uses `qwen3-coder:30b` (burst mode) for quality. Subsequent repair passes drop to `qwen2.5-coder:14b` for speed. Best of both worlds.
 
-### Structured JSON Communication
-Typed JSON contracts between agents — `TicketSpec`, `BuildManifest`, `ReviewVerdict`, `DiffVerdict`. Parsers extract JSON from LLM output with keyword fallback for freeform responses.
+### 📐 Structured JSON Communication
+> Typed JSON contracts between agents — `TicketSpec`, `BuildManifest`, `ReviewVerdict`, `DiffVerdict`. Parsers extract JSON from LLM output with keyword fallback for freeform responses.
 
-### Test-First Workflow
-Tech Lead defines acceptance tests (`TEST:` blocks) before the builder writes code. The builder's exit condition becomes "build passes AND tests pass."
+### 🧪 Test-First Workflow
+> Tech Lead defines acceptance tests (`TEST:` blocks) before the builder writes code. The builder's exit condition becomes "build passes AND tests pass."
 
-### AST-Based RAG Indexing
-RAG index extracts function signatures, interface shapes, enum values, and import relationships. AST matches get a 2x scoring boost, surfacing structurally relevant files first.
+### 🌳 AST-Based RAG Indexing
+> RAG index extracts function signatures, interface shapes, enum values, and import relationships. AST matches get a 2x scoring boost, surfacing structurally relevant files first.
 
-### Success Rate Tracking
-Every task outcome is recorded: model, complexity score, pass count, rescue needed. A threshold engine suggests raising/lowering the complexity cutoff based on real data.
+### 📈 Success Rate Tracking
+> Every task outcome is recorded: model, complexity score, pass count, rescue needed. A threshold engine suggests raising/lowering the complexity cutoff based on real data.
 
-### Remote Flag Propagation
-Issues entering through the complex path carry a flag across delegation hops. When the flag reaches the Local Builder, it activates burst model override.
+### 🔀 Remote Flag Propagation
+> Issues entering through the complex path carry a flag across delegation hops. When the flag reaches the Local Builder, it activates burst model override.
 
-### Bridge/Proxy Git Deduplication
-All git operations (branch, commit, push) go through a single `/git/sync` endpoint. One source of truth, no duplicate logic.
+### 🌐 Bridge/Proxy Git Deduplication
+> All git operations (branch, commit, push) go through a single `/git/sync` endpoint. One source of truth, no duplicate logic.
 
-### Control Panel (closedloop.cmd)
-Windows batch script with menu-driven control — start/stop all services, check status, wake agents, view logs, build RAG index.
+### 🖥️ Control Panel (closedloop.cmd)
+> Windows batch script with menu-driven control — start/stop all services, check status, wake agents, view logs, build RAG index. One command to rule them all.
+
+### 🧪 134-Test Safety Net
+> Comprehensive test suite covering all pure-logic modules: utils, complexity router, scaffold engine, epic decomposer, delegation, code extractor, agent contracts, test-first, AST indexer, and success tracker.
 
 </details>
 
 ---
 
-## Quick Start
+## ⚡ Quick Start
 
 ### Prerequisites
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| **GPU VRAM** | 8GB (7B models only) | 16GB+ (run 14B-30B models) |
-| **RAM** | 16GB | 32GB |
-| **Storage** | 20GB for models | 50GB+ for model variety |
-| **Node.js** | 18+ | 20+ |
-| **OS** | Windows 10/11 | Windows 11 |
+| 🖥️ **GPU VRAM** | 8GB (7B models only) | 16GB+ (run 14B-30B models) |
+| 💾 **RAM** | 16GB | 32GB |
+| 💿 **Storage** | 20GB for models | 50GB+ for model variety |
+| 📦 **Node.js** | 18+ | 20+ |
+| 🪟 **OS** | Windows 10/11 | Windows 11 |
 
 ### Installation
 
@@ -274,13 +291,13 @@ cd closedloop
 # 2. Install dependencies
 npm install
 
-# 3. Pull the models (pick based on your VRAM)
-ollama pull qwen3:4b            # Routing + Diff Guardian (2.5GB)
-ollama pull qwen3.5:9b          # Strategist (6.6GB)
-ollama pull qwen2.5-coder:14b   # Tech Lead + Local Builder (9GB)
-ollama pull glm-4.7-flash       # Reviewer (19GB)
-ollama pull qwen3-vl:8b         # Visual Reviewer (5GB)
-ollama pull nomic-embed-text    # RAG embeddings (300MB)
+# 3. Pull the models you need (pick based on your VRAM)
+ollama pull qwen3:4b            # 🧭 Routing + Diff Guardian (2.5GB)
+ollama pull qwen3.5:9b          # 🧠 Strategist (6.6GB)
+ollama pull qwen2.5-coder:14b   # 📐🔨 Tech Lead + Local Builder (9GB)
+ollama pull glm-4.7-flash       # 📝 Reviewer (19GB)
+ollama pull qwen3-vl:8b         # 👁️ Visual Reviewer (5GB)
+ollama pull nomic-embed-text    # 📊 RAG embeddings (300MB)
 
 # 4. Build
 npm run build
@@ -292,7 +309,7 @@ npm run rag-index
 npm start
 ```
 
-### Configuration
+### ⚙️ Configuration
 
 Edit `.paperclip/project.json`:
 
@@ -332,7 +349,7 @@ Edit `.paperclip/project.json`:
 }
 ```
 
-### Optional: Remote Rescue (GLM-5)
+### 🆘 Optional: Remote Rescue (GLM-5)
 
 For the escape-hatch when local models get stuck:
 
@@ -340,51 +357,51 @@ For the escape-hatch when local models get stuck:
 set Z_AI_API_KEY=your-zhipu-ai-key   # z.ai API key
 ```
 
-**100% optional.** Without it, ClosedLoop runs fully offline — rescue falls through to the local retry loop.
+**100% optional.** Without it, ClosedLoop runs fully offline — rescue just falls through to the local retry loop.
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                         YOUR MACHINE (Consumer PC)                       │
+│                     🖥️ YOUR MACHINE (Consumer PC)                       │
 │                                                                          │
 │  ┌──────────────┐    ┌──────────────────────────────────────────────┐   │
-│  │  Paperclip    │    │          ClosedLoop Proxy (port 3201)        │   │
+│  │  📎 Paperclip │    │          ClosedLoop Proxy (port 3201)        │   │
 │  │  AI Platform  │◄──►│                                              │   │
 │  │  (port 3100)  │    │  ┌────────────┐  ┌────────────────────────┐ │   │
-│  └──────────────┘    │  │ RAG        │  │ Delegation Engine      │ │   │
+│  └──────────────┘    │  │ 🧠 RAG     │  │ 🔀 Delegation Engine  │ │   │
 │                       │  │ (AST+KW)   │  │ (Org Chart Routing)   │ │   │
 │  ┌──────────────┐    │  └────────────┘  └────────────────────────┘ │   │
-│  │  Ollama      │    │  ┌────────────┐  ┌────────────────────────┐ │   │
-│  │  LLM Server  │◄──►│  │ Git Ops    │  │ Scaffold Engine        │ │   │
+│  │  🦙 Ollama   │    │  ┌────────────┐  ┌────────────────────────┐ │   │
+│  │  LLM Server  │◄──►│  │ 📦 Git Ops │  │ 🏗️ Scaffold Engine    │ │   │
 │  │  (port 11434) │    │  │ (Branch/PR) │  │ (Zero-Shot CRUD)      │ │   │
 │  └──────────────┘    │  └────────────┘  └────────────────────────┘ │   │
 │                       └──────────────────────────────────────────────┘   │
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │              Bridge Server (port 3202)                            │   │
+│  │              🌉 Bridge Server (port 3202)                        │   │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐ │   │
-│  │  │ Build Loop    │  │ Sessions     │  │ Remote Rescue          │ │   │
+│  │  │ 🔄 Build Loop │  │ 💾 Sessions  │  │ 🆘 Remote Rescue     │ │   │
 │  │  │ (Green Gate)  │  │ (Checkpoints) │  │ (GLM-5 Fallback)     │ │   │
 │  │  └──────────────┘  └──────────────┘  └────────────────────────┘ │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │                     Your Project Workspace                        │   │
-│  │  Source Code  │  Tests  │  .reflections/  │  .tickets/            │   │
+│  │                  📁 Your Project Workspace                       │   │
+│  │  📄 Source Code  │  🧪 Tests  │  📊 .reflections/  │  📋 .tickets/│   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Testing
+## 🧪 Testing
 
 ```bash
 npx vitest run        # Run all 134 tests
-npx vitest --watch    # Watch mode
+npx vitest --watch    # Watch mode during development
 ```
 
 | Test Suite | Tests | What It Covers |
@@ -402,28 +419,30 @@ npx vitest --watch    # Watch mode
 
 ---
 
-## Design Philosophy
+## 💡 Design Philosophy
 
-1. **Local-first, cloud-optional** — Everything runs on your machine. Remote APIs are escape hatches, not dependencies.
-2. **Right-sized models** — A 4B model can route. A 14B model can code. Don't waste VRAM on tasks that don't need it.
-3. **Build-green invariant** — Code doesn't leave the builder until the build passes. No exceptions.
-4. **Memory over repetition** — Tried-approaches and reflection memory prevent the same mistake twice.
-5. **Mechanical gates over opinions** — Diff Guardian uses checklists, not subjective review.
-6. **Fail gracefully** — Remote rescue is optional. Burst mode is optional. Every feature degrades to the local baseline.
+1. 🏠 **Local-first, cloud-optional** — Everything runs on your machine. Remote APIs are escape hatches, not dependencies.
+2. 📐 **Right-sized models** — A 4B model can route. A 14B model can code. Don't waste VRAM on tasks that don't need it.
+3. ✅ **Build-green invariant** — Code doesn't leave the builder until the build passes. No exceptions.
+4. 🧠 **Memory over repetition** — Tried-approaches and reflection memory prevent the same mistake twice.
+5. 🛡️ **Mechanical gates over opinions** — Diff Guardian uses checklists, not subjective review. Objective, repeatable, fast.
+6. 🔄 **Fail gracefully** — Remote rescue is optional. Burst mode is optional. Every feature degrades to the local baseline.
 
 ---
 
-## Roadmap
+## 🗺️ Roadmap
 
 See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full backlog. Highlights:
 
-- **Parallel worktree exploration** — Spawn multiple builder instances, pick the best result
-- **Property-based testing in Diff Guardian** — Generate Hypothesis-style property tests for changed code
-- **Event-sourced state** — Full audit trail, replay from any point
+- 🔀 **Parallel worktree exploration** — Spawn multiple builder instances, pick the best result
+- 🧪 **Property-based testing in Diff Guardian** — Generate Hypothesis-style property tests for changed code
+- 📜 **Event-sourced state** — Full audit trail, replay from any point
 
 ---
 
-## Contributing
+## 🤝 Contributing
+
+ClosedLoop is open source. Contributions welcome:
 
 1. Fork the repository
 2. Create a feature branch
@@ -437,7 +456,7 @@ See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full backlog. Highlights:
 </p>
 
 <p align="center">
-  <sub>Star this repo if you believe local AI is the future of software development.</sub>
+  <sub>⭐ Star this repo if you believe local AI is the future of software development.</sub>
 </p>
 
 ## License
