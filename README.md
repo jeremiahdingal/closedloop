@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <em>ClosedLoop fixes this with orchestration — making 14B models outperform 70B models through RAG, build-green enforcement, and reflection memory. All local. All free.</em>
+  <em>ClosedLoop fixes this with orchestration — making 14B models outperform 70B models through RAG, build-green enforcement, and reflection memory. All local. Little to no cost.</em>
 </p>
 
 ---
@@ -44,7 +44,7 @@ Think of it like this:
 
 Most AI coding tools charge per token, cap your usage, or send your proprietary code to remote servers. ClosedLoop flips that model entirely:
 
-- 💰 **$0/month** — no API keys, no subscriptions, no per-token billing
+- 💰 **Little to no cost** — no subscriptions, no per-token billing (optional remote rescue API is the only paid component)
 - 🔒 **Your code stays on your machine** — zero data leaves your network
 - 🖥️ **Consumer hardware** — runs on a PC with a decent GPU (16GB+ VRAM recommended)
 - ♾️ **Unlimited usage** — run it 24/7, no rate limits, no quotas
@@ -500,9 +500,9 @@ npx vitest --watch
 | Claude API | $50-300+ | ❌ Code sent to Anthropic | ❌ | ❌ Rate limited |
 | GitHub Copilot | $19/user | ❌ Code sent to GitHub | ❌ | ⚠️ Fair use limits |
 | Cursor Pro | $20/user | ❌ Code sent to cloud | ❌ | ⚠️ Fast request limits |
-| **ClosedLoop** | **$0** | ✅ **Fully local** | ✅ **Yes** | ✅ **Unlimited** |
+| **ClosedLoop** | **~$0** | ✅ **Fully local** | ✅ **Yes** | ✅ **Unlimited** |
 
-*One-time cost: a GPU that can run 14B+ models (RTX 3060 12GB ~$200 used, RTX 4060 Ti 16GB ~$400)*
+*One-time cost: a GPU that can run 14B+ models (RTX 3060 12GB ~$200 used, RTX 4060 Ti 16GB ~$400). Remote rescue (GLM-5 via z.ai) is optional and pay-per-use — most tasks complete without it.*
 
 ---
 
