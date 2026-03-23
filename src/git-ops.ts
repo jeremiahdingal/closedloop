@@ -108,14 +108,17 @@ export async function commitAndPush(
     } catch (commitErr: any) {
       const commitStdout = commitErr.stdout?.toString() || '';
       const commitStderr = commitErr.stderr?.toString() || '';
-      const commitStatus = commitErr.status ?? 1;
+      const commitOutput = commitStdout + commitStderr;
 
-      console.error(`[git] Git commit FAILED (exit ${commitStatus}):`);
-      console.error(`[git] Commit stdout: ${commitStdout}`);
-      console.error(`[git] Commit stderr: ${commitStderr}`);
-      console.error(`[git] Files staged: ${files.join(', ')}`);
-
-      throw new Error(`Git commit failed: ${commitStderr || commitStdout || 'unknown error'}`);
+      // "nothing to commit" means files are identical to what's already on branch — treat as success
+      if (commitOutput.includes('nothing to commit') || commitOutput.includes('nothing added to commit')) {
+        console.log(`[git] No changes to commit (files unchanged) — treating as already committed`);
+        // Still run build validation on the existing branch
+      } else {
+        console.error(`[git] Git commit FAILED:`);
+        console.error(`[git] ${commitOutput.slice(0, 500)}`);
+        throw new Error(`Git commit failed: ${commitStderr || commitStdout || 'unknown error'}`);
+      }
     }
 
     // Push

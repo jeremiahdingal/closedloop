@@ -11,7 +11,7 @@ import { execSync } from 'child_process';
 import { getWorkspace } from './config';
 import { getIssueComments, postComment } from './paperclip-api';
 import { AGENTS } from './agent-types';
-import { getDefaultBranch } from './git-ops';
+import { getDefaultBranch, getBranchName } from './git-ops';
 
 const WORKSPACE = getWorkspace();
 
@@ -44,19 +44,23 @@ export async function runDiffGuardian(issueId: string): Promise<DiffGuardianResu
   const opts = { cwd: WORKSPACE, encoding: 'utf8' as const, timeout: 30000 };
 
   try {
-    // 1. Get changed files
+    // 1. Get changed files — use the feature branch, not HEAD (which may be master after commitAndPush)
     const defaultBranch = getDefaultBranch();
-    const changedFiles = execSync(`git diff ${defaultBranch}..HEAD --name-only`, opts)
+    const featureBranch = await getBranchName(issueId);
+
+    // Use three-dot diff to compare feature branch against merge base
+    const diffRef = featureBranch;
+    const changedFiles = execSync(`git diff ${defaultBranch}...${diffRef} --name-only`, opts)
       .split('\n')
       .filter(f => f.trim());
 
     if (changedFiles.length === 0) {
-      console.log(`[DiffGuardian] No changes detected for ${issueId.slice(0, 8)}`);
+      console.log(`[DiffGuardian] No changes detected for ${issueId.slice(0, 8)} (ref: ${diffRef})`);
       return { approved: true, issues: [] };
     }
 
     // 2. Get diff stats
-    const diffStats = execSync(`git diff ${defaultBranch}..HEAD --numstat`, opts);
+    const diffStats = execSync(`git diff ${defaultBranch}...${diffRef} --numstat`, opts);
     const lines = diffStats.split('\n').filter(l => l.trim());
 
     let totalAdditions = 0;

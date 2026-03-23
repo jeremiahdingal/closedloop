@@ -98,14 +98,17 @@ function createDefaultConfig(): ProjectConfig {
     paperclip: {
       companyId: 'ac5c469b-1f81-4f1f-9061-1dd9033ec831',
       agents: {
+        'complexity router': '093ee390-cfbf-4129-81d6-aeeb638c7d71',
         strategist: 'a90b07a4-f18c-4509-9d7b-b9f16eb098d6',
         'tech lead': 'dad994d7-5d3e-4101-ae57-82c7be9b778b',
         'local builder': 'caf931bf-516a-409f-813e-a29e14decb10',
         'coder remote': '954ce225-6dc8-4df7-8917-b597afbae60b',
         reviewer: 'eace3a19-bded-4b90-827e-cfc00f3900bd',
+        'diff guardian': '79641900-921d-400f-8eba-63373f5c0e17',
+        'visual reviewer': '787cbd9e-d10b-4bca-b486-e7f5fd99d184',
         sentinel: 'c7fb4dae-8ac3-4795-b1f6-d14db2021035',
         deployer: '5e234916-47ef-41a2-8c07-e9376ee6aa9c',
-        artist: '787cbd9e-d10b-4bca-b486-e7f5fd99d184',
+        'scaffold architect': 'f5366415-528e-4323-a029-8867cd47ffca',
       },
       agentKeys: {
         'a90b07a4-f18c-4509-9d7b-b9f16eb098d6': 'pcp_48d784f6edd3a907e7700cda9f93e36fc0d1030f4a6b6d04',
