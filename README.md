@@ -155,9 +155,9 @@ Each agent runs a different local model sized to its job — small models for ro
 |-------|------|-------|----------------|
 | 🧭 **Complexity Router** | Classifies incoming issues (bug vs. feature vs. epic) | `qwen3:4b` | Fast triage — only needs to output one routing decision |
 | 🧠 **Strategist** | CTO — analyzes, plans, decomposes work | `qwen3.5:9b` | Newer architecture for better reasoning; planning doesn't need code-gen size |
-| 📐 **Tech Lead** | Architect — specs, file lists, patterns | `deepcoder:14b` | Must understand codebase structure and dependencies |
-| 🔨 **Local Builder** | Engineer — writes actual code | `deepcoder:14b` | Core code generation, burst mode uses `qwen3-coder:30b` |
-| 📝 **Reviewer** | Quality gate — code review + build check | `glm-4.7:flash` | Fast, high-quality judgment for approve/reject decisions |
+| 📐 **Tech Lead** | Architect — specs, file lists, patterns | `qwen2.5-coder:14b` | Code-focused model that understands structure and dependencies |
+| 🔨 **Local Builder** | Engineer — writes actual code | `qwen2.5-coder:14b` | Core code generation, burst mode uses `qwen3-coder:30b` |
+| 📝 **Reviewer** | Quality gate — code review + build check | `glm-4.7-flash` | Fast 19GB model with strong judgment for approve/reject decisions |
 | 🛡️ **Diff Guardian** | Policy enforcer — mechanical diff validation | `qwen3:4b` | Checklist evaluation, no creative work needed |
 | 👁️ **Visual Reviewer** | UI/UX auditor — screenshot analysis | `qwen3-vl:8b` | Vision model for visual regression and accessibility checks |
 | 🔐 **Sentinel** | DevOps — CI/CD monitoring, security scans | `deepseek-r1:8b` | Reasoning model for root-cause analysis |
@@ -267,7 +267,7 @@ npm run rag-index   # Index your codebase (run once, re-run after major changes)
 ### 💥 Burst Model Support
 > **Problem:** Small local models (14B) struggle with greenfield code generation. Large models (30B) are too slow for iterative repair passes.
 >
-> **Solution:** First pass of a greenfield scaffold task uses `qwen3-coder:30b` (burst mode) for maximum generation quality. Subsequent repair passes drop to `deepcoder:14b` for fast iteration. Best of both worlds — quality for the initial generation, speed for fixes.
+> **Solution:** First pass of a greenfield scaffold task uses `qwen3-coder:30b` (burst mode) for maximum generation quality. Subsequent repair passes drop to `qwen2.5-coder:14b` for fast iteration. Best of both worlds — quality for the initial generation, speed for fixes.
 
 ### 🧪 134-Test Safety Net
 > **Problem:** Rapid refactoring across 15+ modules risks breaking things silently.
@@ -283,6 +283,26 @@ npm run rag-index   # Index your codebase (run once, re-run after major changes)
 > - `test-first.test.ts` — acceptance test spec parsing, vitest output parsing
 > - `ast-indexer.test.ts` — function/interface/enum/import extraction
 > - `success-tracker.test.ts` — outcome recording, model stats, threshold recommendations
+
+### 📐 Structured JSON Communication (MetaGPT Pattern)
+> **Problem:** Agents pass instructions in freeform text. Small local models misinterpret vague instructions, causing extra review loops.
+>
+> **Solution:** Typed JSON contracts between agents — `TicketSpec` (Strategist → Tech Lead), `BuildManifest` (Tech Lead → Builder), `ReviewVerdict` (Reviewer), `DiffVerdict` (Diff Guardian). Parsers extract JSON from LLM output with keyword fallback for when the model outputs freeform text instead.
+
+### 🧪 Test-First Workflow
+> **Problem:** "Build passes" is a weak exit condition — code can build but be logically wrong.
+>
+> **Solution:** Tech Lead can define acceptance tests (`TEST:` blocks) before the builder writes code. Tests are written to the workspace and run alongside the build. The builder's exit condition becomes "build passes AND tests pass." Test results are injected into retry prompts.
+
+### 🌳 AST-Based RAG Indexing
+> **Problem:** Flat text search misses structural queries like "find all functions that accept orderId."
+>
+> **Solution:** RAG index now extracts function signatures (with params and return types), interface field shapes, enum values, and import relationships using regex-based AST parsing. AST matches get a 2x scoring boost in RAG queries, surfacing structurally relevant files first.
+
+### 📈 Success Rate Tracking for Model Routing
+> **Problem:** The complexity routing threshold (score >= 7 → remote) is a static guess. No data on whether it's right.
+>
+> **Solution:** Every task outcome is recorded: model used, complexity score, pass count, whether rescue was needed. A threshold recommendation engine analyzes boundary performance and suggests raising/lowering the threshold based on real data. Confidence levels (low/medium/high) prevent premature adjustments.
 
 ### 🖥️ Control Panel (closedloop.cmd)
 > **Problem:** Managing Ollama + Paperclip + ClosedLoop + Bridge manually is tedious.
@@ -316,8 +336,8 @@ npm install
 # 3. Pull the models you need (pick based on your VRAM)
 ollama pull qwen3:4b            # Routing + Diff Guardian (2.5GB)
 ollama pull qwen3.5:9b          # Strategist (6.6GB) — newest architecture for planning
-ollama pull deepcoder:14b       # Tech Lead + Local Builder (9GB)
-ollama pull glm-4.7:flash       # Reviewer — fast approve/reject decisions
+ollama pull qwen2.5-coder:14b   # Tech Lead + Local Builder (9GB)
+ollama pull glm-4.7-flash       # Reviewer — fast approve/reject decisions
 ollama pull qwen3-vl:8b         # Visual Reviewer (5GB)
 ollama pull nomic-embed-text    # RAG embeddings (300MB)
 
@@ -362,10 +382,12 @@ Edit `.paperclip/project.json`:
     "ollamaPort": 11434,
     "models": {
       "strategist": "qwen3.5:9b",
-      "tech lead": "deepcoder:14b",
-      "local builder": "deepcoder:14b",
+      "tech lead": "qwen2.5-coder:14b",
+      "local builder": "qwen2.5-coder:14b",
       "local builder burst": "qwen3-coder:30b",
-      "reviewer": "glm-4.7:flash",
+      "reviewer": "glm-4.7-flash",
+      "sentinel": "deepseek-r1:8b",
+      "deployer": "qwen3:8b",
       "diff guardian": "qwen3:4b",
       "visual reviewer": "qwen3-vl:8b",
       "complexity router": "qwen3:4b"
@@ -481,28 +503,6 @@ npx vitest --watch
 | **ClosedLoop** | **$0** | ✅ **Fully local** | ✅ **Yes** | ✅ **Unlimited** |
 
 *One-time cost: a GPU that can run 14B+ models (RTX 3060 12GB ~$200 used, RTX 4060 Ti 16GB ~$400)*
-
----
-
-### 📐 Structured JSON Communication (MetaGPT Pattern)
-> **Problem:** Agents pass instructions in freeform text. Small local models misinterpret vague instructions, causing extra review loops.
->
-> **Solution:** Typed JSON contracts between agents — `TicketSpec` (Strategist → Tech Lead), `BuildManifest` (Tech Lead → Builder), `ReviewVerdict` (Reviewer), `DiffVerdict` (Diff Guardian). Parsers extract JSON from LLM output with keyword fallback for when the model outputs freeform text instead.
-
-### 🧪 Test-First Workflow
-> **Problem:** "Build passes" is a weak exit condition — code can build but be logically wrong.
->
-> **Solution:** Tech Lead can define acceptance tests (`TEST:` blocks) before the builder writes code. Tests are written to the workspace and run alongside the build. The builder's exit condition becomes "build passes AND tests pass." Test results are injected into retry prompts.
-
-### 🌳 AST-Based RAG Indexing
-> **Problem:** Flat text search misses structural queries like "find all functions that accept orderId."
->
-> **Solution:** RAG index now extracts function signatures (with params and return types), interface field shapes, enum values, and import relationships using regex-based AST parsing. AST matches get a 2x scoring boost in RAG queries, surfacing structurally relevant files first.
-
-### 📈 Success Rate Tracking
-> **Problem:** The complexity routing threshold (score >= 7 → remote) is a static guess. No data on whether it's right.
->
-> **Solution:** Every task outcome is recorded: model used, complexity score, pass count, whether rescue was needed. A threshold recommendation engine analyzes boundary performance and suggests raising/lowering the threshold based on real data. Confidence levels (low/medium/high) prevent premature adjustments.
 
 ---
 
