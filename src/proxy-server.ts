@@ -20,6 +20,13 @@ import { executeBashBlocks } from './bash-executor';
 import { detectAndDelegate } from './delegation';
 import { runArtistStage } from './artist-recorder';
 import { runDiffGuardian } from './diff-guardian';
+import {
+  runExploration,
+  handleReviewerSelection,
+  isExploring,
+  getExplorationState,
+  parseApproachHints,
+} from './exploration-orchestrator';
 import { ragIndexer } from './rag-indexer';
 import { OllamaRequest, OllamaResponse } from './types';
 
@@ -175,10 +182,9 @@ export function createProxy(): http.Server {
       return;
     }
 
-    // Build Ollama payload — use our configured model, not the Paperclip adapter template
-    const configuredModel = agentId ? getAgentModel(AGENT_NAMES[agentId]?.toLowerCase() || '') : null;
+    // Build Ollama payload
     const ollamaPayload: OllamaRequest = {
-      model: configuredModel || parsedBody.model,
+      model: parsedBody.model,
       stream: parsedBody.stream ?? false,
       messages: [...(parsedBody.messages || [])],
     };
@@ -226,14 +232,35 @@ export function createProxy(): http.Server {
           const content = parsed.message?.content || parsed.response || '';
 
           if (content.trim()) {
-            // Complexity Router output is routing metadata — don't pollute issue comments
-            if (agentId !== AGENTS['complexity router']) {
-              await postComment(issueId, agentId, content.trim());
-            }
+            await postComment(issueId, agentId, content.trim());
 
             // Detect delegation and reassign via API (triggers auto-wakeup)
             if (agentId) {
-              await detectAndDelegate(issueId, agentId, content);
+              // Hook: Tech Lead [EXPLORE] triggers parallel worktree exploration
+              if (agentId === AGENTS['tech lead'] && content.includes('[EXPLORE]')) {
+                const approaches = parseApproachHints(content);
+                if (approaches) {
+                  console.log(`[closedloop] Tech Lead requested exploration with ${approaches.length} approaches`);
+                  setImmediate(async () => {
+                    const result = await runExploration(issueId, approaches);
+                    if (result.status === 'merged') {
+                      // Auto-selected or single passing approach — continue to Reviewer
+                      await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                    } else if (result.status === 'comparing') {
+                      // Multiple passing approaches — Reviewer needs to compare
+                      await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                    } else if (result.status === 'failed') {
+                      // All failed — send back to Tech Lead
+                      await patchIssue(issueId, { assigneeAgentId: AGENTS['tech lead'] });
+                    }
+                  });
+                  // Skip normal delegation since we're handling it
+                } else {
+                  await detectAndDelegate(issueId, agentId, content);
+                }
+              } else {
+                await detectAndDelegate(issueId, agentId, content);
+              }
             }
 
             // Hook 3: Complexity Router post-response — score issue and route
@@ -245,6 +272,8 @@ export function createProxy(): http.Server {
                 if (complexity.score >= 7) {
                   // Complex issue — call Remote Architect then hand to Strategist
                   await callRemoteArchitect(issueId, routerIssue);
+                  // Mark for parallel exploration when it reaches the builder
+                  console.log(`[closedloop] Issue ${issueId.slice(0, 8)} marked for parallel exploration (score: ${complexity.score})`);
                 }
                 // Always route to Strategist after scoring
                 await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
@@ -298,40 +327,20 @@ export function createProxy(): http.Server {
 
                     // If build failed, send back to Local Builder to fix FIRST
                     if (!buildResult.success) {
-                      // Check loop count even on build failure to prevent infinite loops
-                      if (loopStatus.exceeded) {
-                        console.log(`[closedloop] LOOP EXCEEDED on build failure (${loopStatus.count}) - Creating PR for human intervention`);
-                        await postComment(
-                          issueId,
-                          null,
-                          `⚠️ **Build Loop Exceeded (${loopStatus.count} passes)**\n\n` +
-                          `Build has failed repeatedly. Creating PR for human intervention.\n\n` +
-                          `Last error:\n\`\`\`\n${(buildResult.output || '').slice(0, 500)}\n\`\`\``
-                        );
-                        try {
-                          await createPullRequest(issueId);
-                          resetLoopCounter(issueId);
-                          console.log(`[closedloop] PR created for human intervention (build failures)`);
-                        } catch (prErr: any) {
-                          console.error(`[closedloop] Failed to create PR:`, prErr.message);
-                        }
-                        await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
-                      } else {
-                        console.log(`[closedloop] Build FAILED (pass ${loopStatus.count}) - sending back to Local Builder`);
-                        await postComment(
-                          issueId,
-                          AGENTS['local builder'],
-                          `⚠️ **Build Failed - Fix Before Review**\n\n` +
-                          `Your code committed successfully but the build failed. Please fix the build errors before sending to Reviewer.\n\n` +
-                          `\`\`\`\n${buildResult.output || 'Build error output not available'}\n\`\`\`\n\n` +
-                          `**Action required:**\n` +
-                          `1. Run \`yarn build\` locally to see full errors\n` +
-                          `2. Fix the build errors in the files you just wrote\n` +
-                          `3. Re-commit and the build will be verified again`
-                        );
-                        await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
-                        console.log(`[closedloop] Sent back to Local Builder for build fixes`);
-                      }
+                      console.log(`[closedloop] Build FAILED - sending back to Local Builder to fix before Reviewer`);
+                      await postComment(
+                        issueId,
+                        AGENTS['local builder'],
+                        `⚠️ **Build Failed - Fix Before Review**\n\n` +
+                        `Your code committed successfully but the build failed. Please fix the build errors before sending to Reviewer.\n\n` +
+                        `\`\`\`\n${buildResult.output || 'Build error output not available'}\n\`\`\`\n\n` +
+                        `**Action required:**\n` +
+                        `1. Run \`yarn build\` locally to see full errors\n` +
+                        `2. Fix the build errors in the files you just wrote\n` +
+                        `3. Re-commit and the build will be verified again`
+                      );
+                      await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+                      console.log(`[closedloop] Sent back to Local Builder for build fixes`);
                     } else {
                       // Build passed - continue with normal flow
                       // Check if loop exceeded - auto create PR for human intervention
@@ -386,9 +395,8 @@ export function createProxy(): http.Server {
             if (agentId) {
               const commandsWereExecuted = await executeBashBlocks(issueId, agentId, content);
 
-              // After executing bash commands, re-prompt the agent (but NOT Strategist —
-              // Strategist should delegate, not loop on bash output)
-              if (commandsWereExecuted && agentId !== AGENTS['local builder'] && agentId !== AGENTS.strategist) {
+              // After executing bash commands, re-prompt the agent
+              if (commandsWereExecuted && agentId !== AGENTS['local builder']) {
                 console.log(`[closedloop] Commands executed - re-assigning to ${AGENT_NAMES[agentId] || 'agent'} for follow-up...`);
                 try {
                   const currentIssue = await getIssueDetails(issueId);
@@ -403,8 +411,26 @@ export function createProxy(): http.Server {
               }
             }
 
+            // Reviewer: handle exploration comparison if issue is in exploration mode
+            if (agentId === AGENTS.reviewer && isExploring(issueId)) {
+              const { handled, merged } = await handleReviewerSelection(issueId, content);
+              if (handled) {
+                if (merged) {
+                  // Winner merged — continue normal flow to Reviewer for final review
+                  console.log(`[closedloop] Exploration winner merged — sending to Reviewer for final review`);
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                } else {
+                  // Rejected or unparseable — send back to Tech Lead
+                  const state = getExplorationState(issueId);
+                  if (!state || state.status === 'failed') {
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS['tech lead'] });
+                  }
+                }
+              }
+            }
+
             // Reviewer: validate changes and approve/reject before PR creation
-            if (agentId === AGENTS.reviewer) {
+            if (agentId === AGENTS.reviewer && !isExploring(issueId)) {
               const reviewApproved =
                 content.toLowerCase().includes('approved') ||
                 content.toLowerCase().includes('looks good') ||
@@ -474,9 +500,9 @@ export function createProxy(): http.Server {
                   // Reset loop counter on successful PR
                   resetLoopCounter(issueId);
 
-                  // Mark issue as in_review to stop further processing
-                  await patchIssue(issueId, { status: 'in_review', assigneeAgentId: AGENTS['visual reviewer'] } as any);
-                  console.log(`[closedloop] Issue marked in_review, assigned to Visual Reviewer`);
+                  // Trigger Visual Reviewer for visual audit
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS['visual reviewer'] });
+                  console.log(`[closedloop] Auto-assigned to Visual Reviewer for feature recording`);
 
                   // Hook 7: Goal completion check after PR creation
                   await checkGoalCompletion(issueId);

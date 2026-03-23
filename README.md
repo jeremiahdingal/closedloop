@@ -220,8 +220,13 @@ Each agent runs a different local model, sized to its job:
 >
 > **Solution:** Before writing code, the builder must list which files it will modify vs. create and state its assumptions. This pre-flight check forces the model to reason about the codebase before generating, catching misunderstandings early.
 
+### 🔀 Parallel Worktree Exploration
+> **Problem:** For ambiguous tasks, the builder picks one approach and commits to it. If it's wrong, the whole review loop restarts.
+>
+> **Solution:** For complex tasks (score >= 7 or Tech Lead `[EXPLORE]` signal), ClosedLoop spawns 2-3 builder runs in separate git worktrees with different approach strategies. Each approach is isolated — no cross-contamination. Reviewer compares passing approaches and picks the best one. Cost of exploration with local models is near-zero.
+
 <details>
-<summary><strong>📋 All Features (18 total)</strong></summary>
+<summary><strong>📋 All Features (19 total)</strong></summary>
 
 ### 🔨 Scaffold Engine (Zero-Shot CRUD)
 > CRUD APIs are boilerplate. When the router detects a CRUD ticket (entity + fields + table), the Scaffold Engine generates all files deterministically in one shot — routes, service layer, Zod schemas, DB types, enum entries. No LLM needed.
@@ -262,8 +267,8 @@ Each agent runs a different local model, sized to its job:
 ### 🖥️ Control Panel (closedloop.cmd)
 > Windows batch script with menu-driven control — start/stop all services, check status, wake agents, view logs, build RAG index. One command to rule them all.
 
-### 🧪 134-Test Safety Net
-> Comprehensive test suite covering all pure-logic modules: utils, complexity router, scaffold engine, epic decomposer, delegation, code extractor, agent contracts, test-first, AST indexer, and success tracker.
+### 🧪 154-Test Safety Net
+> Comprehensive test suite covering all pure-logic modules: utils, complexity router, scaffold engine, epic decomposer, delegation, code extractor, agent contracts, test-first, AST indexer, success tracker, worktree ops, and exploration orchestrator.
 
 </details>
 
@@ -400,7 +405,7 @@ set Z_AI_API_KEY=your-zhipu-ai-key   # z.ai API key
 ## 🧪 Testing
 
 ```bash
-npx vitest run        # Run all 134 tests
+npx vitest run        # Run all 154 tests
 npx vitest --watch    # Watch mode during development
 ```
 
@@ -416,6 +421,8 @@ npx vitest --watch    # Watch mode during development
 | `test-first.test.ts` | 11 | Acceptance test spec parsing, vitest output parsing |
 | `ast-indexer.test.ts` | 16 | Function/interface/enum/import AST extraction |
 | `success-tracker.test.ts` | 13 | Outcome recording, model stats, threshold tuning |
+| `worktree-ops.test.ts` | 2 | Git worktree path generation |
+| `exploration-orchestrator.test.ts` | 18 | Approach parsing, comparison prompts, reviewer selection |
 
 ---
 
@@ -434,7 +441,6 @@ npx vitest --watch    # Watch mode during development
 
 See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full backlog. Highlights:
 
-- 🔀 **Parallel worktree exploration** — Spawn multiple builder instances, pick the best result
 - 🧪 **Property-based testing in Diff Guardian** — Generate Hypothesis-style property tests for changed code
 - 📜 **Event-sourced state** — Full audit trail, replay from any point
 

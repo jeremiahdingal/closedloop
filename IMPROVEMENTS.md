@@ -35,10 +35,19 @@ Track which model succeeded/failed for which task complexity level:
 - Threshold recommendation engine: auto-suggests raising/lowering the complexity threshold
 - Confidence levels: low (<10 samples), medium (10-30), high (30+)
 
-## High Effort
+## Completed (High Effort)
 
-### 5. Parallel Worktree Exploration (ConTree / Vibe Kanban)
-For ambiguous tasks, spawn 2-3 Local Builder instances in separate git worktrees with different approaches. Reviewer picks the best result. Cost of exploration with local models is near-zero. Especially powerful for Scaffold Architect — generate multiple CRUD variants, review the best.
+### 5. Parallel Worktree Exploration ✅
+For ambiguous/complex tasks (score >= 7 or Tech Lead `[EXPLORE]` signal), spawns 2-3 Local Builder instances in separate git worktrees with different approaches:
+- Each approach runs sequentially (shared GPU) in an isolated git worktree
+- `node_modules` shared via Windows junctions (no multi-GB duplication)
+- Reviewer compares results from all passing approaches
+- Auto-selects when only one approach passes build
+- Winner's branch merged onto canonical issue branch, losers cleaned up
+- New modules: `worktree-ops.ts` (git worktree CRUD) + `exploration-orchestrator.ts` (orchestration, comparison, selection)
+- 20 new tests (154 total)
+
+## High Effort
 
 ### 6. Property-Based Testing in Diff Guardian
 Instead of reviewing diffs syntactically, Diff Guardian generates Hypothesis-style property tests for changed code and runs them. Example: "for any valid payment amount, the create endpoint should return 201 and the get endpoint should return the same amount." Anthropic's research found real NumPy bugs with this approach.
