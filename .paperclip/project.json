@@ -111,8 +111,8 @@
     "models": {
       "complexity router": "qwen3:4b",
       "strategist": "qwen3.5:9b",
-      "tech lead": "qwen2.5-coder:14b",
-      "local builder": "qwen2.5-coder:14b",
+      "tech lead": "deepcoder:latest",
+      "local builder": "deepcoder:latest",
       "local builder burst": "qwen3-coder:30b",
       "reviewer": "glm-4.7-flash",
       "diff guardian": "qwen3:4b",

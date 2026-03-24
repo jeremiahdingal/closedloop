@@ -74,9 +74,9 @@ sequenceDiagram
     participant GH as 📋 Issue
     participant CR as 🧭 Complexity Router<br/>(qwen3:4b)
     participant ST as 🧠 Strategist<br/>(qwen3.5:9b)
-    participant TL as 📐 Tech Lead<br/>(qwen2.5-coder:14b)
+    participant TL as 📐 Tech Lead<br/>(deepcoder:14b)
     participant RAG as 📊 RAG Index<br/>(AST+KW)
-    participant BL as 🔨 Local Builder<br/>(qwen2.5-coder:14b)
+    participant BL as 🔨 Local Builder<br/>(deepcoder:14b)
     participant BRG as 🌉 Bridge<br/>(Build Loop)
     participant RV as 📝 Reviewer<br/>(glm-4.7-flash)
     participant DG as 🛡️ Diff Guardian<br/>(qwen3:4b)
@@ -178,8 +178,8 @@ Each agent runs a different local model, sized to its job:
 |-------|------|-------|------|
 | 🧭 **Complexity Router** | Classifies issues, picks pipeline path | `qwen3:4b` | 2.5GB |
 | 🧠 **Strategist** | CTO — analyzes, plans, decomposes | `qwen3.5:9b` | 6.6GB |
-| 📐 **Tech Lead** | Architect — specs, file lists, patterns | `qwen2.5-coder:14b` | 9GB |
-| 🔨 **Local Builder** | Engineer — writes actual code | `qwen2.5-coder:14b` | 9GB |
+| 📐 **Tech Lead** | Architect — specs, file lists, patterns | `deepcoder:14b` | 9GB |
+| 🔨 **Local Builder** | Engineer — writes actual code | `deepcoder:14b` | 9GB |
 | 📝 **Reviewer** | Quality gate — approve/reject | `glm-4.7-flash` | 19GB |
 | 🛡️ **Diff Guardian** | Policy enforcer — mechanical checklist | `qwen3:4b` | 2.5GB |
 | 👁️ **Visual Reviewer** | UI/UX auditor — screenshot analysis | `qwen3-vl:8b` | 5GB |
@@ -244,7 +244,7 @@ Each agent runs a different local model, sized to its job:
 > When code is rejected, the workspace reverts to the last green checkpoint. The builder always starts fresh from known-good state.
 
 ### 💥 Burst Model Support
-> First pass of a greenfield task uses `qwen3-coder:30b` (burst mode) for quality. Subsequent repair passes drop to `qwen2.5-coder:14b` for speed. Best of both worlds.
+> First pass of a greenfield task uses `qwen3-coder:30b` (burst mode) for quality. Subsequent repair passes drop to `deepcoder:14b` for speed. Best of both worlds.
 
 ### 📐 Structured JSON Communication
 > Typed JSON contracts between agents — `TicketSpec`, `BuildManifest`, `ReviewVerdict`, `DiffVerdict`. Parsers extract JSON from LLM output with keyword fallback for freeform responses.
@@ -299,7 +299,7 @@ npm install
 # 3. Pull the models you need (pick based on your VRAM)
 ollama pull qwen3:4b            # 🧭 Routing + Diff Guardian (2.5GB)
 ollama pull qwen3.5:9b          # 🧠 Strategist (6.6GB)
-ollama pull qwen2.5-coder:14b   # 📐🔨 Tech Lead + Local Builder (9GB)
+ollama pull deepcoder:14b   # 📐🔨 Tech Lead + Local Builder (9GB)
 ollama pull glm-4.7-flash       # 📝 Reviewer (19GB)
 ollama pull qwen3-vl:8b         # 👁️ Visual Reviewer (5GB)
 ollama pull nomic-embed-text    # 📊 RAG embeddings (300MB)
@@ -342,8 +342,8 @@ Edit `.paperclip/project.json`:
     "ollamaPort": 11434,
     "models": {
       "strategist": "qwen3.5:9b",
-      "tech lead": "qwen2.5-coder:14b",
-      "local builder": "qwen2.5-coder:14b",
+      "tech lead": "deepcoder:14b",
+      "local builder": "deepcoder:14b",
       "local builder burst": "qwen3-coder:30b",
       "reviewer": "glm-4.7-flash",
       "diff guardian": "qwen3:4b",
