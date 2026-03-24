@@ -182,9 +182,11 @@ export function createProxy(): http.Server {
       return;
     }
 
-    // Build Ollama payload
+    // Build Ollama payload — use our configured model, not Paperclip's adapter template
+    const agentNameKey = AGENT_NAMES[agentId || '']?.toLowerCase() || '';
+    const configuredModel = agentNameKey ? getAgentModel(agentNameKey) : null;
     const ollamaPayload: OllamaRequest = {
-      model: parsedBody.model,
+      model: configuredModel || parsedBody.model,
       stream: parsedBody.stream ?? false,
       messages: [...(parsedBody.messages || [])],
     };
@@ -232,7 +234,10 @@ export function createProxy(): http.Server {
           const content = parsed.message?.content || parsed.response || '';
 
           if (content.trim()) {
-            await postComment(issueId, agentId, content.trim());
+            // Don't post CR output as comments — it pollutes the issue
+            if (agentId !== AGENTS['complexity router']) {
+              await postComment(issueId, agentId, content.trim());
+            }
 
             // Detect delegation and reassign via API (triggers auto-wakeup)
             if (agentId) {
@@ -496,13 +501,13 @@ export function createProxy(): http.Server {
                 try {
                   await createPullRequest(issueId);
                   console.log(`[closedloop] PR created after DiffGuardian approval`);
-                  
+
+                  // Mark issue as in_review to stop further agent processing
+                  await patchIssue(issueId, { status: 'in_review' });
+                  console.log(`[closedloop] Issue marked in_review`);
+
                   // Reset loop counter on successful PR
                   resetLoopCounter(issueId);
-
-                  // Trigger Visual Reviewer for visual audit
-                  await patchIssue(issueId, { assigneeAgentId: AGENTS['visual reviewer'] });
-                  console.log(`[closedloop] Auto-assigned to Visual Reviewer for feature recording`);
 
                   // Hook 7: Goal completion check after PR creation
                   await checkGoalCompletion(issueId);
