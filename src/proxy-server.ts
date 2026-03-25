@@ -173,28 +173,23 @@ export function createProxy(): http.Server {
     }
 
     // Hook 1: Goal guard — prevent Local Builder from directly handling Goal/Epic issues
-    // ONLY redirect if Local Builder is assigned. If Strategist is assigned, let it decompose.
+    // Route to Epic Decoder (GLM-5) for decomposition
     if (issueId && agentId === AGENTS['local builder']) {
       const builderIssue = await getIssueDetails(issueId);
       if (builderIssue && isGoalIssue(builderIssue)) {
-        console.log(`[closedloop] Goal guard: redirecting Goal issue ${issueId.slice(0, 8)} away from Local Builder`);
-        await postComment(issueId, null, '_Goal/Epic issue detected — redirecting to Complexity Router for decomposition._');
-        const routerTarget = AGENTS['complexity router'] || AGENTS.strategist;
-        await patchIssue(issueId, { assigneeAgentId: routerTarget });
+        console.log(`[closedloop] Goal guard: redirecting Goal issue ${issueId.slice(0, 8)} to Epic Decoder`);
+        await postComment(issueId, null, '_Goal/Epic issue detected — sending to Epic Decoder (GLM-5) for ticket decomposition._');
+        await patchIssue(issueId, { assigneeAgentId: AGENTS['epic decoder'] });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ message: { role: 'assistant', content: '_Redirected Goal issue to Complexity Router._' } }));
+        res.end(JSON.stringify({ message: { role: 'assistant', content: '_Redirected Goal issue to Epic Decoder for decomposition._' } }));
         return;
       }
     }
 
-    // Hook 1b: Allow Strategist to decompose Goals/Epics directly (skip Complexity Router)
-    // Complexity Router is only for NEW issues. If Strategist is already assigned, let it work.
-    if (issueId && agentId === AGENTS.strategist) {
-      const stratIssue = await getIssueDetails(issueId);
-      if (stratIssue && isGoalIssue(stratIssue)) {
-        console.log(`[closedloop] Goal issue ${issueId.slice(0, 8)} assigned to Strategist - allowing decomposition`);
-        // Don't redirect - let Strategist decompose
-      }
+    // Hook 1b: Epic Decoder — decompose goals into tickets using GLM-5
+    if (issueId && agentId === AGENTS['epic decoder']) {
+      console.log(`[closedloop] Epic Decoder processing Goal ${issueId.slice(0, 8)}`);
+      // Let it process — the Coder Remote handler will catch it and call GLM-5
     }
 
     // Hook 2: Burst model override for greenfield scaffold issues
@@ -265,6 +260,57 @@ export function createProxy(): http.Server {
         await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ message: { role: 'assistant', content: '_GLM-5 unavailable, reassigned to Local Builder._' } }));
+        return;
+      }
+    }
+
+    // Hook 3b: Epic Decoder — route to GLM-5 for ticket decomposition
+    if (agentId === AGENTS['epic decoder'] && issueId) {
+      console.log(`[proxy:${proxyPort}] Epic Decoder -> GLM-5 (remote) | issue=${issueId.slice(0, 8)}`);
+      try {
+        const issueContext = await buildIssueContext(issueId, agentId);
+        const messages = [...(parsedBody.messages || [])];
+        if (issueContext) messages.push({ role: 'user', content: issueContext });
+        const fullPrompt = messages.map((m: any) => `[${m.role}]: ${m.content}`).join('\n\n');
+        const remoteResult = await callZAI(
+          fullPrompt,
+          'You are an expert software architect specializing in breaking down large epics into narrow, buildable tickets. ' +
+          'Output tickets using this exact format:\n\n' +
+          '## Ticket: <title>\n' +
+          '**Objective:** <one sentence>\n' +
+          '**Files:** <exact file paths>\n' +
+          '**Acceptance Criteria:**\n' +
+          '- [ ] <testable criterion>\n' +
+          '**Dependencies:** <other tickets or None>\n\n' +
+          'Create one ticket per feature. Be specific about file paths. Do NOT write implementation code.'
+        );
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: { role: 'assistant', content: remoteResult } }));
+
+        // Post-process: parse ticket decomposition and create child issues
+        setImmediate(async () => {
+          try {
+            if (remoteResult.includes('## Ticket:')) {
+              console.log(`[closedloop] Epic Decoder produced ticket decomposition`);
+              await decomposeGoalIntoTickets(issueId, remoteResult);
+              await postComment(issueId, agentId, `✅ Epic Decoder (GLM-5) decomposed epic into tickets. Child issues created.`);
+            } else {
+              console.log(`[closedloop] Epic Decoder did not produce ticket decomposition`);
+              await postComment(issueId, agentId, `⚠️ Epic Decoder output did not contain ticket decomposition. Please try again.`);
+            }
+          } catch (err: any) {
+            console.error(`[closedloop] Epic Decoder post-process error: ${err.message}`);
+            await postComment(issueId, agentId, `_Epic Decoder failed to create tickets: ${err.message}_`);
+          }
+        });
+        return;
+      } catch (err: any) {
+        console.error(`[closedloop] Epic Decoder GLM-5 call failed: ${err.message}`);
+        await postComment(issueId, agentId, `_Epic Decoder (GLM-5) failed: ${err.message}. Falling back to Strategist._`);
+        // Fallback: reassign to strategist
+        await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: { role: 'assistant', content: '_GLM-5 unavailable, reassigned to Strategist._' } }));
         return;
       }
     }
