@@ -139,7 +139,7 @@ export async function callRemoteRescue(
     'Produce exact, minimal code fixes using FILE: blocks.';
 
   const userPrompt =
-    'Workspace: shop-diary-v2\nTouched files:\n' + touchedFiles.join('\n') +
+    'Workspace: shop-diary-v3\nTouched files:\n' + touchedFiles.join('\n') +
     '\n\nRepeated build error:\n' + errorContext.substring(0, 800) +
     '\n\nFix using FILE: format:\nFILE: relative/path/to/file.ext\n```lang\n// code\n```';
 
