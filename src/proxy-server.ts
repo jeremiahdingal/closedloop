@@ -423,7 +423,17 @@ export function createProxy(): http.Server {
 
                     // If build failed, send back to Local Builder to fix FIRST
                     if (!buildResult.success) {
-                      console.log(`[closedloop] Build FAILED - sending back to Local Builder to fix before Reviewer`);
+                      console.log(`[closedloop] Build FAILED - saving to tried-approaches memory`);
+                      
+                      // Save this failed attempt to memory
+                      try {
+                        const { saveTriedApproach } = await import('./tried-approaches');
+                        await saveTriedApproach(issueId, writtenFiles, buildResult.output || 'Build failed');
+                        console.log(`[closedloop] Saved failed attempt to memory`);
+                      } catch (err: any) {
+                        console.log(`[closedloop] Failed to save tried-approaches: ${err.message}`);
+                      }
+                      
                       await postComment(
                         issueId,
                         AGENTS['local builder'],
@@ -433,7 +443,8 @@ export function createProxy(): http.Server {
                         `**Action required:**\n` +
                         `1. Run \`yarn build\` locally to see full errors\n` +
                         `2. Fix the build errors in the files you just wrote\n` +
-                        `3. Re-commit and the build will be verified again`
+                        `3. Re-commit and the build will be verified again\n\n` +
+                        `**Note:** This failed attempt has been saved to memory. Your next attempt will include this error context to help you avoid repeating the same mistake.`
                       );
                       await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
                       console.log(`[closedloop] Sent back to Local Builder for build fixes`);
@@ -572,7 +583,31 @@ export function createProxy(): http.Server {
                 }
               } else {
                 // Reviewer rejected - send back to Local Builder
-                console.log(`[closedloop] Reviewer found issues - sending back to Local Builder`);
+                console.log(`[closedloop] Reviewer found issues - saving to reflection memory`);
+
+                // Save reviewer feedback to reflection memory
+                try {
+                  const { extractAndSaveReflections } = await import('./reflection-memory');
+                  const { getIssueComments } = await import('./paperclip-api');
+                  // Get the files from recent builder commits (approximate from recent comments)
+                  const recentComments = await getIssueComments(issueId);
+                  const fileRegex = /`([\w./\\-]+\.(tsx?|json))`/g;
+                  const filesChanged = new Set<string>();
+                  
+                  for (const comment of recentComments.slice(0, 10)) {
+                    if (comment.body.includes('committed') || comment.body.includes('FILE:')) {
+                      const matches = comment.body.matchAll(fileRegex);
+                      for (const match of matches) {
+                        filesChanged.add(match[1]);
+                      }
+                    }
+                  }
+                  
+                  await extractAndSaveReflections(issueId, Array.from(filesChanged));
+                  console.log(`[closedloop] Saved reviewer feedback to reflection memory`);
+                } catch (err: any) {
+                  console.log(`[closedloop] Failed to save reflections: ${err.message}`);
+                }
 
                 // Check if loop exceeded — skip to PR instead of bouncing back
                 const loopStatus = getLoopStatus(issueId);

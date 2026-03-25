@@ -213,6 +213,8 @@ export async function buildLocalBuilderContext(
     }
   }
 
+  const filesToReadArray = Array.from(filesToRead);
+
   // Build file context section
   let fileContext = '\n\n== EXISTING FILES (for reference ONLY - DO NOT re-analyze) ==\n';
   fileContext += 'QUICK IMPLEMENTATION GUIDE: Look at these files to understand the current structure.\n';
@@ -255,6 +257,28 @@ export async function buildLocalBuilderContext(
     } catch (err: any) {
       console.log(`[context] RAG search error: ${err.message}`);
     }
+  }
+
+  // Add tried-approaches memory (PREVENTS REPEATING MISTAKES)
+  try {
+    const { buildTriedApproachesContext } = await import('./tried-approaches');
+    const triedApproachesContext = await buildTriedApproachesContext(issueId);
+    if (triedApproachesContext) {
+      fileContext += triedApproachesContext;
+    }
+  } catch (err: any) {
+    console.log(`[context] Tried-approaches error: ${err.message}`);
+  }
+
+  // Add reflection memory (PREVENTS REPEATING REVIEWER REJECTIONS)
+  try {
+    const { buildReflectionsContext } = await import('./reflection-memory');
+    const reflectionsContext = await buildReflectionsContext(issueId, filesToReadArray);
+    if (reflectionsContext) {
+      fileContext += reflectionsContext;
+    }
+  } catch (err: any) {
+    console.log(`[context] Reflection memory error: ${err.message}`);
   }
 
   // Add strong implementation directive
