@@ -173,6 +173,7 @@ export function createProxy(): http.Server {
     }
 
     // Hook 1: Goal guard — prevent Local Builder from directly handling Goal/Epic issues
+    // ONLY redirect if Local Builder is assigned. If Strategist is assigned, let it decompose.
     if (issueId && agentId === AGENTS['local builder']) {
       const builderIssue = await getIssueDetails(issueId);
       if (builderIssue && isGoalIssue(builderIssue)) {
@@ -183,6 +184,16 @@ export function createProxy(): http.Server {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ message: { role: 'assistant', content: '_Redirected Goal issue to Complexity Router._' } }));
         return;
+      }
+    }
+
+    // Hook 1b: Allow Strategist to decompose Goals/Epics directly (skip Complexity Router)
+    // Complexity Router is only for NEW issues. If Strategist is already assigned, let it work.
+    if (issueId && agentId === AGENTS.strategist) {
+      const stratIssue = await getIssueDetails(issueId);
+      if (stratIssue && isGoalIssue(stratIssue)) {
+        console.log(`[closedloop] Goal issue ${issueId.slice(0, 8)} assigned to Strategist - allowing decomposition`);
+        // Don't redirect - let Strategist decompose
       }
     }
 
