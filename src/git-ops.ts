@@ -5,7 +5,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
-import { getWorkspace } from './config';
+import { getWorkspace, loadConfig } from './config';
 import { getIssueDetails, postComment } from './paperclip-api';
 import { issueBuilderPasses } from './agent-types';
 import { slugify, truncate, listPngFilesRecursive } from './utils';
@@ -151,7 +151,8 @@ export async function commitAndPush(
           stdio: 'pipe',
         });
       } catch {}
-      execSync('yarn build --force', { ...opts, timeout: 120000 });
+      const buildCmd = loadConfig().commands?.build || 'npx turbo run build --filter=@shop-diary/ui --filter=@shop-diary/app';
+      execSync(buildCmd, { ...opts, timeout: 120000 });
       console.log(`[git] Build PASSED on ${branchName}`);
       await postComment(issueId, null, '_Build validation: PASSED_');
       buildResult.success = true;

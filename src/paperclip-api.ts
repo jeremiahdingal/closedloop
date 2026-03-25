@@ -75,7 +75,14 @@ export async function findAssignedIssue(agentId: string): Promise<string | null>
       );
 
       if (assigned.length > 0) {
-        assigned.sort((a: Issue, b: Issue) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        // Dependency-aware priority: API/backend tickets before frontend/UI tickets.
+        // This ensures schemas, services, and routes exist before screens that import them.
+        assigned.sort((a: Issue, b: Issue) => {
+          const scoreA = ticketDependencyScore(a.title);
+          const scoreB = ticketDependencyScore(b.title);
+          if (scoreA !== scoreB) return scoreA - scoreB; // lower score = higher priority
+          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        });
         return assigned[0].id;
       }
     }
@@ -83,6 +90,32 @@ export async function findAssignedIssue(agentId: string): Promise<string | null>
     // Silent fail
   }
   return null;
+}
+
+/**
+ * Score a ticket by dependency tier. Lower = should be built first.
+ * Tier 0: Database schema, migrations, types
+ * Tier 1: API services, routes, middleware
+ * Tier 2: Shared hooks, stores, utilities
+ * Tier 3: UI components, screens, dialogs (depend on everything above)
+ */
+function ticketDependencyScore(title: string): number {
+  const t = title.toLowerCase();
+
+  // Tier 0 — foundational
+  if (/\b(schema|migration|database|table|type|enum)\b/.test(t)) return 0;
+
+  // Tier 1 — API layer
+  if (/\b(api|service|route|endpoint|worker|middleware)\b/.test(t)) return 1;
+
+  // Tier 2 — shared logic
+  if (/\b(hook|store|zustand|query|util|fetch|helper)\b/.test(t)) return 2;
+
+  // Tier 3 — UI / frontend
+  if (/\b(screen|dialog|sheet|component|ui|button|form|layout|page|cashier|dashboard)\b/.test(t)) return 3;
+
+  // Default — treat as mid-priority
+  return 2;
 }
 
 export async function postComment(

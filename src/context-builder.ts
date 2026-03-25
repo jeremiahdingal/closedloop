@@ -101,6 +101,33 @@ export async function buildStrategistProjectContext(): Promise<string> {
 }
 
 /**
+ * Get compact project conventions for code-generating agents (Tech Lead, Local Builder).
+ * Reads the Key Patterns and Styling sections from PROJECT_STRUCTURE.md.
+ */
+function getProjectConventions(): string {
+  const structurePath = path.join(WORKSPACE, 'PROJECT_STRUCTURE.md');
+  if (!fs.existsSync(structurePath)) return '';
+
+  try {
+    const content = fs.readFileSync(structurePath, 'utf8');
+    // Extract the Key Patterns, Styling, Imports, and Naming sections
+    const sections: string[] = [];
+    const sectionRegex = /^## (Key Patterns|Styling|Imports|Naming|Build)\b[\s\S]*?(?=\n## |\n$)/gm;
+    let m;
+    while ((m = sectionRegex.exec(content)) !== null) {
+      sections.push(m[0].trim());
+    }
+    if (sections.length > 0) {
+      return '\n\n== PROJECT CONVENTIONS (MUST FOLLOW) ==\n' + sections.join('\n\n') + '\n';
+    }
+    // Fallback: return truncated full file
+    return '\n\n== PROJECT CONVENTIONS ==\n' + truncate(content, 3000) + '\n';
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Build issue context for agents.
  */
 export async function buildIssueContext(
@@ -128,6 +155,11 @@ export async function buildIssueContext(
     briefing += `\n\n== PROJECT CONTEXT FOR PLANNING ==\n`;
     const projectContext = await buildStrategistProjectContext();
     briefing += projectContext;
+  }
+
+  // Tech Lead and Local Builder get project conventions for correct code generation
+  if (currentAgentId === AGENTS['tech lead'] || currentAgentId === AGENTS['local builder']) {
+    briefing += getProjectConventions();
   }
 
   briefing += `\n== YOUR ASSIGNMENT ==\n`;

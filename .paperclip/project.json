@@ -4,11 +4,11 @@
   "_lastUpdated": "2026-03-16",
   
   "project": {
-    "name": "Shop Diary V2",
-    "slug": "shop-diary-v2",
+    "name": "Shop Diary V3",
+    "slug": "shop-diary-v3",
     "description": "Cross-platform POS (point-of-sale) and shop management app",
-    "githubRepo": "jeremiahdingal/shop-diary-v2",
-    "workspace": "C:\\Users\\dinga\\Projects\\shop-diary-v2"
+    "githubRepo": "jeremiahdingal/shop-diary-v3",
+    "workspace": "C:\\Users\\dinga\\Projects\\shop-diary-v3"
   },
   
   "techStack": {
@@ -18,7 +18,7 @@
     "api": "Cloudflare Workers + itty-router + Kysely + D1",
     "state": "Zustand + TanStack React Query",
     "forms": "React Hook Form + Zod",
-    "styling": "React Native StyleSheet.create() - NO Tailwind, NO CSS modules",
+    "styling": "Tamagui - NO Tailwind, NO CSS modules, NO StyleSheet.create",
     "theme": "Custom theme using @radix-ui/colors (28 built-in themes)",
     "icons": "lucide-react-native",
     "testing": "Vitest (API), Jest (apps)",
@@ -54,14 +54,12 @@
   },
   
   "commands": {
-    "build": "yarn build",
-    "build:web": "yarn build --filter=*-web",
-    "build:mobile": "yarn build --filter=*-mobile",
-    "test": "yarn test",
+    "build": "npx turbo run build --filter=@shop-diary/ui --filter=@shop-diary/app",
+    "build:web": "npx turbo run build --filter=@dashboard/web --filter=@cashier/web",
+    "build:api": "cd api && npx tsc --noEmit",
+    "test": "npx vitest run",
     "test:api": "cd api && npx vitest run",
-    "dev": "yarn dev",
-    "dev:web": "yarn dev:web",
-    "dev:mobile": "yarn dev:mobile",
+    "dev": "npx turbo run dev --parallel --filter=@dashboard/web --filter=@cashier/web",
     "dev:api": "cd api && npx wrangler dev"
   },
   
@@ -112,9 +110,9 @@
       "complexity router": "qwen3:4b",
       "strategist": "qwen3.5:9b",
       "tech lead": "deepcoder:latest",
-      "local builder": "deepcoder:latest",
-      "local builder burst": "qwen3-coder:30b",
-      "reviewer": "glm-4.7-flash",
+      "local builder": "qwen3-coder:30b",
+      "local builder burst": "remote",
+      "reviewer": "deepseek-r1:14b",
       "diff guardian": "qwen3:4b",
       "visual reviewer": "qwen3-vl:8b",
       "sentinel": "deepseek-r1:8b",
@@ -125,7 +123,7 @@
       "strategist": 900,
       "tech lead": 900,
       "local builder": 3600,
-      "reviewer": 900,
+      "reviewer": 1800,
       "diff guardian": 60,
       "visual reviewer": 900,
       "sentinel": 600,

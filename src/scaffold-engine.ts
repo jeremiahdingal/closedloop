@@ -726,3 +726,431 @@ function kebabToPascal(s: string): string {
   const camel = kebabToCamel(s);
   return capitalize(camel);
 }
+
+// ────────────────────── Tamagui Frontend Scaffold ──────────────────────
+
+/**
+ * Frontend scaffold config — describes a CRUD UI feature (screen + dialogs + hooks).
+ * Mirrors ScaffoldConfig but for the Tamagui/React side.
+ */
+export interface FrontendScaffoldConfig {
+  entity: string;          // kebab-case: "payment-types"
+  entityCamel: string;     // "paymentTypes"
+  entityPascal: string;    // "PaymentTypes"
+  entitySingular: string;  // "paymentType"
+  entityHuman: string;     // "Payment Types" (display name)
+  apiPath: string;         // "/payment-types" (API route prefix)
+  fields: FrontendField[];
+  hasEdit: boolean;
+  hasDelete: boolean;
+}
+
+export interface FrontendField {
+  name: string;          // "categoryName"
+  label: string;         // "Name"
+  type: 'text' | 'number' | 'select' | 'icon' | 'date';
+  required?: boolean;
+}
+
+export interface FrontendScaffoldOutput {
+  files: Array<{ path: string; content: string }>;
+}
+
+/**
+ * Generate a full Tamagui frontend feature: screen, add dialog, edit dialog, and API hook.
+ * Templates match the exact patterns used in shop-diary-v3 (categories, items, users).
+ */
+export function generateFrontendScaffold(config: FrontendScaffoldConfig): FrontendScaffoldOutput {
+  const files: FrontendScaffoldOutput['files'] = [];
+
+  // 1. API hook: packages/app/apiHooks/use{EntityPascal}.ts
+  files.push({
+    path: `packages/app/apiHooks/use${config.entityPascal}.ts`,
+    content: generateApiHook(config),
+  });
+
+  // 2. Screen: packages/app/dashboard/{entity}/screen.tsx
+  files.push({
+    path: `packages/app/dashboard/${config.entity}/screen.tsx`,
+    content: generateScreen(config),
+  });
+
+  // 3. Add dialog: packages/app/dashboard/{entity}/dialogs/Add{Pascal}Dialog.tsx
+  files.push({
+    path: `packages/app/dashboard/${config.entity}/dialogs/Add${config.entityPascal}Dialog.tsx`,
+    content: generateAddDialog(config),
+  });
+
+  // 4. Edit dialog: packages/app/dashboard/{entity}/dialogs/Edit{Pascal}Dialog.tsx
+  if (config.hasEdit) {
+    files.push({
+      path: `packages/app/dashboard/${config.entity}/dialogs/Edit${config.entityPascal}Dialog.tsx`,
+      content: generateEditDialog(config),
+    });
+  }
+
+  return { files };
+}
+
+// ─── Frontend file generators ───────────────────────────────────────
+
+function generateApiHook(c: FrontendScaffoldConfig): string {
+  return `import { useQuery } from '@tanstack/react-query'
+import { useUserStore } from 'app/store/useUserStore'
+import { T${c.entityPascal} } from 'app/types/db.types'
+import { fetcherWithToken } from 'app/utils/fetcherWithToken'
+
+const use${c.entityPascal} = () => {
+  const token = useUserStore((s) => s.token)
+
+  const { data: ${c.entityCamel} } = useQuery<T${c.entityPascal}[]>({
+    queryKey: ['${c.entityCamel}'],
+    queryFn: () => fetcherWithToken({ url: '${c.apiPath}' }),
+    enabled: Boolean(token),
+  })
+
+  return { ${c.entityCamel} }
+}
+
+export { use${c.entityPascal} }
+`;
+}
+
+function generateScreen(c: FrontendScaffoldConfig): string {
+  const editImport = c.hasEdit
+    ? `import Edit${c.entityPascal}Dialog from 'app/dashboard/${c.entity}/dialogs/Edit${c.entityPascal}Dialog'\n`
+    : '';
+  const editState = c.hasEdit
+    ? `  const [selected, setSelected] = useState<T${c.entityPascal} | null>(null)\n  const [openEditDialog, setOpenEditDialog] = useState(false)\n`
+    : '';
+  const editHandlers = c.hasEdit
+    ? `\n  const handleEditSuccess = () => {\n    queryClient.invalidateQueries({ queryKey: ['${c.entityCamel}'] })\n    setOpenEditDialog(false)\n    setSelected(null)\n  }\n`
+    : '';
+
+  // Build column defs for each field
+  const fieldColumns = c.fields.map(f =>
+    `    columnHelper.accessor('${f.name}', {\n      header: '${f.label}',\n      cell: (info) => info.cell.getValue(),\n    }),`
+  ).join('\n');
+
+  const editButton = c.hasEdit
+    ? `            <IconButton
+              size="$2.5"
+              bg="$blue10Light"
+              hoverStyle={{ bg: '$blue9Light' }}
+              onPress={() => {
+                setSelected(info.row.original)
+                setOpenEditDialog(true)
+              }}
+            >
+              <Settings size="$icon.sm" color="white" />
+            </IconButton>`
+    : '';
+
+  const deleteButton = c.hasDelete
+    ? `            <IconButton
+              size="$2.5"
+              bg="$red11Light"
+              hoverStyle={{ bg: '$red9Light' }}
+              onPress={() => triggerDelete({ id: info.getValue() } as any)}
+            >
+              <Trash2 size="$icon.sm" color="white" />
+            </IconButton>`
+    : '';
+
+  const editDialogJsx = c.hasEdit
+    ? `\n      <SimpleDialog
+        open={openEditDialog}
+        onOpenChange={(open) => {
+          setOpenEditDialog(open)
+          if (!open) setSelected(null)
+        }}
+        title="Edit ${c.entityHuman}"
+      >
+        {selected && (
+          <Edit${c.entityPascal}Dialog
+            ${c.entitySingular}={selected}
+            onSuccess={handleEditSuccess}
+          />
+        )}
+      </SimpleDialog>`
+    : '';
+
+  const idField = c.entitySingular + 'Id';
+
+  return `import Button from '@shop-diary/ui/src/atoms/Button'
+import DashboardLayout from '@shop-diary/ui/src/templates/DashboardLayout'
+import { H2, Paragraph, Spacer, XStack, YStack } from 'tamagui'
+import SimpleDialog from '@shop-diary/ui/src/molecules/SimpleDialog'
+import AdvancedTable from '@shop-diary/ui/src/organisms/AdvancedTable'
+import { Plus${c.hasEdit ? ', Settings' : ''}${c.hasDelete ? ', Trash2' : ''} } from '@tamagui/lucide-icons'
+import Add${c.entityPascal}Dialog from 'app/dashboard/${c.entity}/dialogs/Add${c.entityPascal}Dialog'
+${editImport}import { use${c.entityPascal} } from 'app/apiHooks/use${c.entityPascal}'
+import { memo, useState } from 'react'
+import IconButton from '@shop-diary/ui/src/atoms/IconButton'
+import { ColumnDef, createColumnHelper } from '@tanstack/react-table'
+import { T${c.entityPascal} } from 'app/types/db.types'
+import { fetcherWithToken } from 'app/utils/fetcherWithToken'
+import useSWRMutation from 'swr/mutation'
+import { useQueryClient } from '@tanstack/react-query'
+
+const columnHelper = createColumnHelper<T${c.entityPascal}>()
+
+const ${c.entityPascal} = () => {
+  const { ${c.entityCamel} } = use${c.entityPascal}()
+  const queryClient = useQueryClient()
+${editState}${c.hasDelete ? `  const { trigger: triggerDelete } = useSWRMutation('${c.apiPath}/', (url, { arg }: any) =>\n    fetcherWithToken({ method: 'DELETE', url: url + arg.id })\n  )\n` : ''}${editHandlers}
+  const columns = [
+${fieldColumns}
+    columnHelper.accessor('${idField}', {
+      header: 'Actions',
+      cell: (info) => {
+        return (
+          <XStack gap="$2">
+${editButton}
+${deleteButton}
+          </XStack>
+        )
+      },
+    }),
+  ] as ColumnDef<unknown, any>[]
+
+  return (
+    <DashboardLayout active="${c.entity}">
+      <XStack jc="space-between" ai="flex-end" fw="wrap" gap="$3" px="$5" pt="$5" $sm={{ px: '$2', pt: '$2', ai: 'flex-start' }}>
+        <YStack gap="$2">
+          <H2 color="white">${c.entityHuman}</H2>
+          <Paragraph color="rgba(255,255,255,0.72)">
+            Manage ${c.entityHuman.toLowerCase()}.
+          </Paragraph>
+        </YStack>
+        <XStack gap="$3" $sm={{ w: '100%' }}>
+          <SimpleDialog
+            triggerElement={
+              <Button size="$0.75" icon={<Plus size="$space.4" color="white" />} $sm={{ w: '100%' }}>
+                Add ${c.entityHuman}
+              </Button>
+            }
+            title="Add ${c.entityHuman}"
+          >
+            <Add${c.entityPascal}Dialog />
+          </SimpleDialog>
+        </XStack>
+      </XStack>
+      <Spacer size="$3" />
+      {${c.entityCamel} && <AdvancedTable data={${c.entityCamel}} columns={columns} />}${editDialogJsx}
+    </DashboardLayout>
+  )
+}
+
+export default memo(${c.entityPascal})
+`;
+}
+
+function generateAddDialog(c: FrontendScaffoldConfig): string {
+  const formFields = c.fields.filter(f => f.type !== 'date');
+  const fieldDefaults = formFields.map(f =>
+    `      ${f.name}: ${f.type === 'number' ? '0' : "''"},`
+  ).join('\n');
+
+  const fieldInputs = formFields.map(f => {
+    if (f.type === 'icon') {
+      return `          <Fieldset>\n            <Label>${f.label}</Label>\n            <IconSelectionController control={control} name="${f.name}" />\n          </Fieldset>`;
+    }
+    return `          <Fieldset>\n            <Label>${f.label}</Label>\n            <TextInputController control={control} name="${f.name}" />\n          </Fieldset>`;
+  }).join('\n');
+
+  const formType = `IAdd${c.entityPascal}Form`;
+  const formInterface = formFields.map(f =>
+    `  ${f.name}: ${f.type === 'number' ? 'number' : 'string'}`
+  ).join('\n');
+
+  const hasIcon = formFields.some(f => f.type === 'icon');
+
+  return `import * as icons from '@tamagui/lucide-icons'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { TNew${c.entityPascal} } from 'app/types/db.types'
+import React, { memo } from 'react'
+import { useForm } from 'react-hook-form'
+import { Dialog, Fieldset, Form, Label, XStack } from 'tamagui'
+import Button from '@shop-diary/ui/src/atoms/Button'
+${hasIcon ? "import IconSelectionController from '@shop-diary/ui/src/molecules/IconSelectionController'\n" : ''}import TextInputController from '@shop-diary/ui/src/organisms/TextInputController'
+import { fetcherWithToken } from 'app/utils/fetcherWithToken'
+import { useUserStore } from 'app/store/useUserStore'
+
+interface ${formType} {
+${formInterface}
+}
+
+const Add${c.entityPascal}Dialog: React.FC = () => {
+  const { handleSubmit, control, reset } = useForm<${formType}>({
+    defaultValues: {
+${fieldDefaults}
+    },
+  })
+
+  const token = useUserStore((s) => s.token)
+  const queryClient = useQueryClient()
+
+  const { mutate } = useMutation<{}, Error, TNew${c.entityPascal}>({
+    mutationFn: (data) =>
+      fetcherWithToken({
+        method: 'POST',
+        url: '${c.apiPath}/create',
+        data,
+        token: token ?? '',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['${c.entityCamel}'] })
+      reset()
+    },
+  })
+
+  return (
+    <>
+      <Form onSubmit={handleSubmit((data) => mutate(data as any))}>
+        <Fieldset gap="$5">
+${fieldInputs}
+        </Fieldset>
+        <XStack als="flex-end" pt="$2">
+          <Dialog.Close displayWhenAdapted asChild>
+            <Form.Trigger asChild>
+              <Button space="$1" scaleIcon={1.5} icon={<icons.Save color="white" />}>
+                Save
+              </Button>
+            </Form.Trigger>
+          </Dialog.Close>
+        </XStack>
+      </Form>
+    </>
+  )
+}
+
+export default memo(Add${c.entityPascal}Dialog)
+`;
+}
+
+function generateEditDialog(c: FrontendScaffoldConfig): string {
+  const formFields = c.fields.filter(f => f.type !== 'date');
+  const fieldInputs = formFields.map(f => {
+    if (f.type === 'icon') {
+      return `          <Fieldset>\n            <Label>${f.label}</Label>\n            <IconSelectionController control={control} name="${f.name}" />\n          </Fieldset>`;
+    }
+    return `          <Fieldset>\n            <Label>${f.label}</Label>\n            <TextInputController control={control} name="${f.name}" />\n          </Fieldset>`;
+  }).join('\n');
+
+  const formType = `IEdit${c.entityPascal}Form`;
+  const formInterface = formFields.map(f =>
+    `  ${f.name}: ${f.type === 'number' ? 'number' : 'string'}`
+  ).join('\n');
+
+  const hasIcon = formFields.some(f => f.type === 'icon');
+  const idField = c.entitySingular + 'Id';
+
+  return `import * as icons from '@tamagui/lucide-icons'
+import { useMutation } from '@tanstack/react-query'
+import { T${c.entityPascal} } from 'app/types/db.types'
+import React, { memo } from 'react'
+import { useForm } from 'react-hook-form'
+import { Dialog, Fieldset, Form, Label, XStack } from 'tamagui'
+import Button from '@shop-diary/ui/src/atoms/Button'
+${hasIcon ? "import IconSelectionController from '@shop-diary/ui/src/molecules/IconSelectionController'\n" : ''}import TextInputController from '@shop-diary/ui/src/organisms/TextInputController'
+import { fetcherWithToken } from 'app/utils/fetcherWithToken'
+import { useUserStore } from 'app/store/useUserStore'
+
+interface IEdit${c.entityPascal}DialogProps {
+  ${c.entitySingular}: T${c.entityPascal}
+  onSuccess: () => void
+}
+
+interface ${formType} {
+${formInterface}
+}
+
+const Edit${c.entityPascal}Dialog: React.FC<IEdit${c.entityPascal}DialogProps> = ({ ${c.entitySingular}, onSuccess }) => {
+  const { handleSubmit, control } = useForm<${formType}>({
+    defaultValues: {
+${formFields.map(f => `      ${f.name}: ${c.entitySingular}.${f.name},`).join('\n')}
+    },
+  })
+
+  const token = useUserStore((s) => s.token)
+
+  const { mutate } = useMutation<{}, Error, ${formType}>({
+    mutationFn: (data) =>
+      fetcherWithToken({
+        method: 'PUT',
+        url: '${c.apiPath}/' + ${c.entitySingular}.${idField},
+        data,
+        token: token ?? '',
+      }),
+    onSuccess,
+  })
+
+  return (
+    <>
+      <Form onSubmit={handleSubmit((data) => mutate(data))}>
+        <Fieldset gap="$5">
+${fieldInputs}
+        </Fieldset>
+        <XStack als="flex-end" pt="$2">
+          <Dialog.Close displayWhenAdapted asChild>
+            <Form.Trigger asChild>
+              <Button space="$1" scaleIcon={1.5} icon={<icons.Save color="white" />}>
+                Update
+              </Button>
+            </Form.Trigger>
+          </Dialog.Close>
+        </XStack>
+      </Form>
+    </>
+  )
+}
+
+export default memo(Edit${c.entityPascal}Dialog)
+`;
+}
+
+// ─── Frontend scaffold detection ────────────────────────────────────
+
+/**
+ * Detect if an issue matches a frontend scaffold pattern.
+ * Converts a ScaffoldConfig (API-side) into a FrontendScaffoldConfig.
+ */
+export function apiConfigToFrontendConfig(
+  apiConfig: ScaffoldConfig,
+  humanName?: string
+): FrontendScaffoldConfig {
+  return {
+    entity: apiConfig.entity,
+    entityCamel: apiConfig.entityCamel,
+    entityPascal: apiConfig.entityPascal,
+    entitySingular: apiConfig.entitySingular,
+    entityHuman: humanName || apiConfig.entityPascal.replace(/([A-Z])/g, ' $1').trim(),
+    apiPath: '/' + apiConfig.entity,
+    fields: apiConfig.fields
+      .filter(f => !f.primaryKey && f.name !== 'shopId' && f.name !== 'createdAt' && f.name !== 'updatedAt')
+      .map(f => ({
+        name: f.name,
+        label: capitalize(f.name.replace(/([A-Z])/g, ' $1').trim()),
+        type: (f.tsType === 'number' ? 'number' : 'text') as FrontendField['type'],
+        required: f.notNull,
+      })),
+    hasEdit: true,
+    hasDelete: true,
+  };
+}
+
+/**
+ * Generate both API + frontend scaffolds from a single ScaffoldConfig.
+ * Returns combined file list for the full-stack feature.
+ */
+export function generateFullStackScaffold(
+  config: ScaffoldConfig,
+  template: ScaffoldTemplate = SHOP_DIARY_TEMPLATE,
+  humanName?: string
+): { api: ScaffoldOutput; frontend: FrontendScaffoldOutput } {
+  const api = generateScaffold(config, template);
+  const frontendConfig = apiConfigToFrontendConfig(config, humanName);
+  const frontend = generateFrontendScaffold(frontendConfig);
+  return { api, frontend };
+}

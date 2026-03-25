@@ -67,8 +67,10 @@ export async function checkGoalsForDecomposition(): Promise<void> {
         continue;
       }
 
-      await decomposeEpic(epic);
+      // Mark BEFORE async decomposition to prevent race condition
+      // (next interval fires before decomposition completes → duplicate tickets)
       decomposedGoals.add(epic.id);
+      await decomposeEpic(epic);
     }
   } catch (err: any) {
     // Silent fail — will retry next cycle
@@ -170,6 +172,18 @@ async function decomposeEpic(epic: Goal): Promise<void> {
 /**
  * Parse TICKET: blocks from LLM response.
  */
+// Titles that are clearly meta-commentary, not implementation tickets
+const JUNK_TITLE_PATTERNS = [
+  /^summary/i, /^overview/i, /^introduction/i, /^conclusion/i,
+  /^key decisions/i, /^rationale/i, /^how to use/i, /^potential risks/i,
+  /^notes?$/i, /^mitigations?/i, /^dependencies/i, /^assumptions/i,
+  /^implementation plan/i, /^decomposition/i, /^epic breakdown/i,
+];
+
+function isJunkTitle(title: string): boolean {
+  return JUNK_TITLE_PATTERNS.some(p => p.test(title.replace(/\*+/g, '').trim()));
+}
+
 export function parseSubTickets(content: string): SubTicket[] {
   const tickets: SubTicket[] = [];
 
@@ -183,7 +197,7 @@ export function parseSubTickets(content: string): SubTicket[] {
     const descMatch = block.match(/Description:\s*([\s\S]*?)(?=\nPriority:|$)/i);
     const priorityMatch = block.match(/Priority:\s*(low|medium|high|urgent)/i);
 
-    if (titleMatch) {
+    if (titleMatch && !isJunkTitle(titleMatch[1])) {
       tickets.push({
         title: titleMatch[1].trim(),
         description: descMatch ? descMatch[1].trim() : block,
@@ -196,11 +210,10 @@ export function parseSubTickets(content: string): SubTicket[] {
   if (tickets.length === 0) {
     const numberedRegex = /(?:^|\n)\d+\.\s+\*\*(.+?)\*\*\s*\n([\s\S]*?)(?=\n\d+\.\s+\*\*|$)/g;
     while ((match = numberedRegex.exec(content)) !== null) {
-      tickets.push({
-        title: match[1].trim(),
-        description: match[2].trim(),
-        priority: 'medium',
-      });
+      const title = match[1].trim();
+      if (!isJunkTitle(title)) {
+        tickets.push({ title, description: match[2].trim(), priority: 'medium' });
+      }
     }
   }
 
@@ -208,11 +221,10 @@ export function parseSubTickets(content: string): SubTicket[] {
   if (tickets.length === 0) {
     const headingRegex = /##\s+(?:Ticket\s+\d+[:\s]*)?(.+)\n([\s\S]*?)(?=\n##|$)/g;
     while ((match = headingRegex.exec(content)) !== null) {
-      tickets.push({
-        title: match[1].trim(),
-        description: match[2].trim(),
-        priority: 'medium',
-      });
+      const title = match[1].trim();
+      if (!isJunkTitle(title)) {
+        tickets.push({ title, description: match[2].trim(), priority: 'medium' });
+      }
     }
   }
 

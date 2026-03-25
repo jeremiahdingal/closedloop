@@ -7,11 +7,11 @@
  */
 
 import * as http from 'http';
-import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentModel } from './config';
+import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentModel, getAgentKeys } from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
 import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses, issueBuilderBurstMode } from './agent-types';
 import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion } from './goal-system';
-import { callRemoteArchitect } from './remote-ai';
+import { callRemoteArchitect, callZAI } from './remote-ai';
 import { extractIssueId, extractAgentId, sleep } from './utils';
 import { applyCodeBlocks } from './code-extractor';
 import { commitAndPush, createPullRequest } from './git-ops';
@@ -36,12 +36,12 @@ const COMPANY_ID = getCompanyId();
 
 // Track recent agent runs to prevent spam
 const recentAgentRuns = new Map<string, number>();
-const DELEGATION_COOLDOWN_MS = 5 * 60 * 1000;
+const DELEGATION_COOLDOWN_MS = 90 * 1000; // 90s — Paperclip deduplicates via wakeup API
 
 // Track Reviewer ↔ Local Builder loops to prevent infinite cycles
 // Key: issueId, Value: { count: number, lastReset: number }
 const issueLoopCounts = new Map<string, { count: number; lastReset: number }>();
-const MAX_LOOP_PASSES = 20; // Auto-create PR after 20 passes for human intervention
+const MAX_LOOP_PASSES = 5; // Auto-create PR after 5 passes for human intervention
 const LOOP_RESET_WINDOW_MS = 60 * 60 * 1000; // Reset count after 1 hour of no activity
 
 /**
@@ -155,9 +155,28 @@ export function createProxy(): http.Server {
     }
 
     // Hook 2: Burst model override for greenfield scaffold issues
+    // When burst model is "remote", route to the remote API (glm-5) instead of Ollama
     if (agentId === AGENTS['local builder'] && issueId && issueBuilderBurstMode.has(issueId)) {
       const burstModel = getAgentModel('local builder burst');
-      if (burstModel) {
+      if (burstModel === 'remote') {
+        console.log(`[closedloop] Burst mode: routing to REMOTE (glm-5) for ${issueId.slice(0, 8)}`);
+        try {
+          const issueContext =  await buildLocalBuilderContext(issueId, agentId);
+          const messages = [...(parsedBody.messages || [])];
+          if (issueContext) messages.push({ role: 'user', content: issueContext });
+          const fullPrompt = messages.map((m: any) => `[${m.role}]: ${m.content}`).join('\n\n');
+          const remoteResult = await callZAI(
+            fullPrompt,
+            'You are a senior full-stack engineer. Write production code. Output file contents using FILE: path/to/file.ext format followed by code blocks.'
+          );
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: { role: 'assistant', content: remoteResult } }));
+          return;
+        } catch (err: any) {
+          console.log(`[closedloop] Remote burst failed, falling back to local: ${err.message}`);
+          // Fall through to local Ollama
+        }
+      } else if (burstModel) {
         parsedBody.model = burstModel;
         console.log(`[closedloop] Burst mode: using ${burstModel} for ${issueId.slice(0, 8)}`);
       }
@@ -470,24 +489,30 @@ export function createProxy(): http.Server {
                 const loopStatus = trackLoop(issueId, agentId);
                 console.log(`[closedloop] Reviewer found issues - sending back to Local Builder (loop: ${loopStatus.count}/${MAX_LOOP_PASSES})`);
                 
-                // Check if loop exceeded
+                // Check if loop exceeded — skip to PR instead of bouncing back
                 if (loopStatus.exceeded) {
-                  console.log(`[closedloop] LOOP EXCEEDED (${loopStatus.count}) during Reviewer rejection`);
+                  console.log(`[closedloop] LOOP EXCEEDED (${loopStatus.count}) during Reviewer rejection — skipping to PR`);
                   await postComment(
                     issueId,
                     null,
-                    `⚠️ **Review Loop Exceeded - Manual Review Required**\n\n` +
-                    `This issue has been rejected by Reviewer ${loopStatus.count} times.\n` +
-                    `Please review the feedback and provide clearer guidance.\n\n` +
-                    `**Recent Reviewer feedback:**\n${content.slice(0, 500)}...`
+                    `⚠️ **Review Loop Capped (${loopStatus.count}/${MAX_LOOP_PASSES}) — Creating PR for human review**\n\n` +
+                    `Builder and Reviewer couldn't converge. Shipping as-is for manual review.\n\n` +
+                    `**Last Reviewer feedback:**\n${content.slice(0, 500)}...`
                   );
-                }
-                
-                try {
-                  await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
-                  console.log(`[closedloop] Sent back to Local Builder for fixes`);
-                } catch (err: any) {
-                  console.error(`[closedloop] Failed to send back to Local Builder:`, err.message);
+                  try {
+                    await createPullRequest(issueId);
+                    resetLoopCounter(issueId);
+                    console.log(`[closedloop] PR created after loop cap`);
+                  } catch (prErr: any) {
+                    console.error(`[closedloop] Failed to create PR after loop cap:`, prErr.message);
+                  }
+                } else {
+                  try {
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+                    console.log(`[closedloop] Sent back to Local Builder for fixes`);
+                  } catch (err: any) {
+                    console.error(`[closedloop] Failed to send back to Local Builder:`, err.message);
+                  }
                 }
               }
             }
@@ -574,6 +599,8 @@ function buildHeartbeatContext(context: any): string {
 
 // Background issue assignment checker
 export async function checkAssignedIssues(): Promise<void> {
+  const agentKeys = getAgentKeys();
+
   try {
     const res = await fetch(`${PAPERCLIP_API}/api/companies/${COMPANY_ID}/issues`);
     if (!res.ok) return;
@@ -585,10 +612,10 @@ export async function checkAssignedIssues(): Promise<void> {
       (i: any) => (i.status === 'todo' || i.status === 'in_progress') && i.assigneeAgentId
     );
 
+    // Group issues by agent — one wakeup per agent, not per issue
+    const agentIssueMap = new Map<string, string[]>();
     for (const issue of assignedIssues) {
       const agentId = issue.assigneeAgentId;
-      const agentName = AGENT_NAMES[agentId] || 'unknown';
-
       if (BLOCKED_AGENTS.has(agentId)) continue;
 
       const recentRunKey = `${agentId}:${issue.id}`;
@@ -597,17 +624,44 @@ export async function checkAssignedIssues(): Promise<void> {
         if (Date.now() - lastRun < DELEGATION_COOLDOWN_MS) continue;
       }
 
-      console.log(`[closedloop] Background check: ${agentName} has assigned issue ${issue.identifier || issue.id.slice(0, 8)}`);
+      if (!agentIssueMap.has(agentId)) agentIssueMap.set(agentId, []);
+      agentIssueMap.get(agentId)!.push(issue.identifier || issue.id.slice(0, 8));
+    }
+
+    for (const [agentId, issueIds] of agentIssueMap.entries()) {
+      const agentName = AGENT_NAMES[agentId] || 'unknown';
+      const apiKey = agentKeys[agentId];
+
+      console.log(`[closedloop] Waking ${agentName} for ${issueIds.length} issues: ${issueIds.join(', ')}`);
 
       try {
-        await patchIssue(issue.id, {
-          assigneeAgentId: agentId,
-          priority: issue.priority || 'medium',
+        // Use the proper Paperclip wakeup API instead of re-patching the issue
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+        const wakeRes = await fetch(`${PAPERCLIP_API}/api/agents/${agentId}/wakeup`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            source: 'automation',
+            triggerDetail: 'system',
+            reason: 'assigned_issues_pending',
+          }),
         });
-        recentAgentRuns.set(recentRunKey, Date.now());
-        console.log(`[closedloop] Triggered wakeup for ${agentName} on ${issue.identifier || issue.id.slice(0, 8)}`);
+
+        if (wakeRes.ok) {
+          const wakeData = await wakeRes.json() as any;
+          // Mark all issues for this agent as recently triggered
+          for (const issue of assignedIssues.filter((i: any) => i.assigneeAgentId === agentId)) {
+            recentAgentRuns.set(`${agentId}:${issue.id}`, Date.now());
+          }
+          console.log(`[closedloop] Wakeup ${wakeData.status || 'sent'} for ${agentName} (run: ${(wakeData.id || '').slice(0, 8)})`);
+        } else {
+          const errText = await wakeRes.text();
+          console.log(`[closedloop] Wakeup failed for ${agentName}: ${wakeRes.status} ${errText.slice(0, 200)}`);
+        }
       } catch (err: any) {
-        console.log(`[closedloop] Failed to trigger ${agentName}: ${err.message}`);
+        console.log(`[closedloop] Failed to wake ${agentName}: ${err.message}`);
       }
     }
   } catch (err: any) {

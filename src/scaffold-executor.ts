@@ -15,6 +15,8 @@ import {
   patchServicesEnum,
   patchDbTypes,
   patchIndexTs,
+  apiConfigToFrontendConfig,
+  generateFrontendScaffold,
 } from './scaffold-engine';
 
 export interface ScaffoldResult {
@@ -107,6 +109,28 @@ export function executeScaffold(config: ScaffoldConfig, workspace: string, templ
     result.success = false;
   }
 
+  // 3. Write frontend scaffold files (Tamagui screens, dialogs, hooks)
+  const frontendConfig = apiConfigToFrontendConfig(config);
+  const frontendScaffold = generateFrontendScaffold(frontendConfig);
+  for (const file of frontendScaffold.files) {
+    const fullPath = path.join(workspace, file.path);
+    try {
+      if (fs.existsSync(fullPath)) {
+        result.filesWritten.push(`${file.path} (skipped - already exists)`);
+        continue;
+      }
+      const dir = path.dirname(fullPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(fullPath, file.content, 'utf8');
+      result.filesWritten.push(file.path);
+    } catch (err: any) {
+      result.errors.push(`Failed to write ${file.path}: ${err.message}`);
+      result.success = false;
+    }
+  }
+
   return result;
 }
 
@@ -121,7 +145,7 @@ export function formatScaffoldComment(config: ScaffoldConfig, result: ScaffoldRe
   const newFiles = result.filesWritten.map((f) => `- \`${f}\``).join('\n');
   const patchedFiles = result.filesPatched.map((f) => `- \`${f}\``).join('\n');
 
-  return `**Scaffold Complete: ${config.entityPascal} CRUD API**
+  return `**Scaffold Complete: ${config.entityPascal} Full-Stack Feature**
 
 **New files created:**
 ${newFiles}
