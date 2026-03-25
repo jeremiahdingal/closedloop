@@ -50,14 +50,19 @@ if %errorlevel%==0 (
     echo        Started.
 )
 
-:: 2. Paperclip
+:: 2. Paperclip (using local paperclip-fork UI build)
 echo  [2/3] Starting Paperclip...
 set PPC_PID=
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3100 "') do set PPC_PID=%%a
 if defined PPC_PID (
     echo        Already running on :3100 ^(PID %PPC_PID%^).
 ) else (
-    start "Paperclip" /MIN cmd /c paperclipai run ^>C:\Users\dinga\Projects\paperclip\paperclip-out.log 2^>^&1
+    echo        Building local UI from paperclip-fork...
+    cd /d "%~dp0packages\paperclip-fork\ui"
+    call pnpm build >nul 2>&1
+    cd /d "%~dp0"
+    echo        Starting Paperclip with local UI...
+    start "Paperclip" /MIN cmd /c paperclipai run --ui-dir "%~dp0packages\paperclip-fork\ui\dist" ^>C:\Users\dinga\Projects\paperclip\paperclip-out.log 2^>^&1
     timeout /t 15 /nobreak >nul
     echo        Started on :3100.
 )
@@ -139,10 +144,27 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":3201
 echo  ClosedLoop stopped.
 timeout /t 2 /nobreak >nul
 
+:: Stop Paperclip to rebuild UI
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":3100 " 2^>nul') do taskkill /PID %%a /F >nul 2>&1
+echo  Paperclip stopped.
+timeout /t 2 /nobreak >nul
+
+:: Rebuild UI from paperclip-fork
+echo  Rebuilding UI from paperclip-fork...
+cd /d "%~dp0packages\paperclip-fork\ui"
+call pnpm build
+cd /d "%~dp0"
+
 :: Start ClosedLoop
 powershell -Command "Start-Process -FilePath 'node' -ArgumentList 'dist/index.js' -WorkingDirectory 'C:\Users\dinga\Projects\paperclip' -WindowStyle Hidden -RedirectStandardOutput 'closedloop-out.log' -RedirectStandardError 'closedloop-err.log'"
 timeout /t 2 /nobreak >nul
 echo  ClosedLoop restarted on :3201.
+
+:: Start Paperclip with new UI
+echo  Starting Paperclip with rebuilt UI...
+start "Paperclip" /MIN cmd /c paperclipai run --ui-dir "%~dp0packages\paperclip-fork\ui\dist" ^>C:\Users\dinga\Projects\paperclip\paperclip-out.log 2^>^&1
+timeout /t 10 /nobreak >nul
+echo  Paperclip restarted on :3100.
 
 :: Verify all
 echo.
