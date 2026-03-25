@@ -139,20 +139,10 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":3201
 echo  ClosedLoop stopped.
 timeout /t 2 /nobreak >nul
 
-:: Stop Paperclip
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":3100 " 2^>nul') do taskkill /PID %%a /F >nul 2>&1
-echo  Paperclip stopped.
-timeout /t 2 /nobreak >nul
-
 :: Start ClosedLoop
 powershell -Command "Start-Process -FilePath 'node' -ArgumentList 'dist/index.js' -WorkingDirectory 'C:\Users\dinga\Projects\paperclip' -WindowStyle Hidden -RedirectStandardOutput 'closedloop-out.log' -RedirectStandardError 'closedloop-err.log'"
 timeout /t 2 /nobreak >nul
 echo  ClosedLoop restarted on :3201.
-
-:: Start Paperclip
-start "Paperclip" /MIN cmd /c paperclipai run ^>C:\Users\dinga\Projects\paperclip\paperclip-out.log 2^>^&1
-timeout /t 15 /nobreak >nul
-echo  Paperclip restarted on :3100.
 
 :: Verify all
 echo.
