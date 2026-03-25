@@ -418,6 +418,42 @@ export function createProxy(): http.Server {
                     const pass = issueBuilderPasses[issueId];
                     console.log(`[closedloop] Local Builder wrote ${writtenFiles.length} files (pass ${pass})`);
 
+                    // Pre-flight import validation (catch hallucinated packages before build)
+                    try {
+                      const { validateImports, formatValidationResult } = await import('./import-validator');
+                      const filesToValidate = writtenFiles.map(f => ({
+                        path: f,
+                        content: fileContents[f] || '',
+                      }));
+                      const validation = validateImports(filesToValidate);
+                      
+                      if (!validation.valid) {
+                        console.log(`[closedloop] Import validation FAILED - ${validation.errors.length} errors`);
+                        await postComment(
+                          issueId,
+                          AGENTS['local builder'],
+                          `⚠️ **Import Validation Failed**\n\n` +
+                          formatValidationResult(validation) +
+                          `\n**Please fix these imports before proceeding:**\n` +
+                          `- Remove or replace hallucinated packages\n` +
+                          `- Use existing packages from package.json\n` +
+                          `- Common alternatives:\n` +
+                          `  - Instead of 'ky' → use 'fetcherWithToken' from app/utils/fetcherWithToken\n` +
+                          `  - Instead of 'axios' → use native 'fetch'\n` +
+                          `  - Instead of 'lodash' → use native array methods`
+                        );
+                        await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+                        issueProcessingLock[issueId] = false;
+                        return;
+                      }
+                      
+                      if (validation.warnings.length > 0) {
+                        console.log(`[closedloop] Import validation warnings: ${validation.warnings.length}`);
+                      }
+                    } catch (err: any) {
+                      console.log(`[closedloop] Import validation skipped: ${err.message}`);
+                    }
+
                     // Commit, push, and check build result
                     const buildResult = await commitAndPush(issueId, writtenFiles, fileContents);
 

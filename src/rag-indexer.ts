@@ -123,6 +123,22 @@ export class RAGIndexer {
       console.log('[RAG] Added COMMON_PATTERNS.md to index');
     }
 
+    // Add PROJECT_STRUCTURE.md as a special document (high priority for file placement)
+    const structurePath = path.join(WORKSPACE, 'PROJECT_STRUCTURE.md');
+    if (fs.existsSync(structurePath)) {
+      const structureContent = fs.readFileSync(structurePath, 'utf8');
+      documents.push({
+        id: 'PROJECT_STRUCTURE',
+        path: 'PROJECT_STRUCTURE.md',
+        purpose: 'File placement rules and architecture — tells Builder where files belong',
+        exports: ['file structure', 'directory layout', 'screen placement', 'API routes', 'hooks', 'stores'],
+        content: structureContent.substring(0, 8000), // Full content for RAG
+        astSummary: undefined,
+        astSearchText: 'file placement structure directory screen hook store api route location where',
+      });
+      console.log('[RAG] Added PROJECT_STRUCTURE.md to index');
+    }
+
     this.index = {
       documents,
       lastUpdated: new Date().toISOString(),
@@ -175,6 +191,16 @@ export class RAGIndexer {
         for (const keyword of queryKeywords) {
           if (errorKeywords.some(e => keyword.includes(e) || e.includes(keyword))) {
             score += 100; // Ensure COMMON_PATTERNS appears first for error queries
+          }
+        }
+      }
+
+      // MASSIVE BOOST for PROJECT_STRUCTURE on file placement queries
+      if (doc.path === 'PROJECT_STRUCTURE.md') {
+        const placementKeywords = ['where', 'place', 'put', 'file', 'directory', 'folder', 'location', 'screen', 'hook', 'store', 'route', 'api', 'structure', 'layout'];
+        for (const keyword of queryKeywords) {
+          if (placementKeywords.some(e => keyword.includes(e) || e.includes(keyword))) {
+            score += 100; // Ensure PROJECT_STRUCTURE appears first for placement queries
           }
         }
       }

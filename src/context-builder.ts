@@ -110,33 +110,24 @@ function getProjectConventions(): string {
   
   const sections: string[] = [];
   
-  // Read PROJECT_STRUCTURE.md sections
+  // Read PROJECT_STRUCTURE.md (full file - it's the authority on file placement)
   if (fs.existsSync(structurePath)) {
     try {
       const content = fs.readFileSync(structurePath, 'utf8');
-      const sectionRegex = /^## (Key Patterns|Styling|Imports|Naming|Build)\b[\s\S]*?(?=\n## |\n$)/gm;
-      let m;
-      while ((m = sectionRegex.exec(content)) !== null) {
-        sections.push(m[0].trim());
-      }
+      sections.push('\n\n== PROJECT STRUCTURE (FILE PLACEMENT RULES) ==\n' + content.substring(0, 6000));
     } catch {}
   }
   
-  // Read COMMON_PATTERNS.md (high priority)
+  // Read COMMON_PATTERNS.md (high priority for error prevention)
   if (fs.existsSync(patternsPath)) {
     try {
       const content = fs.readFileSync(patternsPath, 'utf8');
-      sections.push('\n\n== CRITICAL: COMMON PATTERNS & GOTCHAS ==\n' + content.substring(0, 5000));
+      sections.push('\n\n== CRITICAL: COMMON PATTERNS & GOTCHAS ==\n' + content.substring(0, 4000));
     } catch {}
   }
   
   if (sections.length > 0) {
     return '\n\n== PROJECT CONVENTIONS (MUST FOLLOW) ==\n' + sections.join('\n\n') + '\n';
-  }
-  
-  // Fallback: return truncated full file
-  if (fs.existsSync(structurePath)) {
-    return '\n\n== PROJECT CONVENTIONS ==\n' + truncate(fs.readFileSync(structurePath, 'utf8'), 3000) + '\n';
   }
   
   return '';
