@@ -59,6 +59,10 @@ if defined PPC_PID (
 ) else (
     echo        Building local UI from paperclip-fork...
     cd /d "%~dp0packages\paperclip-fork\ui"
+    if not exist "node_modules" (
+        echo        Installing dependencies...
+        call pnpm install >nul 2>&1
+    )
     call pnpm build >nul 2>&1
     cd /d "%~dp0"
     echo        Starting Paperclip with local UI...
@@ -152,6 +156,10 @@ timeout /t 2 /nobreak >nul
 :: Rebuild UI from paperclip-fork
 echo  Rebuilding UI from paperclip-fork...
 cd /d "%~dp0packages\paperclip-fork\ui"
+if not exist "node_modules" (
+    echo    Installing dependencies...
+    call pnpm install >nul 2>&1
+)
 call pnpm build
 cd /d "%~dp0"
 
