@@ -110,7 +110,7 @@
     "ollamaPort": 11434,
     "models": {
       "complexity router": "qwen3:4b",
-      "strategist": "qwen3.5:9b",
+      "strategist": "deepseek-r1:14b",
       "tech lead": "deepcoder:latest",
       "local builder": "qwen3-coder:30b",
       "local builder burst": "remote",
