@@ -183,6 +183,50 @@ export function createProxy(): http.Server {
       }
     }
 
+    // Hook 3: Coder Remote — route to GLM-5 via z.ai instead of Ollama
+    if (agentId === AGENTS['coder remote'] && issueId) {
+      console.log(`[proxy:${proxyPort}] Coder Remote -> GLM-5 (remote) | issue=${issueId.slice(0, 8)}`);
+      try {
+        const issueContext = await buildLocalBuilderContext(issueId, agentId);
+        const messages = [...(parsedBody.messages || [])];
+        if (issueContext) messages.push({ role: 'user', content: issueContext });
+        const fullPrompt = messages.map((m: any) => `[${m.role}]: ${m.content}`).join('\n\n');
+        const remoteResult = await callZAI(
+          fullPrompt,
+          'You are a senior full-stack engineer working on a TypeScript monorepo (Next.js + React Native + Cloudflare Workers). ' +
+          'Write production-quality code. Output file contents using FILE: path/to/file.ext format followed by code blocks. ' +
+          'Use Tamagui for styling (NO Tailwind, NO StyleSheet.create). Use fetcherWithToken from app/utils/fetcherWithToken for API calls.'
+        );
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: { role: 'assistant', content: remoteResult } }));
+
+        // Post-process: extract code blocks and commit like Local Builder
+        setImmediate(async () => {
+          try {
+            const { written: writtenFiles, fileContents } = applyCodeBlocks(remoteResult);
+            if (writtenFiles.length > 0) {
+              const pass = (issueBuilderPasses[issueId] || 0) + 1;
+              issueBuilderPasses[issueId] = pass;
+              console.log(`[closedloop] Coder Remote wrote ${writtenFiles.length} files (pass ${pass})`);
+              await commitAndPush(issueId, writtenFiles, fileContents);
+              await postComment(issueId, agentId, `✅ Coder Remote (GLM-5) wrote ${writtenFiles.length} files (pass ${pass}).`);
+            }
+          } catch (err: any) {
+            console.error(`[closedloop] Coder Remote post-process error: ${err.message}`);
+          }
+        });
+        return;
+      } catch (err: any) {
+        console.error(`[closedloop] Coder Remote GLM-5 call failed: ${err.message}`);
+        await postComment(issueId, agentId, `_Coder Remote (GLM-5) failed: ${err.message}. Falling back to Local Builder._`);
+        // Fallback: reassign to local builder
+        await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: { role: 'assistant', content: '_GLM-5 unavailable, reassigned to Local Builder._' } }));
+        return;
+      }
+    }
+
     // Visual Reviewer bypasses Ollama and runs deterministic recorder
     if (issueId && agentId === AGENTS['visual reviewer']) {
       console.log(`[proxy:${proxyPort}] ${agentName} -> feature recorder | issue=${issueId.slice(0, 8)}`);

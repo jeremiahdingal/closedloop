@@ -36,6 +36,9 @@ export const AGENT_ALIASES: Record<string, string> = {
   'visual reviewer (ui/ux)': AGENTS['visual reviewer'],
   sentinel: AGENTS.sentinel,
   deployer: AGENTS.deployer,
+  'coder remote': AGENTS['coder remote'],
+  'remote coder': AGENTS['coder remote'],
+  'coder remote (engineer)': AGENTS['coder remote'],
   // Keep backward compat for prompts that still say "artist"
   artist: AGENTS['visual reviewer'],
   'artist (ui/ux)': AGENTS['visual reviewer'],
