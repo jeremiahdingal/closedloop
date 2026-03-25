@@ -220,5 +220,14 @@ export async function checkGoalCompletion(ticketIssueId: string): Promise<void> 
     console.log(`[goal] All ${siblingIds.length} tickets complete — marking goal ${goalId.slice(0, 8)} as in_review`);
     await patchIssue(goalId, { status: 'in_review' } as any);
     await postComment(goalId, null, `_All ${siblingIds.length} sub-tickets are complete. Goal moved to in_review._`);
+    
+    // Immediately trigger Epic Reviewer instead of waiting for background checker
+    console.log(`[goal] Triggering Epic Reviewer for ${goalId.slice(0, 8)}`);
+    try {
+      const { checkEpicsForReview } = await import('./epic-reviewer');
+      await checkEpicsForReview();
+    } catch (err: any) {
+      console.error(`[goal] Failed to trigger Epic Reviewer: ${err.message}`);
+    }
   }
 }
