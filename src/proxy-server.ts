@@ -28,6 +28,7 @@ import {
   parseApproachHints,
 } from './exploration-orchestrator';
 import { ragIndexer } from './rag-indexer';
+import { generateTestsForFiles } from './test-writer';
 import { OllamaRequest, OllamaResponse } from './types';
 
 const { proxyPort, ollamaPort } = getOllamaPorts();
@@ -366,7 +367,18 @@ export function createProxy(): http.Server {
                       await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
                       console.log(`[closedloop] Sent back to Local Builder for build fixes`);
                     } else {
-                      // Build passed - continue with normal flow
+                      // Build passed — generate tests for written files before Reviewer
+                      try {
+                        const testResult = await generateTestsForFiles(issueId, writtenFiles, fileContents);
+                        if (testResult.filesWritten.length > 0) {
+                          console.log(`[closedloop] Test Writer generated ${testResult.filesWritten.length} test files`);
+                          // Commit test files on the same branch
+                          await commitAndPush(issueId, testResult.filesWritten, testResult.fileContents);
+                        }
+                      } catch (testErr: any) {
+                        console.log(`[closedloop] Test generation skipped: ${testErr.message}`);
+                      }
+
                       // Check if loop exceeded - auto create PR for human intervention
                       if (loopStatus.exceeded) {
                         console.log(`[closedloop] LOOP EXCEEDED (${loopStatus.count}) - Creating PR for human intervention`);

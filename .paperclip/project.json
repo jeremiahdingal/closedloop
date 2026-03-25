@@ -86,7 +86,9 @@
       "deployer": "5e234916-47ef-41a2-8c07-e9376ee6aa9c",
       "visual reviewer": "787cbd9e-d10b-4bca-b486-e7f5fd99d184",
       "complexity router": "093ee390-cfbf-4129-81d6-aeeb638c7d71",
-      "scaffold architect": "f5366415-528e-4323-a029-8867cd47ffca"
+      "scaffold architect": "f5366415-528e-4323-a029-8867cd47ffca",
+      "test writer": "6ba60cb5-cb40-43e4-8937-47931117534d",
+      "epic reviewer": "3fe38460-5697-4da1-acb6-22d027f75288"
     },
     "agentKeys": {
       "a90b07a4-f18c-4509-9d7b-b9f16eb098d6": "pcp_48d784f6edd3a907e7700cda9f93e36fc0d1030f4a6b6d04",
@@ -140,8 +142,8 @@
 
   "delegationRules": {
     "complexity router": ["strategist"],
-    "strategist": ["tech lead", "reviewer", "sentinel", "visual reviewer"],
-    "tech lead": ["local builder"],
+    "strategist": ["tech lead", "reviewer", "sentinel", "epic reviewer"],
+    "tech lead": ["local builder", "test writer", "scaffold architect"],
     "reviewer": ["diff guardian"],
     "diff guardian": ["visual reviewer"],
     "sentinel": ["deployer"]

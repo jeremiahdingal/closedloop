@@ -727,6 +727,150 @@ function kebabToPascal(s: string): string {
   return capitalize(camel);
 }
 
+// ────────────────────── Vitest Service Test Scaffold ──────────────────────
+
+/**
+ * Generate a Vitest test file for a CRUD API service.
+ * Tests each handler with a mocked Kysely query builder chain.
+ * Zero LLM usage — deterministic from ScaffoldConfig.
+ */
+export function generateServiceTest(config: ScaffoldConfig, template: ScaffoldTemplate = SHOP_DIARY_TEMPLATE): { path: string; content: string } {
+  const testPath = `api/src/services/${config.entity}/${config.entity}.service.test.ts`;
+  const serviceName = `${config.entityCamel}Service`;
+  const idField = config.idField;
+  const table = config.table;
+
+  // Build mock return row
+  const mockRow: string[] = [`    ${idField}: 'test-id-1'`];
+  for (const f of config.fields) {
+    const val = f.tsType === 'number' ? '42' : `'test-${f.name}'`;
+    mockRow.push(`    ${f.name}: ${val}`);
+  }
+  const mockRowStr = mockRow.join(',\n');
+
+  // Build create payload (without id)
+  const createPayload: string[] = [];
+  for (const f of config.fields) {
+    const val = f.tsType === 'number' ? '42' : `'test-${f.name}'`;
+    createPayload.push(`    ${f.name}: ${val}`);
+  }
+  const createPayloadStr = createPayload.join(',\n');
+
+  const content = `import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// ─── Mock Kysely query builder chain ─────────────────────────────
+// Each method returns \`this\` so chains like .selectFrom().where().selectAll().execute() work.
+const mockExecute = vi.fn();
+const mockExecuteTakeFirstOrThrow = vi.fn();
+
+const mockQueryBuilder: any = {
+  selectFrom: vi.fn().mockReturnThis(),
+  insertInto: vi.fn().mockReturnThis(),
+  updateTable: vi.fn().mockReturnThis(),
+  deleteFrom: vi.fn().mockReturnThis(),
+  where: vi.fn().mockReturnThis(),
+  selectAll: vi.fn().mockReturnThis(),
+  values: vi.fn().mockReturnThis(),
+  set: vi.fn().mockReturnThis(),
+  returningAll: vi.fn().mockReturnThis(),
+  execute: mockExecute,
+  executeTakeFirstOrThrow: mockExecuteTakeFirstOrThrow,
+};
+
+vi.mock('${template.imports.db}', () => ({
+  db: () => mockQueryBuilder,
+}));
+
+vi.mock('ulidx', () => ({
+  ulid: () => 'mock-ulid-001',
+}));
+
+// Import service after mocks are set up
+const { ${serviceName} } = await import('./${config.entity}.service');
+
+const mockEnv = {} as any;
+const TEST_ROW = {
+${mockRowStr}
+};
+
+describe('${serviceName}', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const service = ${serviceName}(mockEnv);
+
+  describe('getAll', () => {
+    it('should query ${table} and return all rows', async () => {
+      mockExecute.mockResolvedValueOnce([TEST_ROW]);
+      const result = await service.getAll${config.entityPascal ? config.entityPascal : ''}();
+      expect(mockQueryBuilder.selectFrom).toHaveBeenCalledWith('${table}');
+      expect(mockQueryBuilder.selectAll).toHaveBeenCalled();
+      expect(mockExecute).toHaveBeenCalled();
+    });
+  });
+
+  describe('getById', () => {
+    it('should query ${table} by ${idField}', async () => {
+      mockExecuteTakeFirstOrThrow.mockResolvedValueOnce(TEST_ROW);
+      const result = await service.get${config.entityPascal}ById('test-id-1');
+      expect(mockQueryBuilder.selectFrom).toHaveBeenCalledWith('${table}');
+      expect(mockQueryBuilder.where).toHaveBeenCalledWith('${idField}', '=', 'test-id-1');
+      expect(mockExecuteTakeFirstOrThrow).toHaveBeenCalled();
+    });
+  });
+
+  describe('create', () => {
+    it('should insert into ${table} with generated id', async () => {
+      mockExecute.mockResolvedValueOnce(undefined);
+      await service.create${config.entityPascal}({
+${createPayloadStr}
+      } as any);
+      expect(mockQueryBuilder.insertInto).toHaveBeenCalledWith('${table}');
+      expect(mockQueryBuilder.values).toHaveBeenCalledWith(
+        expect.objectContaining({ ${idField}: 'mock-ulid-001' })
+      );
+      expect(mockExecute).toHaveBeenCalled();
+    });
+  });
+
+  describe('update', () => {
+    it('should update ${table} by ${idField}', async () => {
+      mockExecute.mockResolvedValueOnce([{ ...TEST_ROW, ${config.fields[0]?.name || 'name'}: 'updated' }]);
+      await service.update${config.entityPascal}('test-id-1', { ${config.fields[0]?.name || 'name'}: 'updated' } as any);
+      expect(mockQueryBuilder.updateTable).toHaveBeenCalledWith('${table}');
+      expect(mockQueryBuilder.set).toHaveBeenCalledWith(
+        expect.objectContaining({ ${config.fields[0]?.name || 'name'}: 'updated' })
+      );
+      expect(mockQueryBuilder.where).toHaveBeenCalledWith('${idField}', '=', 'test-id-1');
+      expect(mockExecute).toHaveBeenCalled();
+    });
+  });
+
+  describe('delete', () => {
+    it('should delete from ${table} by ${idField}', async () => {
+      // Mock getById for existence check
+      mockExecuteTakeFirstOrThrow.mockResolvedValueOnce(TEST_ROW);
+      mockExecute.mockResolvedValueOnce(undefined);
+      await service.delete${config.entityPascal}('test-id-1');
+      expect(mockQueryBuilder.deleteFrom).toHaveBeenCalledWith('${table}');
+      expect(mockQueryBuilder.where).toHaveBeenCalledWith('${idField}', '=', 'test-id-1');
+    });
+  });
+});
+`;
+
+  return { path: testPath, content };
+}
+
+/**
+ * Generate test files for a scaffold config.
+ * Returns an array of file objects to write.
+ */
+export function generateScaffoldTests(config: ScaffoldConfig, template: ScaffoldTemplate = SHOP_DIARY_TEMPLATE): Array<{ path: string; content: string }> {
+  return [generateServiceTest(config, template)];
+}
+
 // ────────────────────── Tamagui Frontend Scaffold ──────────────────────
 
 /**
@@ -1148,9 +1292,10 @@ export function generateFullStackScaffold(
   config: ScaffoldConfig,
   template: ScaffoldTemplate = SHOP_DIARY_TEMPLATE,
   humanName?: string
-): { api: ScaffoldOutput; frontend: FrontendScaffoldOutput } {
+): { api: ScaffoldOutput; frontend: FrontendScaffoldOutput; tests: Array<{ path: string; content: string }> } {
   const api = generateScaffold(config, template);
   const frontendConfig = apiConfigToFrontendConfig(config, humanName);
   const frontend = generateFrontendScaffold(frontendConfig);
-  return { api, frontend };
+  const tests = generateScaffoldTests(config, template);
+  return { api, frontend, tests };
 }

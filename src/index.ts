@@ -9,6 +9,7 @@ import { createProxy, checkAssignedIssues, initializeRAG } from './proxy-server'
 import { ragIndexer } from './rag-indexer';
 import { getConfig, getPaperclipApiUrl, getCompanyId, getAgentKeys } from './config';
 import { checkGoalsForDecomposition } from './epic-decomposer';
+import { checkEpicsForReview } from './epic-reviewer';
 
 // Load configuration
 const config = getConfig();
@@ -73,5 +74,15 @@ setTimeout(() => {
 setTimeout(() => {
   checkGoalsForDecomposition().catch(() => {});
 }, 10000);
+
+// Run epic reviewer every 3 minutes (checks if all tickets in an epic are in_review)
+setInterval(() => {
+  checkEpicsForReview().catch(() => {});
+}, 180000);
+
+// Check for epic reviews shortly after startup
+setTimeout(() => {
+  checkEpicsForReview().catch(() => {});
+}, 30000);
 
 console.log('[closedloop] ClosedLoop started.');

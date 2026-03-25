@@ -17,6 +17,7 @@ import {
   patchIndexTs,
   apiConfigToFrontendConfig,
   generateFrontendScaffold,
+  generateScaffoldTests,
 } from './scaffold-engine';
 
 export interface ScaffoldResult {
@@ -113,6 +114,27 @@ export function executeScaffold(config: ScaffoldConfig, workspace: string, templ
   const frontendConfig = apiConfigToFrontendConfig(config);
   const frontendScaffold = generateFrontendScaffold(frontendConfig);
   for (const file of frontendScaffold.files) {
+    const fullPath = path.join(workspace, file.path);
+    try {
+      if (fs.existsSync(fullPath)) {
+        result.filesWritten.push(`${file.path} (skipped - already exists)`);
+        continue;
+      }
+      const dir = path.dirname(fullPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(fullPath, file.content, 'utf8');
+      result.filesWritten.push(file.path);
+    } catch (err: any) {
+      result.errors.push(`Failed to write ${file.path}: ${err.message}`);
+      result.success = false;
+    }
+  }
+
+  // 4. Write Vitest service test files
+  const testFiles = generateScaffoldTests(config, template);
+  for (const file of testFiles) {
     const fullPath = path.join(workspace, file.path);
     try {
       if (fs.existsSync(fullPath)) {
