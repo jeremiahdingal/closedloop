@@ -15,6 +15,9 @@ test-*.js
 # Secrets
 .env
 
+# Build output
+dist/
+
 # Node
 node_modules/
 
