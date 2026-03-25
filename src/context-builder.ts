@@ -106,25 +106,40 @@ export async function buildStrategistProjectContext(): Promise<string> {
  */
 function getProjectConventions(): string {
   const structurePath = path.join(WORKSPACE, 'PROJECT_STRUCTURE.md');
-  if (!fs.existsSync(structurePath)) return '';
-
-  try {
-    const content = fs.readFileSync(structurePath, 'utf8');
-    // Extract the Key Patterns, Styling, Imports, and Naming sections
-    const sections: string[] = [];
-    const sectionRegex = /^## (Key Patterns|Styling|Imports|Naming|Build)\b[\s\S]*?(?=\n## |\n$)/gm;
-    let m;
-    while ((m = sectionRegex.exec(content)) !== null) {
-      sections.push(m[0].trim());
-    }
-    if (sections.length > 0) {
-      return '\n\n== PROJECT CONVENTIONS (MUST FOLLOW) ==\n' + sections.join('\n\n') + '\n';
-    }
-    // Fallback: return truncated full file
-    return '\n\n== PROJECT CONVENTIONS ==\n' + truncate(content, 3000) + '\n';
-  } catch {
-    return '';
+  const patternsPath = path.join(WORKSPACE, 'COMMON_PATTERNS.md');
+  
+  const sections: string[] = [];
+  
+  // Read PROJECT_STRUCTURE.md sections
+  if (fs.existsSync(structurePath)) {
+    try {
+      const content = fs.readFileSync(structurePath, 'utf8');
+      const sectionRegex = /^## (Key Patterns|Styling|Imports|Naming|Build)\b[\s\S]*?(?=\n## |\n$)/gm;
+      let m;
+      while ((m = sectionRegex.exec(content)) !== null) {
+        sections.push(m[0].trim());
+      }
+    } catch {}
   }
+  
+  // Read COMMON_PATTERNS.md (high priority)
+  if (fs.existsSync(patternsPath)) {
+    try {
+      const content = fs.readFileSync(patternsPath, 'utf8');
+      sections.push('\n\n== CRITICAL: COMMON PATTERNS & GOTCHAS ==\n' + content.substring(0, 5000));
+    } catch {}
+  }
+  
+  if (sections.length > 0) {
+    return '\n\n== PROJECT CONVENTIONS (MUST FOLLOW) ==\n' + sections.join('\n\n') + '\n';
+  }
+  
+  // Fallback: return truncated full file
+  if (fs.existsSync(structurePath)) {
+    return '\n\n== PROJECT CONVENTIONS ==\n' + truncate(fs.readFileSync(structurePath, 'utf8'), 3000) + '\n';
+  }
+  
+  return '';
 }
 
 /**

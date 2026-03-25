@@ -107,6 +107,22 @@ export class RAGIndexer {
       }
     }
 
+    // Add COMMON_PATTERNS.md as a special document (high priority for Builder)
+    const patternsPath = path.join(WORKSPACE, 'COMMON_PATTERNS.md');
+    if (fs.existsSync(patternsPath)) {
+      const patternsContent = fs.readFileSync(patternsPath, 'utf8');
+      documents.push({
+        id: 'COMMON_PATTERNS',
+        path: 'COMMON_PATTERNS.md',
+        purpose: 'Common patterns, gotchas, and build error fixes — CRITICAL reference for Local Builder',
+        exports: ['import patterns', 'file structure', 'build errors', 'React Native patterns', 'API patterns'],
+        content: patternsContent.substring(0, 8000), // Full content for RAG
+        astSummary: undefined,
+        astSearchText: 'common patterns import paths build errors react native typescript',
+      });
+      console.log('[RAG] Added COMMON_PATTERNS.md to index');
+    }
+
     this.index = {
       documents,
       lastUpdated: new Date().toISOString(),
@@ -149,6 +165,16 @@ export class RAGIndexer {
         for (const keyword of queryKeywords) {
           if (astText.includes(keyword)) {
             score += keyword.length * 2; // 2x boost for AST matches
+          }
+        }
+      }
+
+      // MASSIVE BOOST for COMMON_PATTERNS on error-related queries
+      if (doc.path === 'COMMON_PATTERNS.md') {
+        const errorKeywords = ['import', 'error', 'build', 'fail', 'module', 'not found', 'ts2307', 'ts2305', 'wrong', 'correct', 'pattern'];
+        for (const keyword of queryKeywords) {
+          if (errorKeywords.some(e => keyword.includes(e) || e.includes(keyword))) {
+            score += 100; // Ensure COMMON_PATTERNS appears first for error queries
           }
         }
       }
