@@ -259,10 +259,10 @@ export async function buildLocalBuilderContext(
     }
   }
 
-  // Add tried-approaches memory (PREVENTS REPEATING MISTAKES)
+  // Add tried-approaches memory (PREVENTS REPEATING MISTAKES - GLOBAL ACROSS ALL TICKETS)
   try {
     const { buildTriedApproachesContext } = await import('./tried-approaches');
-    const triedApproachesContext = await buildTriedApproachesContext(issueId);
+    const triedApproachesContext = await buildTriedApproachesContext(issueId, filesToReadArray);
     if (triedApproachesContext) {
       fileContext += triedApproachesContext;
     }

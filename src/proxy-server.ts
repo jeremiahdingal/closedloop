@@ -425,11 +425,15 @@ export function createProxy(): http.Server {
                     if (!buildResult.success) {
                       console.log(`[closedloop] Build FAILED - saving to tried-approaches memory`);
                       
-                      // Save this failed attempt to memory
+                      // Get issue details for identifier
+                      const issueDetails = await getIssueDetails(issueId);
+                      const issueIdentifier = issueDetails?.identifier || issueId.slice(0, 8);
+                      
+                      // Save this failed attempt to global memory
                       try {
                         const { saveTriedApproach } = await import('./tried-approaches');
-                        await saveTriedApproach(issueId, writtenFiles, buildResult.output || 'Build failed');
-                        console.log(`[closedloop] Saved failed attempt to memory`);
+                        await saveTriedApproach(issueId, issueIdentifier, writtenFiles, buildResult.output || 'Build failed');
+                        console.log(`[closedloop] Saved failed attempt to global memory`);
                       } catch (err: any) {
                         console.log(`[closedloop] Failed to save tried-approaches: ${err.message}`);
                       }
@@ -444,7 +448,7 @@ export function createProxy(): http.Server {
                         `1. Run \`yarn build\` locally to see full errors\n` +
                         `2. Fix the build errors in the files you just wrote\n` +
                         `3. Re-commit and the build will be verified again\n\n` +
-                        `**Note:** This failed attempt has been saved to memory. Your next attempt will include this error context to help you avoid repeating the same mistake.`
+                        `**Note:** This failed attempt has been saved to GLOBAL memory. Other tickets working on similar files will learn from this error.`
                       );
                       await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
                       console.log(`[closedloop] Sent back to Local Builder for build fixes`);
