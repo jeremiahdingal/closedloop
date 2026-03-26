@@ -7,6 +7,22 @@ import * as path from 'path';
 import { ProjectConfig } from './types';
 
 const CONFIG_PATH = path.join(__dirname, '..', '.paperclip', 'project.json');
+const ENV_PATH = path.join(__dirname, '..', '.env');
+
+// Load .env file if it exists
+if (fs.existsSync(ENV_PATH)) {
+  const envContent = fs.readFileSync(ENV_PATH, 'utf8');
+  envContent.split('\n').forEach(line => {
+    const [key, ...valueParts] = line.split('=');
+    if (key && valueParts.length > 0) {
+      const value = valueParts.join('=').trim();
+      if (key.trim() && !key.trim().startsWith('#')) {
+        process.env[key.trim()] = value;
+      }
+    }
+  });
+  console.log('[config] Loaded .env file');
+}
 
 let cachedConfig: ProjectConfig | null = null;
 

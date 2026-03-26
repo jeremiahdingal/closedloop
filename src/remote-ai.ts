@@ -21,7 +21,8 @@ const TICKETS_DIR = '.tickets';
 
 export async function callZAI(prompt: string, systemPrompt: string): Promise<string> {
   const remote = getRemoteConfig();
-  const apiBase = remote?.appArchitect?.apiBase || 'https://open.bigmodel.cn/api/paas/v4';
+  // Use new z.ai API endpoint (openai-compatible)
+  const apiBase = remote?.appArchitect?.apiBase || process.env.Z_AI_API_BASE || 'https://api.z.ai/api/coding/paas/v4';
   const model = remote?.appArchitect?.model || 'glm-5';
 
   if (!Z_AI_API_KEY) {
