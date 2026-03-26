@@ -18,7 +18,8 @@ echo    [5] View ClosedLoop Logs (live)
 echo    [6] Wake Agent Manually
 echo    [7] Build RAG Index
 echo    [8] Start ClosedLoop Only (npm start)
-echo    [9] Exit
+echo    [9] Trigger Background Checker NOW
+echo    [0] Exit
 echo.
 set /p choice="  Select: "
 
@@ -30,7 +31,8 @@ if "%choice%"=="5" goto LOGS
 if "%choice%"=="6" goto WAKE
 if "%choice%"=="7" goto RAG
 if "%choice%"=="8" goto START_CLOSEDLOOP
-if "%choice%"=="9" exit
+if "%choice%"=="9" goto TRIGGER_CHECKER
+if "%choice%"=="0" exit
 goto MENU
 
 :START
@@ -78,14 +80,21 @@ for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr
 if defined PROXY_PID (
     echo        Already running on :3201 ^(PID %PROXY_PID%^).
 ) else (
+    :: Kill any stale node processes on 3201 first
+    for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3201 "') do taskkill /F /PID %%a >nul 2>&1
+    timeout /t 1 /nobreak >nul
+    :: Start ClosedLoop with environment variables properly set
     powershell -Command "$env:Z_AI_API_KEY='%Z_AI_API_KEY%'; $env:LLM_MODEL='%LLM_MODEL%'; $env:LLM_MODEL_BURST='%LLM_MODEL_BURST%'; Start-Process -FilePath 'node' -ArgumentList 'dist/index.js' -WorkingDirectory 'C:\Users\dinga\Projects\paperclip' -WindowStyle Hidden -RedirectStandardOutput 'closedloop-out.log' -RedirectStandardError 'closedloop-err.log'"
-    timeout /t 2 /nobreak >nul
+    timeout /t 3 /nobreak >nul
     echo        Started on :3201.
 )
 set PROXY_PID=
 
 echo.
 echo  [OK] All systems started.
+echo.
+echo  NOTE: Background checker runs every 60s to wake assigned agents.
+echo  Check logs with option [5] to see agent wakeups.
 echo.
 pause
 goto MENU
@@ -324,6 +333,54 @@ if defined PROXY_PID (
 
 echo.
 echo  [OK] ClosedLoop started.
+echo.
+pause
+goto MENU
+
+:TRIGGER_CHECKER
+cls
+echo.
+echo  ============================================
+echo    Trigger Background Checker NOW
+echo  ============================================
+echo.
+echo  This will immediately wake up the background checker
+echo  to process all assigned issues.
+echo.
+pause
+echo.
+echo  Triggering background checker...
+echo.
+
+:: Call the bridge's checkAssignedIssues via a direct API call
+:: The bridge listens on 3201 but doesn't expose this endpoint
+:: So we wake all agents with assigned issues directly
+
+echo  Fetching assigned issues...
+curl -s "http://127.0.0.1:3100/api/companies/ac5c469b-1f81-4f1f-9061-1dd9033ec831/issues?status=todo,in_progress" > "%TEMP%\assigned_issues.json"
+
+:: Wake Strategist
+echo  Waking Strategist...
+curl -s -X POST "http://127.0.0.1:3100/api/agents/a90b07a4-f18c-4509-9d7b-b9f16eb098d6/wakeup" -H "Content-Type: application/json" -d "{\"reason\":\"Background checker trigger\"}" >nul
+echo  Strategist woken.
+
+:: Wake Local Builder
+echo  Waking Local Builder...
+curl -s -X POST "http://127.0.0.1:3100/api/agents/caf931bf-516a-409f-813e-a29e14decb10/wakeup" -H "Content-Type: application/json" -d "{\"reason\":\"Background checker trigger\"}" >nul
+echo  Local Builder woken.
+
+:: Wake Tech Lead
+echo  Waking Tech Lead...
+curl -s -X POST "http://127.0.0.1:3100/api/agents/dad994d7-5d3e-4101-ae57-82c7be9b778b/wakeup" -H "Content-Type: application/json" -d "{\"reason\":\"Background checker trigger\"}" >nul
+echo  Tech Lead woken.
+
+:: Wake Reviewer
+echo  Waking Reviewer...
+curl -s -X POST "http://127.0.0.1:3100/api/agents/eace3a19-bded-4b90-827e-cfc00f3900bd/wakeup" -H "Content-Type: application/json" -d "{\"reason\":\"Background checker trigger\"}" >nul
+echo  Reviewer woken.
+
+echo.
+echo  [OK] All key agents woken. Check logs for processing.
 echo.
 pause
 goto MENU
