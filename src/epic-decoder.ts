@@ -25,9 +25,8 @@ const PAPERCLIP_API = getPaperclipApiUrl();
 const COMPANY_ID = getCompanyId();
 const WORKSPACE = getWorkspace();
 
-// Track decode runs per epic: goalId → run count
-const epicDecodeRuns = new Map<string, number>();
-const MAX_DECODE_RUNS = 2;
+// Track decode runs per epic to prevent duplicates within same session
+const decomposedEpics = new Set<string>();
 
 // ─── Public API ─────────────────────────────────────────────────────
 
@@ -40,25 +39,15 @@ export async function decodeEpic(goalId: string): Promise<boolean> {
     const goal = await getIssueDetails(goalId);
     if (!goal) return false;
 
-    // Check if already decomposed (has child tickets)
+    // ALWAYS check if already decomposed (has child tickets) - prevents duplicates
     const existingTickets = await getEpicTickets(goalId);
     if (existingTickets.length > 0) {
-      console.log(`[epic-decoder] Epic ${goalId.slice(0, 8)} already has ${existingTickets.length} tickets — skipping`);
+      console.log(`[epic-decoder] Epic ${goalId.slice(0, 8)} already has ${existingTickets.length} tickets — SKIPPING to prevent duplicates`);
       return false;
     }
 
-    // Check run count
-    const runCount = epicDecodeRuns.get(goalId) || 0;
-    if (runCount >= MAX_DECODE_RUNS) {
-      console.log(`[epic-decoder] Epic ${goalId.slice(0, 8)} already decoded ${runCount} times — skipping`);
-      return false;
-    }
-
-    // Mark this run
-    epicDecodeRuns.set(goalId, runCount + 1);
-
-    console.log(`[epic-decoder] Epic "${goal.title}" ready for decomposition (run ${runCount + 1}/${MAX_DECODE_RUNS})`);
-    await runEpicDecode(goal, runCount + 1);
+    console.log(`[epic-decoder] Epic "${goal.title}" ready for decomposition`);
+    await runEpicDecode(goal);
     return true;
   } catch (err: any) {
     console.error(`[epic-decoder] Decode failed: ${err.message}`);
@@ -69,10 +58,10 @@ export async function decodeEpic(goalId: string): Promise<boolean> {
 /**
  * Run the epic decomposition.
  */
-async function runEpicDecode(
-  goal: any,
-  runNumber: number
-): Promise<void> {
+async function runEpicDecode(goal: any): Promise<void> {
+  // Mark as decomposed BEFORE starting to prevent race condition duplicates
+  decomposedEpics.add(goal.id);
+
   // 1. Load PROJECT_STRUCTURE.md for context
   let projectStructure = '';
   try {
@@ -86,7 +75,7 @@ async function runEpicDecode(
   } catch {}
 
   // 3. Build the decode prompt
-  const prompt = buildDecodePrompt(goal, projectStructure, commonPatterns, runNumber);
+  const prompt = buildDecodePrompt(goal, projectStructure, commonPatterns);
 
   // 4. Call remote LLM
   console.log(`[epic-decoder] Sending to glm-5 (${prompt.length} chars)`);
@@ -105,13 +94,15 @@ async function runEpicDecode(
     try {
       await decomposeGoalIntoTickets(goal.id, decodeContent);
       await postComment(goal.id, null, `✅ Epic Decoder (GLM-5) decomposed epic into tickets. Child issues created.`);
-      
-      // Assign first ticket to Tech Lead to start the flow
+
+      // Assign ALL tickets to Strategist for planning and delegation
       const tickets = await getEpicTickets(goal.id);
       if (tickets.length > 0) {
-        const firstTicket = tickets[0];
-        await patchIssue(firstTicket.id, { assigneeAgentId: AGENTS['tech lead'] });
-        console.log(`[epic-decoder] First ticket ${firstTicket.identifier} assigned to Tech Lead`);
+        for (const ticket of tickets) {
+          await patchIssue(ticket.id, { assigneeAgentId: AGENTS.strategist });
+          console.log(`[epic-decoder] Ticket ${ticket.identifier} assigned to Strategist`);
+        }
+        console.log(`[epic-decoder] All ${tickets.length} tickets assigned to Strategist for planning`);
       }
     } catch (err: any) {
       console.error(`[epic-decoder] Failed to create tickets: ${err.message}`);
@@ -150,8 +141,7 @@ RULES:
 function buildDecodePrompt(
   goal: any,
   projectStructure: string,
-  commonPatterns: string,
-  runNumber: number
+  commonPatterns: string
 ): string {
   let prompt = `**TASK:** Decompose this epic into narrow, buildable tickets.
 
@@ -171,12 +161,6 @@ ${projectStructure.substring(0, 3000)}
   if (commonPatterns) {
     prompt += `**Common Patterns:**
 ${commonPatterns.substring(0, 3000)}
-
-`;
-  }
-
-  if (runNumber > 1) {
-    prompt += `**Note:** This is decomposition attempt #${runNumber}. Previous attempts may have failed. Be more thorough.
 
 `;
   }
