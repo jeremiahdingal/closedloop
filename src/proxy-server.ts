@@ -202,7 +202,15 @@ export function createProxy(): http.Server {
     // Hook 1b: Epic Decoder — decompose high-complexity goals using GLM-5
     if (issueId && agentId === AGENTS['epic decoder']) {
       console.log(`[closedloop] Epic Decoder processing high-complexity Goal ${issueId.slice(0, 8)}`);
-      // Let it process — the handler below will call GLM-5
+      // Call epic-decoder module directly (uses GLM-5 via callZAI)
+      setImmediate(async () => {
+        try {
+          const { decodeEpic } = await import('./epic-decoder');
+          await decodeEpic(issueId);
+        } catch (err: any) {
+          console.error(`[closedloop] Epic Decoder failed: ${err.message}`);
+        }
+      });
     }
 
     // Hook 2: Burst model override for greenfield scaffold issues
@@ -275,14 +283,6 @@ export function createProxy(): http.Server {
         res.end(JSON.stringify({ message: { role: 'assistant', content: '_GLM-5 unavailable, reassigned to Local Builder._' } }));
         return;
       }
-    }
-
-    // Hook 3b: Epic Decoder — decompose high-complexity goals
-    // Uses pi_local adapter (instructions configured in Paperclip UI)
-    if (agentId === AGENTS['epic decoder'] && issueId) {
-      console.log(`[proxy:${proxyPort}] Epic Decoder processing high-complexity Goal ${issueId.slice(0, 8)}`);
-      // Let pi_local adapter handle decomposition via Ollama proxy
-      // Agent instructions in Paperclip UI define the behavior
     }
 
     // Visual Reviewer bypasses Ollama and runs deterministic recorder
