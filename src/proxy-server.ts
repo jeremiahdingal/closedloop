@@ -396,15 +396,22 @@ export function createProxy(): http.Server {
               if (routerIssue) {
                 const complexity = scoreComplexity(routerIssue.title, routerIssue.description || '');
                 console.log(`[closedloop] Complexity Router scored ${issueId.slice(0, 8)}: ${complexity.score}/10 [${complexity.signals.join(', ')}]`);
-                if (complexity.score >= 7) {
-                  // Complex issue — call Remote Architect then hand to Strategist
+                
+                // Check if it's a Goal/Epic
+                if (isGoalIssue(routerIssue)) {
+                  // Goals always go to Epic Decoder for decomposition
+                  console.log(`[closedloop] Goal issue detected — routing to Epic Decoder`);
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS['epic decoder'] });
+                } else if (complexity.score >= 7) {
+                  // High complexity — call Remote Architect then hand to Strategist
                   await callRemoteArchitect(issueId, routerIssue);
-                  // Mark for parallel exploration when it reaches the builder
-                  console.log(`[closedloop] Issue ${issueId.slice(0, 8)} marked for parallel exploration (score: ${complexity.score})`);
+                  console.log(`[closedloop] High complexity — marked for parallel exploration`);
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+                } else {
+                  // Normal complexity — route to Strategist
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
                 }
-                // Always route to Strategist after scoring
-                await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
-                console.log(`[closedloop] Complexity Router -> Strategist`);
+                console.log(`[closedloop] Complexity Router -> ${isGoalIssue(routerIssue) ? 'Epic Decoder' : 'Strategist'}`);
               }
             }
 
