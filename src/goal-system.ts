@@ -198,6 +198,25 @@ export async function decomposeGoalIntoTickets(
   return createdIds;
 }
 
+/**
+ * Get all tickets for a goal (excluding the goal itself and cancelled tickets)
+ */
+export async function getEpicTickets(goalId: string): Promise<any[]> {
+  try {
+    const res = await fetch(`${getPaperclipApiUrl()}/api/companies/${getCompanyId()}/issues`);
+    if (!res.ok) return [];
+
+    const data = await res.json() as any;
+    const issues = Array.isArray(data) ? data : data.issues || data.data || [];
+
+    return issues.filter(
+      (i: any) => i.goalId === goalId && i.id !== goalId && i.status !== 'cancelled'
+    );
+  } catch {
+    return [];
+  }
+}
+
 // ─── Goal completion check ─────────────────────────────────────────
 
 export async function checkGoalCompletion(ticketIssueId: string): Promise<void> {

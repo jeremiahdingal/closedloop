@@ -10,7 +10,7 @@ import * as http from 'http';
 import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentModel, getAgentKeys } from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
 import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses, issueBuilderBurstMode } from './agent-types';
-import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion } from './goal-system';
+import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion, getEpicTickets } from './goal-system';
 import { callRemoteArchitect, callZAI } from './remote-ai';
 import { extractIssueId, extractAgentId, sleep } from './utils';
 import { applyCodeBlocks } from './code-extractor';
@@ -394,30 +394,26 @@ export function createProxy(): http.Server {
             if (agentId === AGENTS['complexity router'] && issueId) {
               const routerIssue = await getIssueDetails(issueId);
               if (routerIssue) {
-                // Check if it's a Goal/Epic FIRST - Goals skip scoring and go straight to Epic Decoder
+                // Check if it's a Goal/Epic FIRST - Goals skip scoring
                 if (isGoalIssue(routerIssue)) {
-                  console.log(`[closedloop] Goal issue detected — calling Epic Decoder directly`);
-                  // Call epic-decoder module directly (bypasses scoring and Strategist)
-                  setImmediate(async () => {
-                    try {
-                      const { decodeEpic } = await import('./epic-decoder');
-                      await decodeEpic(issueId);
-                    } catch (err: any) {
-                      console.error(`[closedloop] Epic Decoder failed: ${err.message}`);
-                    }
-                  });
-                  console.log(`[closedloop] Complexity Router -> Epic Decoder (GLM-5)`);
+                  // Goals: Check if already decomposed, if yes route to Strategist, if no assign to Epic Decoder agent
+                  const existingTickets = await getEpicTickets(routerIssue.id);
+                  if (existingTickets.length > 0) {
+                    console.log(`[closedloop] Goal ${issueId.slice(0, 8)} already decomposed (${existingTickets.length} tickets) → Strategist`);
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+                  } else {
+                    console.log(`[closedloop] Goal ${issueId.slice(0, 8)} not decomposed → assigning to Epic Decoder agent`);
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS['epic decoder'] });
+                  }
                 } else {
                   // Not a Goal - score complexity and route normally
                   const complexity = scoreComplexity(routerIssue.title, routerIssue.description || '');
                   console.log(`[closedloop] Complexity Router scored ${issueId.slice(0, 8)}: ${complexity.score}/10 [${complexity.signals.join(', ')}]`);
                   if (complexity.score >= 7) {
-                    // High complexity — call Remote Architect then hand to Strategist
                     await callRemoteArchitect(issueId, routerIssue);
                     console.log(`[closedloop] High complexity — marked for parallel exploration`);
                     await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
                   } else {
-                    // Normal complexity — route to Strategist
                     await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
                   }
                   console.log(`[closedloop] Complexity Router -> Strategist`);
