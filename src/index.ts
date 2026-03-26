@@ -8,7 +8,8 @@
 import { createProxy, checkAssignedIssues, initializeRAG } from './proxy-server';
 import { ragIndexer } from './rag-indexer';
 import { getConfig, getPaperclipApiUrl, getCompanyId, getAgentKeys } from './config';
-import { checkGoalsForDecomposition } from './epic-decomposer';
+// DISABLED: Old epic-decomposer (local LLM) - replaced by epic-decoder (GLM-5)
+// import { checkGoalsForDecomposition } from './epic-decomposer';
 import { checkEpicsForReview } from './epic-reviewer';
 
 // Load configuration
@@ -58,10 +59,11 @@ setInterval(() => {
   checkAssignedIssues().catch(() => {});
 }, 60000);
 
+// DISABLED: Old epic-decomposer (local LLM) - replaced by epic-decoder (GLM-5)
 // Run epic decomposer every 2 minutes
-setInterval(() => {
-  checkGoalsForDecomposition().catch(() => {});
-}, 120000);
+// setInterval(() => {
+//   checkGoalsForDecomposition().catch(() => {});
+// }, 120000);
 
 // On startup: reset errored agents, then start processing
 setTimeout(() => {
@@ -70,10 +72,10 @@ setTimeout(() => {
     .catch(() => {});
 }, 5000);
 
-// Check for epics shortly after startup
-setTimeout(() => {
-  checkGoalsForDecomposition().catch(() => {});
-}, 10000);
+// DISABLED: Old epic-decomposer startup check
+// setTimeout(() => {
+//   checkGoalsForDecomposition().catch(() => {});
+// }, 10000);
 
 // Run epic reviewer every 3 minutes (checks if all tickets in an epic are in_review)
 setInterval(() => {
