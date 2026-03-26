@@ -108,6 +108,7 @@ async function getTicketDiff(ticket: EpicTicket): Promise<string> {
 
 /**
  * Scan monorepo structure and collect key files for context
+ * Uses up to 200KB of GLM-5's 256K context window
  */
 async function collectMonorepoContext(): Promise<string> {
   const { execSync } = await import('child_process');
@@ -166,26 +167,43 @@ async function collectMonorepoContext(): Promise<string> {
     }
   } catch {}
   
-  // Collect key API route files to show API structure
-  context += '## API Routes\n\n';
+  // Collect ALL source files with FULL contents (up to 150KB)
+  context += '## Source Code (Full Contents)\n\n';
+  let totalSourceChars = 0;
+  const MAX_SOURCE_CHARS = 150000; // 150KB for source code
+  
   try {
     const { glob } = await import('glob');
-    const apiFiles = glob.sync('packages/api/src/**/*.ts', {
+    // Collect TypeScript/TSX files from packages only
+    const sourceFiles = glob.sync('packages/**/*.{ts,tsx}', {
       cwd: WORKSPACE,
-      ignore: ['**/node_modules/**'],
-    }).slice(0, 30);
+      ignore: ['**/node_modules/**', '**/dist/**', '**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts', '**/*.spec.tsx'],
+    }).slice(0, 100); // First 100 source files
     
-    for (const apiFile of apiFiles) {
-      const fullPath = path.join(WORKSPACE, apiFile);
-      const content = fs.readFileSync(fullPath, 'utf8');
-      // Extract export statements to show API surface
-      const exports = content.match(/export\s+(?:const|function|class|interface|type)\s+\w+/g) || [];
-      if (exports.length > 0) {
-        context += `### ${apiFile}\n`;
-        context += `Exports: ${exports.join(', ')}\n\n`;
+    for (const sourceFile of sourceFiles) {
+      if (totalSourceChars >= MAX_SOURCE_CHARS) {
+        context += '\n... (source files truncated due to size limit)\n';
+        break;
+      }
+      
+      const fullPath = path.join(WORKSPACE, sourceFile);
+      try {
+        const content = fs.readFileSync(fullPath, 'utf8');
+        // Truncate individual files to 5KB each to get more files
+        const truncatedContent = content.length > 5000 ? content.substring(0, 5000) + '\n// ... (truncated)' : content;
+        
+        context += `### ${sourceFile}\n`;
+        context += `\`\`\`typescript\n${truncatedContent}\n\`\`\`\n\n`;
+        totalSourceChars += truncatedContent.length;
+      } catch (err: any) {
+        console.log(`[epic-reviewer-agent] Could not read ${sourceFile}: ${err.message}`);
       }
     }
-  } catch {}
+  } catch (err: any) {
+    console.log(`[epic-reviewer-agent] Error collecting source files: ${err.message}`);
+  }
+  
+  console.log(`[epic-reviewer-agent] Collected ${totalSourceChars} chars of source code`);
   
   return context;
 }
