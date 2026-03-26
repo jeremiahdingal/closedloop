@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <em>ClosedLoop fixes this with orchestration — making 14B models outperform 70B models<br/>through RAG, build-green enforcement, and reflection memory.<br/>Runs on your GPU. No API bills.</em>
+  <em>ClosedLoop fixes this with orchestration — making 14B models outperform 70B models<br/>through RAG, build-green enforcement, reflection memory, and <strong>automated cross-epic review</strong>.<br/>Runs on your GPU. No API bills.</em>
 </p>
 
 <p align="center">
@@ -185,10 +185,17 @@ Each agent runs a different local model, sized to its job:
 | 👁️ **Visual Reviewer** | UI/UX auditor — screenshot analysis | `qwen3-vl:8b` | 5GB |
 | 🔐 **Sentinel** | DevOps — CI/CD, security scans | `deepseek-r1:8b` | 5GB |
 | 🚀 **Deployer** | Infrastructure — deployment execution | `qwen3:8b` | 5GB |
+| 🧐 **Epic Reviewer** | Cross-epic consistency — reviews ALL epics at once, applies fixes | `glm-5` (z.ai) | Remote |
+| 📋 **Epic Decoder** | Epic decomposition — breaks down complex goals into tickets | `glm-5` (z.ai) | Remote |
 
 ---
 
 ## ✨ Key Features
+
+### 🧐 Epic Reviewer Agent (NEW)
+> **Problem:** Per-ticket reviews miss cross-epic inconsistencies — type mismatches between files, missing integration points, duplicate code across tickets.
+>
+> **Solution:** When all tickets in an epic are `in_review`, the Epic Reviewer Agent collects ALL diffs from ALL epics into a single prompt. GLM-5 reviews for cross-file consistency, then **actually fixes the code**: checks out each PR branch, writes corrected files, runs `yarn build`, and commits fixes directly to the PR. No comments — just fixes.
 
 ### 🧠 RAG-Grounded Code Generation
 > **Problem:** LLMs hallucinate file paths and invent APIs that don't exist.
@@ -198,7 +205,7 @@ Each agent runs a different local model, sized to its job:
 ### 🔁 Build-Green Loop with Tried-Approaches Memory
 > **Problem:** The builder writes code, the build fails, it tries the same broken approach again in circles.
 >
-> **Solution:** Code doesn't leave the builder until `yarn build` passes. Every failed attempt is recorded with its fingerprint and error. On retry, the builder sees what it already tried and must take a different approach. Up to 20 passes before escalation.
+> **Solution:** Code doesn't leave the builder until `yarn build` passes. Every failed attempt is recorded with its fingerprint and error. On retry, the builder sees what it already tried and must take a different approach. **After 2 failures, sends to Reviewer for assistance. After 4 failures, creates PR for human intervention** — preventing infinite loops.
 
 ### 📝 Reflection Memory
 > **Problem:** The reviewer rejects code for "wrong import path" on Monday. On Tuesday, the builder makes the same mistake.
@@ -220,13 +227,18 @@ Each agent runs a different local model, sized to its job:
 >
 > **Solution:** Before writing code, the builder must list which files it will modify vs. create and state its assumptions. This pre-flight check forces the model to reason about the codebase before generating, catching misunderstandings early.
 
+### ⚠️ Import Validation with Contextual Hints
+> **Problem:** Builder hallucinates packages that don't exist (`ky`, `axios`, `@mui/*`), causing build failures.
+>
+> **Solution:** Pre-flight import validation checks all imports against `package.json` before build. When validation fails, includes **detailed fix hints**: lists valid packages, suggests alternatives (`fetcherWithToken` instead of `ky`), and shows common valid import patterns. After 2 import failures, escalates to Reviewer.
+
 ### 🔀 Parallel Worktree Exploration
 > **Problem:** For ambiguous tasks, the builder picks one approach and commits to it. If it's wrong, the whole review loop restarts.
 >
 > **Solution:** For complex tasks (score >= 7 or Tech Lead `[EXPLORE]` signal), ClosedLoop spawns 2-3 builder runs in separate git worktrees with different approach strategies. Each approach is isolated — no cross-contamination. Reviewer compares passing approaches and picks the best one. Cost of exploration with local models is near-zero.
 
 <details>
-<summary><strong>📋 All Features (19 total)</strong></summary>
+<summary><strong>📋 All Features (21 total)</strong></summary>
 
 ### 🔨 Scaffold Engine (Zero-Shot CRUD)
 > CRUD APIs are boilerplate. When the router detects a CRUD ticket (entity + fields + table), the Scaffold Engine generates all files deterministically in one shot — routes, service layer, Zod schemas, DB types, enum entries. No LLM needed.
@@ -270,6 +282,12 @@ Each agent runs a different local model, sized to its job:
 ### 🧪 154-Test Safety Net
 > Comprehensive test suite covering all pure-logic modules: utils, complexity router, scaffold engine, epic decomposer, delegation, code extractor, agent contracts, test-first, AST indexer, success tracker, worktree ops, and exploration orchestrator.
 
+### 🔍 Build Failure Loop Detection
+> Tracks consecutive build failures per issue. After 2 failures, sends to Reviewer for assistance. After 4 failures, creates PR for human intervention. Prevents infinite retry loops.
+
+### 🎯 Import Validation with Hints
+> Pre-flight import validation catches hallucinated packages before build. Provides contextual hints with valid alternatives. Escalates to Reviewer after 2 failures.
+
 </details>
 
 ---
@@ -299,10 +317,14 @@ npm install
 # 3. Pull the models you need (pick based on your VRAM)
 ollama pull qwen3:4b            # 🧭 Routing + Diff Guardian (2.5GB)
 ollama pull qwen3.5:9b          # 🧠 Strategist (6.6GB)
-ollama pull deepcoder:14b   # 📐🔨 Tech Lead + Local Builder (9GB)
+ollama pull deepcoder:14b       # 📐🔨 Tech Lead + Local Builder (9GB)
 ollama pull glm-4.7-flash       # 📝 Reviewer (19GB)
 ollama pull qwen3-vl:8b         # 👁️ Visual Reviewer (5GB)
 ollama pull nomic-embed-text    # 📊 RAG embeddings (300MB)
+
+# Optional: Remote agents (GLM-5 via z.ai) - requires Z_AI_API_KEY
+# 🧐 Epic Reviewer - cross-epic consistency review
+# 📋 Epic Decoder - epic decomposition
 
 # 4. Build
 npm run build
@@ -334,7 +356,9 @@ Edit `.paperclip/project.json`:
       "reviewer": "agent-uuid",
       "diff guardian": "agent-uuid",
       "visual reviewer": "agent-uuid",
-      "complexity router": "agent-uuid"
+      "complexity router": "agent-uuid",
+      "epic reviewer": "agent-uuid",
+      "epic decoder": "agent-uuid"
     }
   },
   "ollama": {
