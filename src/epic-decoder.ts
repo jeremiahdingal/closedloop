@@ -25,8 +25,33 @@ const PAPERCLIP_API = getPaperclipApiUrl();
 const COMPANY_ID = getCompanyId();
 const WORKSPACE = getWorkspace();
 
-// Track decode runs per epic to prevent duplicates within same session
-const decomposedEpics = new Set<string>();
+// File-based lock to prevent duplicate decomposition across bridge restarts
+const DECOMPOSED_LOCK_FILE = path.join(WORKSPACE, '.epics-decomposed.json');
+
+function isEpicDecomposed(goalId: string): boolean {
+  try {
+    if (!fs.existsSync(DECOMPOSED_LOCK_FILE)) return false;
+    const decomposed = JSON.parse(fs.readFileSync(DECOMPOSED_LOCK_FILE, 'utf8'));
+    return decomposed.includes(goalId);
+  } catch {
+    return false;
+  }
+}
+
+function markEpicDecomposed(goalId: string): void {
+  try {
+    let decomposed: string[] = [];
+    if (fs.existsSync(DECOMPOSED_LOCK_FILE)) {
+      decomposed = JSON.parse(fs.readFileSync(DECOMPOSED_LOCK_FILE, 'utf8'));
+    }
+    if (!decomposed.includes(goalId)) {
+      decomposed.push(goalId);
+      fs.writeFileSync(DECOMPOSED_LOCK_FILE, JSON.stringify(decomposed, null, 2));
+    }
+  } catch (err: any) {
+    console.error(`[epic-decoder] Failed to write lock file: ${err.message}`);
+  }
+}
 
 // ─── Public API ─────────────────────────────────────────────────────
 
@@ -39,15 +64,23 @@ export async function decodeEpic(goalId: string): Promise<boolean> {
     const goal = await getIssueDetails(goalId);
     if (!goal) return false;
 
-    // ALWAYS check if already decomposed (has child tickets) - prevents duplicates
+    // Check file-based lock FIRST (prevents duplicates across bridge restarts)
+    if (isEpicDecomposed(goalId)) {
+      console.log(`[epic-decoder] Epic ${goalId.slice(0, 8)} is locked (already decomposed) — SKIPPING`);
+      return false;
+    }
+
+    // Check if already decomposed (has child tickets)
     const existingTickets = await getEpicTickets(goalId);
     if (existingTickets.length > 0) {
-      console.log(`[epic-decoder] Epic ${goalId.slice(0, 8)} already has ${existingTickets.length} tickets — SKIPPING to prevent duplicates`);
+      console.log(`[epic-decoder] Epic ${goalId.slice(0, 8)} already has ${existingTickets.length} tickets — SKIPPING`);
+      markEpicDecomposed(goalId); // Ensure lock exists
       return false;
     }
 
     console.log(`[epic-decoder] Epic "${goal.title}" ready for decomposition`);
     await runEpicDecode(goal);
+    markEpicDecomposed(goalId); // Mark as decomposed AFTER success
     return true;
   } catch (err: any) {
     console.error(`[epic-decoder] Decode failed: ${err.message}`);
@@ -59,9 +92,6 @@ export async function decodeEpic(goalId: string): Promise<boolean> {
  * Run the epic decomposition.
  */
 async function runEpicDecode(goal: any): Promise<void> {
-  // Mark as decomposed BEFORE starting to prevent race condition duplicates
-  decomposedEpics.add(goal.id);
-
   // 1. Load PROJECT_STRUCTURE.md for context
   let projectStructure = '';
   try {
