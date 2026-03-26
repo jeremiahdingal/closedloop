@@ -400,8 +400,17 @@ export function createProxy(): http.Server {
                 // Check if it's a Goal/Epic
                 if (isGoalIssue(routerIssue)) {
                   // Goals always go to Epic Decoder for decomposition
-                  console.log(`[closedloop] Goal issue detected — routing to Epic Decoder`);
-                  await patchIssue(issueId, { assigneeAgentId: AGENTS['epic decoder'] });
+                  console.log(`[closedloop] Goal issue detected — calling Epic Decoder directly`);
+                  // Call epic-decoder module directly (bypasses agent system)
+                  setImmediate(async () => {
+                    try {
+                      const { decodeEpic } = await import('./epic-decoder');
+                      await decodeEpic(issueId);
+                    } catch (err: any) {
+                      console.error(`[closedloop] Epic Decoder failed: ${err.message}`);
+                    }
+                  });
+                  // Keep issue assigned to Complexity Router to avoid confusion
                 } else if (complexity.score >= 7) {
                   // High complexity — call Remote Architect then hand to Strategist
                   await callRemoteArchitect(issueId, routerIssue);
