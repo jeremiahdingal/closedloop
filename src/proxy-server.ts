@@ -394,14 +394,10 @@ export function createProxy(): http.Server {
             if (agentId === AGENTS['complexity router'] && issueId) {
               const routerIssue = await getIssueDetails(issueId);
               if (routerIssue) {
-                const complexity = scoreComplexity(routerIssue.title, routerIssue.description || '');
-                console.log(`[closedloop] Complexity Router scored ${issueId.slice(0, 8)}: ${complexity.score}/10 [${complexity.signals.join(', ')}]`);
-                
-                // Check if it's a Goal/Epic
+                // Check if it's a Goal/Epic FIRST - Goals skip scoring and go straight to Epic Decoder
                 if (isGoalIssue(routerIssue)) {
-                  // Goals always go to Epic Decoder for decomposition
                   console.log(`[closedloop] Goal issue detected — calling Epic Decoder directly`);
-                  // Call epic-decoder module directly (bypasses agent system)
+                  // Call epic-decoder module directly (bypasses scoring and Strategist)
                   setImmediate(async () => {
                     try {
                       const { decodeEpic } = await import('./epic-decoder');
@@ -410,17 +406,22 @@ export function createProxy(): http.Server {
                       console.error(`[closedloop] Epic Decoder failed: ${err.message}`);
                     }
                   });
-                  // Keep issue assigned to Complexity Router to avoid confusion
-                } else if (complexity.score >= 7) {
-                  // High complexity — call Remote Architect then hand to Strategist
-                  await callRemoteArchitect(issueId, routerIssue);
-                  console.log(`[closedloop] High complexity — marked for parallel exploration`);
-                  await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+                  console.log(`[closedloop] Complexity Router -> Epic Decoder (GLM-5)`);
                 } else {
-                  // Normal complexity — route to Strategist
-                  await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+                  // Not a Goal - score complexity and route normally
+                  const complexity = scoreComplexity(routerIssue.title, routerIssue.description || '');
+                  console.log(`[closedloop] Complexity Router scored ${issueId.slice(0, 8)}: ${complexity.score}/10 [${complexity.signals.join(', ')}]`);
+                  if (complexity.score >= 7) {
+                    // High complexity — call Remote Architect then hand to Strategist
+                    await callRemoteArchitect(issueId, routerIssue);
+                    console.log(`[closedloop] High complexity — marked for parallel exploration`);
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+                  } else {
+                    // Normal complexity — route to Strategist
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+                  }
+                  console.log(`[closedloop] Complexity Router -> Strategist`);
                 }
-                console.log(`[closedloop] Complexity Router -> ${isGoalIssue(routerIssue) ? 'Epic Decoder' : 'Strategist'}`);
               }
             }
 
