@@ -107,18 +107,99 @@ async function getTicketDiff(ticket: EpicTicket): Promise<string> {
 }
 
 /**
+ * Scan monorepo structure and collect key files for context
+ */
+async function collectMonorepoContext(): Promise<string> {
+  const { execSync } = await import('child_process');
+  
+  let context = '## Monorepo Structure\n\n';
+  
+  try {
+    // Get directory tree (excluding node_modules, .git, etc.)
+    const tree = execSync('dir /b /s /a-d ^| findstr /v "node_modules \\.git \\.pnpm \\.qwen \\.paperclip dist"', {
+      cwd: WORKSPACE,
+      encoding: 'utf8',
+      timeout: 30000,
+      maxBuffer: 5 * 1024 * 1024,
+    }).toString();
+    
+    context += '```\n';
+    context += tree.split('\n').slice(0, 500).join('\n'); // First 500 files
+    context += '\n```\n\n';
+  } catch {}
+  
+  // Collect all package.json files
+  context += '## Package Dependencies\n\n';
+  try {
+    const { glob } = await import('glob');
+    const pkgFiles = glob.sync('**/package.json', {
+      cwd: WORKSPACE,
+      ignore: ['**/node_modules/**', '**/.pnpm/**'],
+    }).slice(0, 20); // First 20 packages
+    
+    for (const pkgFile of pkgFiles) {
+      try {
+        const pkgPath = path.join(WORKSPACE, pkgFile);
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        context += `### ${pkgFile}\n`;
+        context += `\`\`\`json\n`;
+        context += JSON.stringify({
+          name: pkg.name,
+          version: pkg.version,
+          dependencies: pkg.dependencies || {},
+          devDependencies: pkg.devDependencies || {},
+          peerDependencies: pkg.peerDependencies || {},
+        }, null, 2);
+        context += `\n\`\`\`\n\n`;
+      } catch {}
+    }
+  } catch {}
+  
+  // Collect TypeScript configs
+  context += '## TypeScript Configuration\n\n';
+  try {
+    const tsConfigPath = path.join(WORKSPACE, 'tsconfig.json');
+    if (fs.existsSync(tsConfigPath)) {
+      const tsConfig = JSON.parse(fs.readFileSync(tsConfigPath, 'utf8'));
+      context += '### Root tsconfig.json\n';
+      context += `\`\`\`json\n${JSON.stringify(tsConfig, null, 2)}\n\`\`\`\n\n`;
+    }
+  } catch {}
+  
+  // Collect key API route files to show API structure
+  context += '## API Routes\n\n';
+  try {
+    const { glob } = await import('glob');
+    const apiFiles = glob.sync('packages/api/src/**/*.ts', {
+      cwd: WORKSPACE,
+      ignore: ['**/node_modules/**'],
+    }).slice(0, 30);
+    
+    for (const apiFile of apiFiles) {
+      const fullPath = path.join(WORKSPACE, apiFile);
+      const content = fs.readFileSync(fullPath, 'utf8');
+      // Extract export statements to show API surface
+      const exports = content.match(/export\s+(?:const|function|class|interface|type)\s+\w+/g) || [];
+      if (exports.length > 0) {
+        context += `### ${apiFile}\n`;
+        context += `Exports: ${exports.join(', ')}\n\n`;
+      }
+    }
+  } catch {}
+  
+  return context;
+}
+
+/**
  * Build the review prompt for all epics
  */
 async function buildReviewPrompt(epics: EpicWithTickets[]): Promise<string> {
-  let prompt = '## Project Conventions\n\n';
+  let prompt = '';
 
-  try {
-    const projectStructure = fs.readFileSync(path.join(WORKSPACE, 'PROJECT_STRUCTURE.md'), 'utf8');
-    // Include more project structure context (8000 chars instead of 4000)
-    // This helps GLM-5 understand project patterns, tech stack, and conventions
-    prompt += projectStructure.substring(0, 8000);
-    if (projectStructure.length > 8000) prompt += '\n... (truncated)';
-  } catch {}
+  // Collect full monorepo context (uses up to 150K of 256K context window)
+  console.log('[epic-reviewer-agent] Collecting monorepo context...');
+  const monorepoContext = await collectMonorepoContext();
+  prompt += monorepoContext;
 
   prompt += '\n\n## Epics to Review\n\n';
   prompt += `Reviewing ${epics.length} epics with ${epics.reduce((sum, e) => sum + e.tickets.length, 0)} total tickets.\n\n`;
