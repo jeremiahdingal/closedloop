@@ -25,6 +25,93 @@ export function getRAGIndexer(): any {
 }
 
 /**
+ * Collect monorepo context for Local Builder
+ * Includes file structure, package.json files, and key source files
+ * Uses up to 100KB of context (local models have 128K-256K context)
+ */
+export async function collectMonorepoContext(): Promise<string> {
+  let context = '## Monorepo Structure\n\n';
+  
+  try {
+    // Get directory tree (excluding node_modules, .git, etc.)
+    const tree = execSync('dir /b /s /a-d ^| findstr /v "node_modules \\.git \\.pnpm \\.qwen \\.paperclip dist"', {
+      cwd: WORKSPACE,
+      encoding: 'utf8',
+      timeout: 30000,
+      maxBuffer: 5 * 1024 * 1024,
+    }).toString();
+    
+    context += '```\n';
+    context += tree.split('\n').slice(0, 300).join('\n'); // First 300 files
+    context += '\n```\n\n';
+  } catch {}
+  
+  // Collect package.json files
+  context += '## Package Dependencies\n\n';
+  try {
+    const { glob } = await import('glob');
+    const pkgFiles = glob.sync('**/package.json', {
+      cwd: WORKSPACE,
+      ignore: ['**/node_modules/**', '**/.pnpm/**'],
+    }).slice(0, 15); // First 15 packages
+    
+    for (const pkgFile of pkgFiles) {
+      try {
+        const pkgPath = path.join(WORKSPACE, pkgFile);
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        context += `### ${pkgFile}\n`;
+        context += `\`\`\`json\n`;
+        context += JSON.stringify({
+          name: pkg.name,
+          version: pkg.version,
+          dependencies: pkg.dependencies || {},
+          devDependencies: pkg.devDependencies || {},
+        }, null, 2);
+        context += `\n\`\`\`\n\n`;
+      } catch {}
+    }
+  } catch {}
+  
+  // Collect key source files with FULL contents (up to 80KB)
+  context += '## Source Code Reference\n\n';
+  let totalSourceChars = 0;
+  const MAX_SOURCE_CHARS = 80000; // 80KB for source code
+  
+  try {
+    const { glob } = await import('glob');
+    // Collect TypeScript/TSX files from packages only
+    const sourceFiles = glob.sync('packages/**/*.{ts,tsx}', {
+      cwd: WORKSPACE,
+      ignore: ['**/node_modules/**', '**/dist/**', '**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts', '**/*.spec.tsx'],
+    }).slice(0, 50); // First 50 source files
+    
+    for (const sourceFile of sourceFiles) {
+      if (totalSourceChars >= MAX_SOURCE_CHARS) {
+        context += '\n... (source files truncated due to size limit)\n';
+        break;
+      }
+      
+      const fullPath = path.join(WORKSPACE, sourceFile);
+      try {
+        const content = fs.readFileSync(fullPath, 'utf8');
+        // Truncate individual files to 3KB each to get more files
+        const truncatedContent = content.length > 3000 ? content.substring(0, 3000) + '\n// ... (truncated)' : content;
+        
+        context += `### ${sourceFile}\n`;
+        context += `\`\`\`typescript\n${truncatedContent}\n\`\`\`\n\n`;
+        totalSourceChars += truncatedContent.length;
+      } catch (err: any) {
+        // Skip files that can't be read
+      }
+    }
+  } catch (err: any) {
+    // Continue without source files if glob fails
+  }
+  
+  return context;
+}
+
+/**
  * Scan the workspace directory and return a structured text representation.
  */
 export function scanDirectoryStructure(): string {
@@ -200,6 +287,18 @@ export async function buildLocalBuilderContext(
   const baseContext = await buildIssueContext(issueId, currentAgentId);
   if (!baseContext) return null;
 
+  // Add monorepo context (file structure, package.json, source code reference)
+  // This helps the builder understand where files should go and what patterns to follow
+  console.log('[context] Collecting monorepo context for Local Builder...');
+  let context = baseContext;
+  try {
+    const monorepoContext = await collectMonorepoContext();
+    context += '\n\n' + monorepoContext;
+    console.log(`[context] Added ${monorepoContext.length} chars of monorepo context`);
+  } catch (err: any) {
+    console.log(`[context] Could not collect monorepo context: ${err.message}`);
+  }
+
   // Get comments to find which files are being discussed
   const comments = await getIssueComments(issueId);
   const filesToRead = new Set<string>();
@@ -265,6 +364,9 @@ export async function buildLocalBuilderContext(
     }
   }
 
+  // Combine context with file context
+  context += fileContext;
+
   // Add tried-approaches memory (PREVENTS REPEATING MISTAKES - GLOBAL ACROSS ALL TICKETS)
   try {
     const { buildTriedApproachesContext } = await import('./tried-approaches');
@@ -294,7 +396,8 @@ export async function buildLocalBuilderContext(
   fileContext += 'Output each file using: FILE: path/to/file.ext\\n```lang\\ncode\\n```\n';
   fileContext += 'Write ALL required files in ONE response.\n';
 
-  return baseContext + fileContext;
+  context += fileContext;
+  return context;
 }
 
 function getAgentName(agentId: string): string {
