@@ -159,9 +159,10 @@ function createDefaultConfig(): ProjectConfig {
       screenshotDir: '.screenshots',
     },
     delegationRules: {
-      'complexity router': ['strategist'],
-      strategist: ['tech lead', 'reviewer', 'sentinel', 'visual reviewer'],
-      'tech lead': ['local builder'],
+      'complexity router': ['strategist', 'epic decoder'],
+      strategist: ['tech lead', 'reviewer', 'sentinel', 'visual reviewer', 'epic decoder'],
+      'epic decoder': ['tech lead'],
+      'tech lead': ['local builder', 'coder remote'],
       reviewer: ['diff guardian'],
       'diff guardian': ['visual reviewer'],
       sentinel: ['deployer'],

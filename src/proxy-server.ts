@@ -173,23 +173,36 @@ export function createProxy(): http.Server {
     }
 
     // Hook 1: Goal guard — prevent Local Builder from directly handling Goal/Epic issues
-    // Route to Epic Decoder (GLM-5) for decomposition
+    // High-complexity goals (score >= 7) → Epic Decoder (GLM-5)
+    // Lower-complexity goals → Strategist (local)
     if (issueId && agentId === AGENTS['local builder']) {
       const builderIssue = await getIssueDetails(issueId);
       if (builderIssue && isGoalIssue(builderIssue)) {
-        console.log(`[closedloop] Goal guard: redirecting Goal issue ${issueId.slice(0, 8)} to Epic Decoder`);
-        await postComment(issueId, null, '_Goal/Epic issue detected — sending to Epic Decoder (GLM-5) for ticket decomposition._');
-        await patchIssue(issueId, { assigneeAgentId: AGENTS['epic decoder'] });
+        // Score complexity to decide routing
+        const complexity = scoreComplexity(builderIssue.title, builderIssue.description || '');
+        
+        if (complexity.score >= 7) {
+          // High complexity → Epic Decoder (GLM-5)
+          console.log(`[closedloop] Goal guard: ${issueId.slice(0, 8)} complexity ${complexity.score}/10 → Epic Decoder`);
+          await postComment(issueId, null, `_High-complexity goal detected (score: ${complexity.score}/10) — sending to Epic Decoder (GLM-5) for ticket decomposition._`);
+          await patchIssue(issueId, { assigneeAgentId: AGENTS['epic decoder'] });
+        } else {
+          // Lower complexity → Strategist (local decomposition)
+          console.log(`[closedloop] Goal guard: ${issueId.slice(0, 8)} complexity ${complexity.score}/10 → Strategist`);
+          await postComment(issueId, null, `_Goal detected (score: ${complexity.score}/10) — sending to Strategist for decomposition._`);
+          await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+        }
+        
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ message: { role: 'assistant', content: '_Redirected Goal issue to Epic Decoder for decomposition._' } }));
+        res.end(JSON.stringify({ message: { role: 'assistant', content: '_Redirected Goal issue for decomposition._' } }));
         return;
       }
     }
 
-    // Hook 1b: Epic Decoder — decompose goals into tickets using GLM-5
+    // Hook 1b: Epic Decoder — decompose high-complexity goals using GLM-5
     if (issueId && agentId === AGENTS['epic decoder']) {
-      console.log(`[closedloop] Epic Decoder processing Goal ${issueId.slice(0, 8)}`);
-      // Let it process — the Coder Remote handler will catch it and call GLM-5
+      console.log(`[closedloop] Epic Decoder processing high-complexity Goal ${issueId.slice(0, 8)}`);
+      // Let it process — the handler below will call GLM-5
     }
 
     // Hook 2: Burst model override for greenfield scaffold issues
@@ -264,55 +277,12 @@ export function createProxy(): http.Server {
       }
     }
 
-    // Hook 3b: Epic Decoder — route to GLM-5 for ticket decomposition
+    // Hook 3b: Epic Decoder — decompose high-complexity goals
+    // Uses pi_local adapter (instructions configured in Paperclip UI)
     if (agentId === AGENTS['epic decoder'] && issueId) {
-      console.log(`[proxy:${proxyPort}] Epic Decoder -> GLM-5 (remote) | issue=${issueId.slice(0, 8)}`);
-      try {
-        const issueContext = await buildIssueContext(issueId, agentId);
-        const messages = [...(parsedBody.messages || [])];
-        if (issueContext) messages.push({ role: 'user', content: issueContext });
-        const fullPrompt = messages.map((m: any) => `[${m.role}]: ${m.content}`).join('\n\n');
-        const remoteResult = await callZAI(
-          fullPrompt,
-          'You are an expert software architect specializing in breaking down large epics into narrow, buildable tickets. ' +
-          'Output tickets using this exact format:\n\n' +
-          '## Ticket: <title>\n' +
-          '**Objective:** <one sentence>\n' +
-          '**Files:** <exact file paths>\n' +
-          '**Acceptance Criteria:**\n' +
-          '- [ ] <testable criterion>\n' +
-          '**Dependencies:** <other tickets or None>\n\n' +
-          'Create one ticket per feature. Be specific about file paths. Do NOT write implementation code.'
-        );
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ message: { role: 'assistant', content: remoteResult } }));
-
-        // Post-process: parse ticket decomposition and create child issues
-        setImmediate(async () => {
-          try {
-            if (remoteResult.includes('## Ticket:')) {
-              console.log(`[closedloop] Epic Decoder produced ticket decomposition`);
-              await decomposeGoalIntoTickets(issueId, remoteResult);
-              await postComment(issueId, agentId, `✅ Epic Decoder (GLM-5) decomposed epic into tickets. Child issues created.`);
-            } else {
-              console.log(`[closedloop] Epic Decoder did not produce ticket decomposition`);
-              await postComment(issueId, agentId, `⚠️ Epic Decoder output did not contain ticket decomposition. Please try again.`);
-            }
-          } catch (err: any) {
-            console.error(`[closedloop] Epic Decoder post-process error: ${err.message}`);
-            await postComment(issueId, agentId, `_Epic Decoder failed to create tickets: ${err.message}_`);
-          }
-        });
-        return;
-      } catch (err: any) {
-        console.error(`[closedloop] Epic Decoder GLM-5 call failed: ${err.message}`);
-        await postComment(issueId, agentId, `_Epic Decoder (GLM-5) failed: ${err.message}. Falling back to Strategist._`);
-        // Fallback: reassign to strategist
-        await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ message: { role: 'assistant', content: '_GLM-5 unavailable, reassigned to Strategist._' } }));
-        return;
-      }
+      console.log(`[proxy:${proxyPort}] Epic Decoder processing high-complexity Goal ${issueId.slice(0, 8)}`);
+      // Let pi_local adapter handle decomposition via Ollama proxy
+      // Agent instructions in Paperclip UI define the behavior
     }
 
     // Visual Reviewer bypasses Ollama and runs deterministic recorder

@@ -89,7 +89,7 @@
       "scaffold architect": "f5366415-528e-4323-a029-8867cd47ffca",
       "test writer": "6ba60cb5-cb40-43e4-8937-47931117534d",
       "epic reviewer": "3fe38460-5697-4da1-acb6-22d027f75288",
-      "epic decoder": "8f2a9c3e-5d7b-4e1f-9a6c-2b8d4f0e1a3c"
+      "epic decoder": "a187dfb6-d6d3-4222-8e25-c8001c4b830b"
     },
     "agentKeys": {
       "a90b07a4-f18c-4509-9d7b-b9f16eb098d6": "pcp_48d784f6edd3a907e7700cda9f93e36fc0d1030f4a6b6d04",
@@ -101,7 +101,7 @@
       "c7fb4dae-8ac3-4795-b1f6-d14db2021035": "pcp_268a568963f01698e27a232c9b911d96fa3504b214232b97",
       "5e234916-47ef-41a2-8c07-e9376ee6aa9c": "pcp_ad33d0ec65c082f7b46feef3233872548ac64b606e0e7541",
       "787cbd9e-d10b-4bca-b486-e7f5fd99d184": "pcp_6b6711a3a014c59c92416ec479077557a021087ba08bc280",
-      "8f2a9c3e-5d7b-4e1f-9a6c-2b8d4f0e1a3c": "pcp_1f6cb1a1f3ed1fe95aa69f675c1c7f0663cc7a6f2f070c88"
+      "a187dfb6-d6d3-4222-8e25-c8001c4b830b": ""
     },
     "blockedAgents": [],
     "apiUrl": "http://127.0.0.1:3100"
