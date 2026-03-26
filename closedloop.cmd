@@ -69,8 +69,12 @@ set PPC_PID=
 echo  [3/3] Starting ClosedLoop...
 :: Load secrets from .env if it exists
 if exist "%~dp0.env" (
-    for /f "usebackq tokens=1,* delims==" %%A in ("%~dp0.env") do (
-        if not "%%A"=="" if not "%%A:~0,1%"=="#" set "%%A=%%B"
+    for /f "usebackq delims=" %%A in ("%~dp0.env") do (
+        if not "%%A"=="" if not "%%A:~0,1%"=="#" (
+            for /f "tokens=1,* delims==" %%B in ("%%A") do (
+                set "%%B=%%C"
+            )
+        )
     )
 )
 if not defined LLM_MODEL set LLM_MODEL=deepcoder:14b

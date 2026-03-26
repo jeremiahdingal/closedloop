@@ -217,6 +217,42 @@ export async function getEpicTickets(goalId: string): Promise<any[]> {
   }
 }
 
+/**
+ * Reload goal/ticket mappings from Paperclip API
+ * Called on startup to restore in-memory maps
+ */
+export async function reloadGoalTicketMappings(): Promise<void> {
+  try {
+    const res = await fetch(`${getPaperclipApiUrl()}/api/companies/${getCompanyId()}/issues`);
+    if (!res.ok) return;
+
+    const data = await res.json() as any;
+    const issues = Array.isArray(data) ? data : data.issues || data.data || [];
+
+    // Clear existing maps by removing all keys
+    Object.keys(goalTicketMap).forEach(key => delete goalTicketMap[key]);
+    Object.keys(ticketGoalMap).forEach(key => delete ticketGoalMap[key]);
+
+    // Build mappings from issues with goalId
+    for (const issue of issues) {
+      if (issue.goalId && issue.id !== issue.goalId) {
+        // This is a ticket belonging to a goal
+        if (!goalTicketMap[issue.goalId]) {
+          goalTicketMap[issue.goalId] = [];
+        }
+        goalTicketMap[issue.goalId].push(issue.id);
+        ticketGoalMap[issue.id] = issue.goalId;
+      }
+    }
+
+    const goalCount = Object.keys(goalTicketMap).length;
+    const ticketCount = Object.keys(ticketGoalMap).length;
+    console.log(`[goal] Reloaded ${goalCount} goals with ${ticketCount} tickets`);
+  } catch (err: any) {
+    console.error(`[goal] Failed to reload mappings: ${err.message}`);
+  }
+}
+
 // ─── Goal completion check ─────────────────────────────────────────
 
 export async function checkGoalCompletion(ticketIssueId: string): Promise<void> {
@@ -239,14 +275,14 @@ export async function checkGoalCompletion(ticketIssueId: string): Promise<void> 
     console.log(`[goal] All ${siblingIds.length} tickets complete — marking goal ${goalId.slice(0, 8)} as in_review`);
     await patchIssue(goalId, { status: 'in_review' } as any);
     await postComment(goalId, null, `_All ${siblingIds.length} sub-tickets are complete. Goal moved to in_review._`);
-    
-    // Immediately trigger Epic Reviewer instead of waiting for background checker
-    console.log(`[goal] Triggering Epic Reviewer for ${goalId.slice(0, 8)}`);
+
+    // Immediately run Epic Reviewer Agent to process ALL epics at once
+    console.log(`[goal] Running Epic Reviewer Agent for all epics`);
     try {
-      const { checkEpicsForReview } = await import('./epic-reviewer');
-      await checkEpicsForReview();
+      const { runEpicReviewerAgent } = await import('./epic-reviewer-agent');
+      await runEpicReviewerAgent();
     } catch (err: any) {
-      console.error(`[goal] Failed to trigger Epic Reviewer: ${err.message}`);
+      console.error(`[goal] Epic Reviewer Agent failed: ${err.message}`);
     }
   }
 }

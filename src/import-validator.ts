@@ -108,7 +108,19 @@ function getInstalledPackages(): Set<string> {
     'crypto', 'child_process', 'url', 'querystring', 'buffer', 'net',
   ];
   nodeBuiltins.forEach(name => packages.add(name));
-  
+
+  // Add common React/ecosystem packages that are often peer deps or transitive
+  // These are typically provided by the framework/meta-package and shouldn't be flagged
+  const commonEcosystem = [
+    'react', 'react-native', 'react-dom',
+    '@tanstack/react-query', '@tanstack/react-table',
+    'tamagui', '@tamagui/core', '@tamagui/web',
+    'expo', 'expo-router', 'expo-constants', 'expo-linking', 'expo-image-picker', 'expo-linear-gradient',
+    'solito', 'next', 'next/router',
+    '@babel/runtime',
+  ];
+  commonEcosystem.forEach(name => packages.add(name));
+
   return packages;
 }
 

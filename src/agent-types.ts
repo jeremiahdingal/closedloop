@@ -73,6 +73,9 @@ export const recentDelegations: Record<string, number> = {};
 // Track how many times Local Builder has run on an issue
 export const issueBuilderPasses: Record<string, number> = {};
 
+// Track per-issue import validation failures
+export const issueImportFailures: Record<string, number> = {};
+
 // Lock per issue to prevent concurrent Local Builder processing
 export const issueProcessingLock: Record<string, boolean> = {};
 

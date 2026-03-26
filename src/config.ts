@@ -125,6 +125,8 @@ function createDefaultConfig(): ProjectConfig {
         sentinel: 'c7fb4dae-8ac3-4795-b1f6-d14db2021035',
         deployer: '5e234916-47ef-41a2-8c07-e9376ee6aa9c',
         'scaffold architect': 'f5366415-528e-4323-a029-8867cd47ffca',
+        'epic reviewer': '3fe38460-5697-4da1-acb6-22d027f75288',
+        'epic decoder': 'a0e455a9-7e4b-4fcf-a7d7-cba5e1e97c9b',
       },
       agentKeys: {
         'a90b07a4-f18c-4509-9d7b-b9f16eb098d6': 'pcp_48d784f6edd3a907e7700cda9f93e36fc0d1030f4a6b6d04',
@@ -135,6 +137,8 @@ function createDefaultConfig(): ProjectConfig {
         'c7fb4dae-8ac3-4795-b1f6-d14db2021035': 'pcp_268a568963f01698e27a232c9b911d96fa3504b214232b97',
         '5e234916-47ef-41a2-8c07-e9376ee6aa9c': 'pcp_ad33d0ec65c082f7b46feef3233872548ac64b606e0e7541',
         '787cbd9e-d10b-4bca-b486-e7f5fd99d184': 'pcp_6b6711a3a014c59c92416ec479077557a021087ba08bc280',
+        '3fe38460-5697-4da1-acb6-22d027f75288': 'pcp_epic_reviewer_agent_key_placeholder',
+        'a0e455a9-7e4b-4fcf-a7d7-cba5e1e97c9b': 'pcp_epic_decoder_agent_key_placeholder',
       },
       blockedAgents: [],
       apiUrl: 'http://127.0.0.1:3100',

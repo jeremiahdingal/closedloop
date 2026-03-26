@@ -8,9 +8,10 @@
 import { createProxy, checkAssignedIssues, initializeRAG } from './proxy-server';
 import { ragIndexer } from './rag-indexer';
 import { getConfig, getPaperclipApiUrl, getCompanyId, getAgentKeys } from './config';
+import { AGENTS } from './agent-types';
 // DISABLED: Old epic-decomposer (local LLM) - replaced by epic-decoder (GLM-5)
 // import { checkGoalsForDecomposition } from './epic-decomposer';
-import { checkEpicsForReview } from './epic-reviewer';
+import { reloadGoalTicketMappings } from './goal-system';
 
 // Load configuration
 const config = getConfig();
@@ -65,11 +66,20 @@ setInterval(() => {
 //   checkGoalsForDecomposition().catch(() => {});
 // }, 120000);
 
-// On startup: reset errored agents, then start processing
-setTimeout(() => {
-  resetErroredAgents()
-    .then(() => checkAssignedIssues())
-    .catch(() => {});
+// On startup: reload goal/ticket mappings, reset errored agents, then start processing
+setTimeout(async () => {
+  await reloadGoalTicketMappings();
+  await resetErroredAgents();
+  await checkAssignedIssues();
+  
+  // Run Epic Reviewer Agent on startup to check all epics
+  try {
+    const { runEpicReviewerAgent } = await import('./epic-reviewer-agent');
+    await runEpicReviewerAgent();
+    console.log('[closedloop] Epic Reviewer Agent completed startup check');
+  } catch (err: any) {
+    console.log(`[closedloop] Epic Reviewer Agent failed: ${err.message}`);
+  }
 }, 5000);
 
 // DISABLED: Old epic-decomposer startup check
@@ -77,14 +87,14 @@ setTimeout(() => {
 //   checkGoalsForDecomposition().catch(() => {});
 // }, 10000);
 
-// Run epic reviewer every 3 minutes (checks if all tickets in an epic are in_review)
-setInterval(() => {
-  checkEpicsForReview().catch(() => {});
-}, 180000);
+// DISABLED: Old periodic epic review - now handled by Epic Reviewer agent
+// setInterval(() => {
+//   checkEpicsForReview().catch(() => {});
+// }, 60000);
 
-// Check for epic reviews shortly after startup
-setTimeout(() => {
-  checkEpicsForReview().catch(() => {});
-}, 30000);
+// DISABLED: Old startup epic review - now handled by Epic Reviewer agent
+// setTimeout(() => {
+//   checkEpicsForReview().catch(() => {});
+// }, 30000);
 
 console.log('[closedloop] ClosedLoop started.');

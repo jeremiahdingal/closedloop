@@ -145,14 +145,35 @@ export async function commitAndPush(
     // Run build validation on the branch
     console.log(`[git] Running build validation on branch ${branchName}...`);
     try {
+      // First, ensure yarn.lock is up to date by running yarn install
+      // This is needed because branches may have outdated lockfiles
       try {
-        execSync('turbo prune --scope=@shop-diary/api 2>nul || yarn cache clean', {
+        console.log(`[git] Running yarn install to update lockfile...`);
+        execSync('yarn install --immutable', {
+          cwd: WORKSPACE,
+          stdio: 'pipe',
+          timeout: 120000,
+        });
+      } catch (installErr: any) {
+        // If immutable install fails, try regular install
+        console.log(`[git] Immutable install failed, trying regular install...`);
+        try {
+          execSync('yarn install', {
+            cwd: WORKSPACE,
+            stdio: 'pipe',
+            timeout: 120000,
+          });
+        } catch {}
+      }
+      
+      try {
+        execSync('yarn turbo prune --scope=@shop-diary/api', {
           cwd: WORKSPACE,
           stdio: 'pipe',
         });
       } catch {}
-      const buildCmd = loadConfig().commands?.build || 'npx turbo run build --filter=@shop-diary/ui --filter=@shop-diary/app';
-      execSync(buildCmd, { ...opts, timeout: 120000 });
+      const buildCmd = loadConfig().commands?.build || 'yarn turbo run build --filter=@shop-diary/ui --filter=@shop-diary/app';
+      execSync(buildCmd, { ...opts, timeout: 180000 });
       console.log(`[git] Build PASSED on ${branchName}`);
       await postComment(issueId, null, '_Build validation: PASSED_');
       buildResult.success = true;
@@ -163,10 +184,40 @@ export async function commitAndPush(
 
       console.error(`[git] Build FAILED on ${branchName}`);
       buildResult.output = buildOutput;
+      
+      // Add helpful hints based on error type
+      let hints = '';
+      if (buildOutput.includes('multiple package managers') || buildOutput.includes('npm, berry')) {
+        hints = `\n\n**💡 HINT: Package Manager Conflict Detected**\n\n` +
+          `This error means yarn is detecting npm lockfiles in the repository. To fix:\n\n` +
+          `1. **DO NOT create package-lock.json** - This project uses Yarn Berry (v3.5.0) only\n\n` +
+          `2. **Check for package-lock.json in your branch**:\n` +
+          `   \`\`\`bash\n   git ls-files | grep package-lock.json\n   \`\`\`\n\n` +
+          `3. **If found, remove it BEFORE committing**:\n` +
+          `   \`\`\`bash\n   git rm --cached package-lock.json\n   del /s /q package-lock.json\n   \`\`\`\n\n` +
+          `4. **Verify yarn.lock exists and is up to date**:\n` +
+          `   \`\`\`bash\n   yarn install\n   \`\`\`\n\n` +
+          `5. **Only commit .ts/.tsx source files** - Don't commit generated files, lockfiles, or node_modules\n\n` +
+          `**The fix:** Only commit your TypeScript code changes. The build system will handle dependencies.`;
+      } else if (buildOutput.includes('Module not found') || buildOutput.includes("Can't resolve")) {
+        hints = `\n\n**💡 HINT: Missing Module/Import**\n\n` +
+          `Check your imports match the packages in package.json. Common fixes:\n\n` +
+          `- Use existing Tamagui imports: \`import { X } from '@tamagui/lucide-icons'\`\n` +
+          `- Use fetcherWithToken from 'app/utils/fetcherWithToken' instead of 'ky' or 'axios'\n` +
+          `- Use native array methods instead of 'lodash'\n` +
+          `- Check packages/app/package.json and packages/ui/package.json for available deps`;
+      } else if (buildOutput.includes('TS2307') || buildOutput.includes('Cannot find module')) {
+        hints = `\n\n**💡 HINT: TypeScript Import Error**\n\n` +
+          `- Verify the file path is correct (relative imports start with './' or '../')\n` +
+          `- Check for typos in import paths\n` +
+          `- Use '@shop-diary/ui' for cross-package imports from app\n` +
+          `- Run \`yarn turbo run build --filter=@shop-diary/ui --filter=@shop-diary/app\` locally to test`;
+      }
+      
       await postComment(
         issueId,
         null,
-        `_Build validation: FAILED_\n\`\`\`\n${buildOutput}\n\`\`\``
+        `_Build validation: FAILED_\n\`\`\`\n${buildOutput}\n\`\`\`${hints}`
       );
     }
 

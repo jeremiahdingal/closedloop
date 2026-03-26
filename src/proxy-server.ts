@@ -9,7 +9,7 @@
 import * as http from 'http';
 import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentModel, getAgentKeys } from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
-import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses, issueBuilderBurstMode } from './agent-types';
+import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses, issueBuilderBurstMode, issueImportFailures } from './agent-types';
 import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion, getEpicTickets } from './goal-system';
 import { callRemoteArchitect, callZAI } from './remote-ai';
 import { extractIssueId, extractAgentId, sleep } from './utils';
@@ -42,7 +42,9 @@ const DELEGATION_COOLDOWN_MS = 90 * 1000; // 90s — Paperclip deduplicates via 
 // Track Reviewer ↔ Local Builder loops to prevent infinite cycles
 // Key: issueId, Value: { count: number, lastReset: number, lastAgent: string }
 const issueLoopCounts = new Map<string, { count: number; lastReset: number; lastAgent: string }>();
+const issueBuildFailures = new Map<string, { count: number; lastReset: number }>();
 const MAX_LOOP_PASSES = 5; // Auto-create PR after 5 passes for human intervention
+const MAX_BUILD_FAILURES = 4; // Auto-create PR after 4 build failures
 const LOOP_RESET_WINDOW_MS = 60 * 60 * 1000; // Reset count after 1 hour of no activity
 
 /**
@@ -102,6 +104,36 @@ function getLoopStatus(issueId: string): { count: number; exceeded: boolean } {
 }
 
 /**
+ * Track build failures for an issue
+ * Returns true if build failures exceed MAX_BUILD_FAILURES
+ */
+function trackBuildFailure(issueId: string): { count: number; exceeded: boolean } {
+  const now = Date.now();
+  let failureData = issueBuildFailures.get(issueId);
+
+  // Initialize or reset if window expired
+  if (!failureData || now - failureData.lastReset > LOOP_RESET_WINDOW_MS) {
+    failureData = { count: 0, lastReset: now };
+  }
+
+  failureData.count++;
+  console.log(`[closedloop] Build failure #${failureData.count} for ${issueId.slice(0, 8)}`);
+  issueBuildFailures.set(issueId, failureData);
+
+  return {
+    count: failureData.count,
+    exceeded: failureData.count >= MAX_BUILD_FAILURES,
+  };
+}
+
+/**
+ * Reset build failure counter (called when build passes)
+ */
+function resetBuildFailureCounter(issueId: string): void {
+  issueBuildFailures.delete(issueId);
+}
+
+/**
  * Reset loop counter for an issue (e.g., after successful PR)
  */
 function resetLoopCounter(issueId: string): void {
@@ -110,6 +142,22 @@ function resetLoopCounter(issueId: string): void {
 
 export function createProxy(): http.Server {
   const server = http.createServer(async (req, res) => {
+    // Endpoint: POST /api/trigger-epic-review
+    if (req.method === 'POST' && req.url === '/api/trigger-epic-review') {
+      console.log(`[closedloop] Manual epic review trigger requested`);
+      try {
+        const { checkEpicsForReview } = await import('./epic-reviewer');
+        await checkEpicsForReview();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', message: 'Epic review triggered' }));
+      } catch (err: any) {
+        console.error(`[closedloop] Epic review trigger failed: ${err.message}`);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
     if (req.method !== 'POST') {
       res.writeHead(405);
       res.end('Method not allowed');
@@ -142,6 +190,35 @@ export function createProxy(): http.Server {
       }
     }
 
+    // SECOND GUARD: Re-check issue status after auto-resolution
+    // This catches cases where Paperclip sends a done issue or findAssignedIssue returns stale data
+    if (issueId && agentId) {
+      try {
+        const issueState = await getIssueDetails(issueId);
+        if (issueState) {
+          if (issueState.status === 'done' || issueState.status === 'cancelled') {
+            console.log(`[closedloop] GUARD: Skipping ${agentName} — issue ${issueId.slice(0, 8)} is ${issueState.status} (post-resolution check)`);
+            // Return early - don't process this issue
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              message: { role: 'assistant', content: `_Issue ${issueId.slice(0, 8)} is ${issueState.status}, no action needed._` },
+            }));
+            return;
+          } else if (issueState.status === 'in_review' && agentId === AGENTS['local builder']) {
+            // Local Builder shouldn't process in_review issues - that's for Reviewer/Diff Guardian
+            console.log(`[closedloop] GUARD: ${agentName} skipping ${issueId.slice(0, 8)} — status is in_review (waiting for review)`);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              message: { role: 'assistant', content: `_Issue ${issueId.slice(0, 8)} is in_review, waiting for reviewer._` },
+            }));
+            return;
+          }
+        }
+      } catch (err: any) {
+        console.log(`[closedloop] Guard check failed: ${err.message}`);
+      }
+    }
+
     // Block disabled agents
     if (agentId && BLOCKED_AGENTS.has(agentId)) {
       console.log(`[proxy:${proxyPort}] BLOCKED ${agentName} (disabled agent)`);
@@ -157,15 +234,27 @@ export function createProxy(): http.Server {
       return;
     }
 
-    // Guard: skip processing if issue is already completed
+    // Guard: skip processing if issue is already completed (done/cancelled)
+    // NOTE: in_review issues should still be processed by Reviewer/Diff Guardian
     if (issueId) {
       const issueState = await getIssueDetails(issueId);
-      if (issueState && (issueState.status === 'in_review' || issueState.status === 'done' || issueState.status === 'cancelled')) {
+      if (issueState && (issueState.status === 'done' || issueState.status === 'cancelled')) {
         console.log(`[closedloop] Skipping ${agentName} — issue ${issueId.slice(0, 8)} is ${issueState.status}`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
             message: { role: 'assistant', content: `_Issue is ${issueState.status}, no action needed._` },
+          })
+        );
+        return;
+      }
+      // Local Builder should skip in_review issues (waiting for review)
+      if (issueState && issueState.status === 'in_review' && agentId === AGENTS['local builder']) {
+        console.log(`[closedloop] Skipping ${agentName} — issue ${issueId.slice(0, 8)} is in_review (waiting for review)`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            message: { role: 'assistant', content: `_Issue is in_review, waiting for reviewer._` },
           })
         );
         return;
@@ -211,6 +300,25 @@ export function createProxy(): http.Server {
           console.error(`[closedloop] Epic Decoder failed: ${err.message}`);
         }
       });
+    }
+
+    // Hook 1c: Epic Reviewer — review ALL epics at once and apply fixes
+    if (agentId === AGENTS['epic reviewer']) {
+      console.log(`[closedloop] Epic Reviewer Agent triggered`);
+      // Call epic-reviewer-agent module (uses GLM-5, processes all epics, applies fixes)
+      setImmediate(async () => {
+        try {
+          const { runEpicReviewerAgent } = await import('./epic-reviewer-agent');
+          await runEpicReviewerAgent();
+        } catch (err: any) {
+          console.error(`[closedloop] Epic Reviewer failed: ${err.message}`);
+        }
+      });
+      
+      // Return immediately - processing happens async
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ message: { role: 'assistant', content: '_Epic Reviewer started. Processing all epics and applying fixes._' } }));
+      return;
     }
 
     // Hook 2: Burst model override for greenfield scaffold issues
@@ -466,23 +574,76 @@ export function createProxy(): http.Server {
                         content: fileContents[f] || '',
                       }));
                       const validation = validateImports(filesToValidate);
-                      
+
                       if (!validation.valid) {
                         console.log(`[closedloop] Import validation FAILED - ${validation.errors.length} errors`);
-                        await postComment(
-                          issueId,
-                          AGENTS['local builder'],
-                          `⚠️ **Import Validation Failed**\n\n` +
-                          formatValidationResult(validation) +
-                          `\n**Please fix these imports before proceeding:**\n` +
-                          `- Remove or replace hallucinated packages\n` +
-                          `- Use existing packages from package.json\n` +
-                          `- Common alternatives:\n` +
-                          `  - Instead of 'ky' → use 'fetcherWithToken' from app/utils/fetcherWithToken\n` +
-                          `  - Instead of 'axios' → use native 'fetch'\n` +
-                          `  - Instead of 'lodash' → use native array methods`
-                        );
-                        await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+                        
+                        // Track import validation failures
+                        const importFailureKey = `${issueId}-import`;
+                        if (!issueImportFailures[issueId]) issueImportFailures[issueId] = 0;
+                        issueImportFailures[issueId]++;
+                        
+                        // After 2 import failures, send to Reviewer for help
+                        if (issueImportFailures[issueId] >= 2) {
+                          await postComment(
+                            issueId,
+                            AGENTS['local builder'],
+                            `⚠️ **Import Validation Failed - Requesting Reviewer Assistance**\n\n` +
+                            `Import validation has failed ${issueImportFailures[issueId]} times. Sending to Reviewer for help.\n\n` +
+                            formatValidationResult(validation) +
+                            `\n\n**💡 How to fix these import errors:**\n\n` +
+                            `1. **Check package.json** - Only import packages that exist in:\n` +
+                            `   - \`packages/app/package.json\` (for app code)\n` +
+                            `   - \`packages/ui/package.json\` (for ui code)\n\n` +
+                            `2. **Common valid imports in this project:**\n` +
+                            `   - Tamagui: \`import { Button, Label, Input } from 'tamagui'\` or \`@tamagui/*\`\n` +
+                            `   - Icons: \`import { X, Plus, Settings } from '@tamagui/lucide-icons'\`\n` +
+                            `   - React Query: \`import { useQuery, useMutation } from '@tanstack/react-query'\`\n` +
+                            `   - React Hook Form: \`import { useForm } from 'react-hook-form'\`\n` +
+                            `   - Fetch: Use \`fetcherWithToken\` from \`app/utils/fetcherWithToken\`\n\n` +
+                            `3. **DO NOT use these (not installed):**\n` +
+                            `   - ❌ 'ky' → ✅ Use \`fetcherWithToken\`\n` +
+                            `   - ❌ 'axios' → ✅ Use native \`fetch\` or \`fetcherWithToken\`\n` +
+                            `   - ❌ 'lodash' → ✅ Use native array methods (.map, .filter, etc.)\n` +
+                            `   - ❌ '@mui/*' → ✅ Use Tamagui components\n` +
+                            `   - ❌ 'react-icons/*' → ✅ Use \`@tamagui/lucide-icons\`\n\n` +
+                            `4. **Relative imports** - For local files use \`../\` paths:\n` +
+                            `   - \`import { X } from '../types/db.types'\`\n` +
+                            `   - \`import { fetcherWithToken } from 'app/utils/fetcherWithToken'\`\n\n` +
+                            `**Reviewer:** Please help fix these import errors. The Local Builder has been unable to resolve them.`
+                          );
+                          await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                          console.log(`[closedloop] Import validation failed ${issueImportFailures[issueId]} times — assigned to Reviewer`);
+                        } else {
+                          await postComment(
+                            issueId,
+                            AGENTS['local builder'],
+                            `⚠️ **Import Validation Failed**\n\n` +
+                            formatValidationResult(validation) +
+                            `\n\n**💡 How to fix these import errors:**\n\n` +
+                            `1. **Check package.json** - Only import packages that exist in:\n` +
+                            `   - \`packages/app/package.json\` (for app code)\n` +
+                            `   - \`packages/ui/package.json\` (for ui code)\n\n` +
+                            `2. **Common valid imports in this project:**\n` +
+                            `   - Tamagui: \`import { Button, Label, Input } from 'tamagui'\` or \`@tamagui/*\`\n` +
+                            `   - Icons: \`import { X, Plus, Settings } from '@tamagui/lucide-icons'\`\n` +
+                            `   - React Query: \`import { useQuery, useMutation } from '@tanstack/react-query'\`\n` +
+                            `   - React Hook Form: \`import { useForm } from 'react-hook-form'\`\n` +
+                            `   - Fetch: Use \`fetcherWithToken\` from \`app/utils/fetcherWithToken\`\n\n` +
+                            `3. **DO NOT use these (not installed):**\n` +
+                            `   - ❌ 'ky' → ✅ Use \`fetcherWithToken\`\n` +
+                            `   - ❌ 'axios' → ✅ Use native \`fetch\` or \`fetcherWithToken\`\n` +
+                            `   - ❌ 'lodash' → ✅ Use native array methods (.map, .filter, etc.)\n` +
+                            `   - ❌ '@mui/*' → ✅ Use Tamagui components\n` +
+                            `   - ❌ 'react-icons/*' → ✅ Use \`@tamagui/lucide-icons\`\n\n` +
+                            `4. **Relative imports** - For local files use \`../\` paths:\n` +
+                            `   - \`import { X } from '../types/db.types'\`\n` +
+                            `   - \`import { fetcherWithToken } from 'app/utils/fetcherWithToken'\`\n\n` +
+                            `**Fix the imports above and try again.**`
+                          );
+                          await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+                          console.log(`[closedloop] Import validation failed — retrying Local Builder (attempt ${issueImportFailures[issueId]})`);
+                        }
                         issueProcessingLock[issueId] = false;
                         return;
                       }
@@ -500,11 +661,14 @@ export function createProxy(): http.Server {
                     // If build failed, send back to Local Builder to fix FIRST
                     if (!buildResult.success) {
                       console.log(`[closedloop] Build FAILED - saving to tried-approaches memory`);
-                      
+
+                      // Track build failure count
+                      const buildFailureStatus = trackBuildFailure(issueId);
+
                       // Get issue details for identifier
                       const issueDetails = await getIssueDetails(issueId);
                       const issueIdentifier = issueDetails?.identifier || issueId.slice(0, 8);
-                      
+
                       // Save this failed attempt to global memory
                       try {
                         const { saveTriedApproach } = await import('./tried-approaches');
@@ -513,23 +677,114 @@ export function createProxy(): http.Server {
                       } catch (err: any) {
                         console.log(`[closedloop] Failed to save tried-approaches: ${err.message}`);
                       }
+
+                      // Build error hints based on error type
+                      let hints = '';
+                      const buildOutput = buildResult.output || '';
                       
-                      await postComment(
-                        issueId,
-                        AGENTS['local builder'],
-                        `⚠️ **Build Failed - Fix Before Review**\n\n` +
-                        `Your code committed successfully but the build failed. Please fix the build errors before sending to Reviewer.\n\n` +
-                        `\`\`\`\n${buildResult.output || 'Build error output not available'}\n\`\`\`\n\n` +
-                        `**Action required:**\n` +
-                        `1. Run \`yarn build\` locally to see full errors\n` +
-                        `2. Fix the build errors in the files you just wrote\n` +
-                        `3. Re-commit and the build will be verified again\n\n` +
-                        `**Note:** This failed attempt has been saved to GLOBAL memory. Other tickets working on similar files will learn from this error.`
-                      );
-                      await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
-                      console.log(`[closedloop] Sent back to Local Builder for build fixes`);
+                      if (buildOutput.includes('multiple package managers') || buildOutput.includes('npm, berry')) {
+                        hints = `\n\n**💡 CRITICAL: Package Manager Conflict**\n\n` +
+                          `**Problem:** Yarn detects npm lockfiles (package-lock.json) in your branch.\n\n` +
+                          `**FIX:**\n` +
+                          `1. Check what's in your branch: \`git ls-files | grep package-lock\`\n` +
+                          `2. Remove any package-lock.json: \`git rm --cached package-lock.json\` then \`del /s /q package-lock.json\`\n` +
+                          `3. Only commit your .ts/.tsx source code changes\n` +
+                          `4. DO NOT commit package-lock.json, node_modules, or .yarn/* (except releases/patches)\n\n` +
+                          `**This project uses Yarn Berry v3.5.0 ONLY - no npm!**`;
+                      } else if (buildOutput.includes('EPERM') || buildOutput.includes('operation not permitted')) {
+                        hints = `\n\n**💡 File Lock Issue**\n\n` +
+                          `Some files are locked by another process. Try:\n` +
+                          `1. Close any editors or processes using node_modules\n` +
+                          `2. Delete node_modules and run \`yarn install\`\n` +
+                          `3. Only commit source code (.ts/.tsx), not node_modules`;
+                      } else if (buildOutput.includes('TS2307') || buildOutput.includes('Cannot find module')) {
+                        hints = `\n\n**💡 Module Resolution Error**\n\n` +
+                          `- Check import paths are correct (use '../' for relative)\n` +
+                          `- Use '@shop-diary/ui' for cross-package imports\n` +
+                          `- Verify the imported file exists and exports what you need`;
+                      } else if (buildOutput.includes('TS2304') || buildOutput.includes('Cannot find name')) {
+                        hints = `\n\n**💡 Missing Type/Variable**\n\n` +
+                          `- Add missing imports at the top of the file\n` +
+                          `- Check for typos in variable/component names\n` +
+                          `- Make sure you're using the correct TypeScript types`;
+                      }
+                      
+                      // Check if build failures exceeded max — create PR for human help
+                      if (buildFailureStatus.exceeded) {
+                        console.log(`[closedloop] BUILD FAILURES EXCEEDED (${buildFailureStatus.count}/${MAX_BUILD_FAILURES}) - Creating PR for human intervention`);
+                        await postComment(
+                          issueId,
+                          null,
+                          `⚠️ **Auto-PR Created: Build Failures Exceeded**\n\n` +
+                          `The Local Builder has attempted to fix build errors ${buildFailureStatus.count} times but couldn't resolve them.\n\n` +
+                          `**What happened:**\n` +
+                          `- Build validation failed ${buildFailureStatus.count} consecutive times\n` +
+                          `- The agent is unable to fix the errors automatically\n` +
+                          `- This may indicate:\n` +
+                          `  - Complex build configuration issues\n` +
+                          `  - Missing dependencies or type definitions\n` +
+                          `  - Incompatible code changes\n\n` +
+                          `**Build error:**\n\`\`\`\n${buildOutput?.slice(0, 1500) || 'See commit for details'}\n\`\`\`\n\n` +
+                          `${hints}\n\n` +
+                          `**Next steps:**\n` +
+                          `1. Review the PR and build errors\n` +
+                          `2. Fix the build manually\n` +
+                          `3. Merge when ready\n`
+                        );
+                        try {
+                          await createPullRequest(issueId);
+                          resetBuildFailureCounter(issueId);
+                          resetLoopCounter(issueId);
+                          // Clear assignee to prevent further agent wakeups
+                          await patchIssue(issueId, { status: 'in_review', assigneeAgentId: undefined });
+                          console.log(`[closedloop] PR created after build failures exceeded`);
+                        } catch (prErr: any) {
+                          console.error(`[closedloop] Failed to create PR after build failures:`, prErr.message);
+                        }
+                      } else if (buildFailureStatus.count >= 2) {
+                        // After 2 build failures, send to Reviewer for help instead of self-assigning
+                        // This breaks the loop and gets a fresh perspective on the problem
+                        console.log(`[closedloop] Build failure #${buildFailureStatus.count} — sending to Reviewer for assistance`);
+                        await postComment(
+                          issueId,
+                          AGENTS['local builder'],
+                          `⚠️ **Build Failed - Requesting Reviewer Assistance**\n\n` +
+                          `The build has failed ${buildFailureStatus.count} times. Sending to Reviewer for a fresh perspective.\n\n` +
+                          `**Build error:**\n\`\`\`\n${buildOutput}\n\`\`\`\n\n` +
+                          `${hints}\n\n` +
+                          `**Reviewer:** Please help identify the issue. The Local Builder has been unable to resolve these build errors.`
+                        );
+                        await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                        console.log(`[closedloop] Assigned to Reviewer for build assistance`);
+                      } else {
+                        // Normal flow: send back to Local Builder
+                        await postComment(
+                          issueId,
+                          AGENTS['local builder'],
+                          `⚠️ **Build Failed - Fix Before Review**\n\n` +
+                          `Your code committed successfully but the build failed. Please fix the build errors before sending to Reviewer.\n\n` +
+                          `\`\`\`\n${buildOutput}\n\`\`\`\n\n` +
+                          `**💡 How to fix:**\n` +
+                          `1. Read the error message above carefully\n` +
+                          `2. Check your imports match packages in package.json\n` +
+                          `3. DO NOT create package-lock.json (use yarn only)\n` +
+                          `4. Only commit .ts/.tsx source files\n` +
+                          `5. Run \`yarn turbo run build --filter=@shop-diary/ui --filter=@shop-diary/app\` to test locally\n\n` +
+                          `${hints}\n\n` +
+                          `**Common fixes:**\n` +
+                          `- Import errors → Check packages/app/package.json or packages/ui/package.json\n` +
+                          `- Type errors → Add missing imports or fix type definitions\n` +
+                          `- Package manager errors → Remove package-lock.json, use yarn\n\n` +
+                          `Fix the errors and commit again.`
+                        );
+                        await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+                        console.log(`[closedloop] Sent back to Local Builder for build fixes`);
+                      }
                     } else {
-                      // Build passed — generate tests for written files before Reviewer
+                      // Build passed — reset build failure counter
+                      resetBuildFailureCounter(issueId);
+
+                      // generate tests for written files before Reviewer
                       try {
                         const testResult = await generateTestsForFiles(issueId, writtenFiles, fileContents);
                         if (testResult.filesWritten.length > 0) {
@@ -567,13 +822,13 @@ export function createProxy(): http.Server {
                         try {
                           await createPullRequest(issueId);
                           resetLoopCounter(issueId);
+                          // Clear assignee after PR creation to prevent further wakeups
+                          await patchIssue(issueId, { status: 'in_review', assigneeAgentId: undefined });
                           console.log(`[closedloop] PR created for human intervention`);
-                          // Still send to Reviewer for final approval
-                          await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
                         } catch (prErr: any) {
                           console.error(`[closedloop] Failed to create PR:`, prErr.message);
                         }
-                        // Skip normal flow - already sent to Reviewer
+                        // Skip normal flow - PR already created
                       } else {
                         // Normal flow: Send to Reviewer
                         console.log(`[closedloop] Pass ${pass}: Sending to Reviewer...`);
@@ -657,6 +912,8 @@ export function createProxy(): http.Server {
                   if (diffResult.approved) {
                     await createPullRequest(issueId);
                     resetLoopCounter(issueId);
+                    // Clear assignee after PR creation
+                    await patchIssue(issueId, { status: 'in_review', assigneeAgentId: undefined });
                   } else {
                     await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
                   }
@@ -703,6 +960,8 @@ export function createProxy(): http.Server {
                   try {
                     await createPullRequest(issueId);
                     resetLoopCounter(issueId);
+                    // Clear assignee after PR creation
+                    await patchIssue(issueId, { status: 'in_review', assigneeAgentId: undefined });
                     console.log(`[closedloop] PR created after loop cap`);
                   } catch (prErr: any) {
                     console.error(`[closedloop] Failed to create PR after loop cap:`, prErr.message);
@@ -728,9 +987,9 @@ export function createProxy(): http.Server {
                   await createPullRequest(issueId);
                   console.log(`[closedloop] PR created after DiffGuardian approval`);
 
-                  // Mark issue as in_review to stop further agent processing
-                  await patchIssue(issueId, { status: 'in_review' });
-                  console.log(`[closedloop] Issue marked in_review`);
+                  // Mark issue as in_review and clear assignee to stop further agent processing
+                  await patchIssue(issueId, { status: 'in_review', assigneeAgentId: undefined });
+                  console.log(`[closedloop] Issue marked in_review, assignee cleared`);
 
                   // Reset loop counter on successful PR
                   resetLoopCounter(issueId);
@@ -759,6 +1018,8 @@ export function createProxy(): http.Server {
                   try {
                     await createPullRequest(issueId);
                     resetLoopCounter(issueId);
+                    // Clear assignee after PR creation
+                    await patchIssue(issueId, { status: 'in_review', assigneeAgentId: undefined });
                     console.log(`[closedloop] PR created after loop cap`);
                   } catch (prErr: any) {
                     console.error(`[closedloop] Failed to create PR after loop cap:`, prErr.message);
