@@ -111,11 +111,13 @@ async function getTicketDiff(ticket: EpicTicket): Promise<string> {
  */
 async function buildReviewPrompt(epics: EpicWithTickets[]): Promise<string> {
   let prompt = '## Project Conventions\n\n';
-  
+
   try {
     const projectStructure = fs.readFileSync(path.join(WORKSPACE, 'PROJECT_STRUCTURE.md'), 'utf8');
-    prompt += projectStructure.substring(0, 4000);
-    if (projectStructure.length > 4000) prompt += '\n... (truncated)';
+    // Include more project structure context (8000 chars instead of 4000)
+    // This helps GLM-5 understand project patterns, tech stack, and conventions
+    prompt += projectStructure.substring(0, 8000);
+    if (projectStructure.length > 8000) prompt += '\n... (truncated)';
   } catch {}
 
   prompt += '\n\n## Epics to Review\n\n';
