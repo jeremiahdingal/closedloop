@@ -158,6 +158,28 @@ export function createProxy(): http.Server {
       return;
     }
 
+    // Endpoint: POST /api/decode-epic/:goalId
+    if (req.method === 'POST' && req.url?.startsWith('/api/decode-epic/')) {
+      const goalId = req.url.split('/').pop();
+      if (!goalId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Goal ID required' }));
+        return;
+      }
+      console.log(`[closedloop] Manual epic decode trigger for ${goalId}`);
+      try {
+        const { decodeEpic } = await import('./epic-decoder');
+        const result = await decodeEpic(goalId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', decomposed: result, goalId }));
+      } catch (err: any) {
+        console.error(`[closedloop] Epic decode trigger failed: ${err.message}`);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
     if (req.method !== 'POST') {
       res.writeHead(405);
       res.end('Method not allowed');
@@ -314,11 +336,28 @@ export function createProxy(): http.Server {
           console.error(`[closedloop] Epic Reviewer failed: ${err.message}`);
         }
       });
-      
+
       // Return immediately - processing happens async
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ message: { role: 'assistant', content: '_Epic Reviewer started. Processing all epics and applying fixes._' } }));
       return;
+    }
+
+    // Hook 1d: Epic Decoder — trigger decomposition when woken with goal context
+    if (agentId === AGENTS['epic decoder'] && parsedBody.messages?.[0]?.content?.includes('Decompose')) {
+      // Extract goal ID from wakeup reason or use auto-resolved issueId
+      const wakeupReason = parsedBody.contextSnapshot?.wakeReason || '';
+      console.log(`[closedloop] Epic Decoder woken: ${wakeupReason}`);
+      if (issueId) {
+        setImmediate(async () => {
+          try {
+            const { decodeEpic } = await import('./epic-decoder');
+            await decodeEpic(issueId);
+          } catch (err: any) {
+            console.error(`[closedloop] Epic Decoder failed: ${err.message}`);
+          }
+        });
+      }
     }
 
     // Hook 2: Burst model override for greenfield scaffold issues
