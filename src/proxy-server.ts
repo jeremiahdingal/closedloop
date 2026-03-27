@@ -44,7 +44,7 @@ const DELEGATION_COOLDOWN_MS = 90 * 1000; // 90s — Paperclip deduplicates via 
 const issueLoopCounts = new Map<string, { count: number; lastReset: number; lastAgent: string }>();
 const issueBuildFailures = new Map<string, { count: number; lastReset: number }>();
 const MAX_LOOP_PASSES = 5; // Auto-create PR after 5 passes for human intervention
-const MAX_BUILD_FAILURES = 4; // Auto-create PR after 4 build failures
+const MAX_BUILD_FAILURES = 4;
 const LOOP_RESET_WINDOW_MS = 60 * 60 * 1000; // Reset count after 1 hour of no activity
 
 /**
@@ -103,32 +103,21 @@ function getLoopStatus(issueId: string): { count: number; exceeded: boolean } {
   };
 }
 
-/**
- * Track build failures for an issue
- * Returns true if build failures exceed MAX_BUILD_FAILURES
- */
 function trackBuildFailure(issueId: string): { count: number; exceeded: boolean } {
   const now = Date.now();
   let failureData = issueBuildFailures.get(issueId);
-
-  // Initialize or reset if window expired
   if (!failureData || now - failureData.lastReset > LOOP_RESET_WINDOW_MS) {
     failureData = { count: 0, lastReset: now };
   }
 
   failureData.count++;
-  console.log(`[closedloop] Build failure #${failureData.count} for ${issueId.slice(0, 8)}`);
   issueBuildFailures.set(issueId, failureData);
-
   return {
     count: failureData.count,
     exceeded: failureData.count >= MAX_BUILD_FAILURES,
   };
 }
 
-/**
- * Reset build failure counter (called when build passes)
- */
 function resetBuildFailureCounter(issueId: string): void {
   issueBuildFailures.delete(issueId);
 }
@@ -326,20 +315,20 @@ export function createProxy(): http.Server {
 
     // Hook 1c: Epic Reviewer — review ALL epics at once and apply fixes
     if (agentId === AGENTS['epic reviewer']) {
-      console.log(`[closedloop] Epic Reviewer Agent triggered`);
-      // Call epic-reviewer-agent module (uses GLM-5, processes all epics, applies fixes)
+      console.log(`[closedloop] Epic Reviewer build authority triggered`);
+      // Call epic-reviewer-agent module (uses GLM-5, processes all ready epics, applies fixes, and builds)
       setImmediate(async () => {
         try {
           const { runEpicReviewerAgent } = await import('./epic-reviewer-agent');
           await runEpicReviewerAgent();
         } catch (err: any) {
-          console.error(`[closedloop] Epic Reviewer failed: ${err.message}`);
+          console.error(`[closedloop] Epic Reviewer build authority failed: ${err.message}`);
         }
       });
 
       // Return immediately - processing happens async
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ message: { role: 'assistant', content: '_Epic Reviewer started. Processing all epics and applying fixes._' } }));
+      res.end(JSON.stringify({ message: { role: 'assistant', content: '_Epic Reviewer started as the build authority for ready epics._' } }));
       return;
     }
 
@@ -695,11 +684,11 @@ export function createProxy(): http.Server {
                     }
 
                     // Commit, push, and check build result
-                    const buildResult = await commitAndPush(issueId, writtenFiles, fileContents);
+                    const commitResult = await commitAndPush(issueId, writtenFiles, fileContents);
 
-                    // If build failed, send back to Local Builder to fix FIRST
-                    if (!buildResult.success) {
-                      console.log(`[closedloop] Build FAILED - saving to tried-approaches memory`);
+                    // If commit/push failed, send back to Local Builder to fix the branch state first
+                    if (!commitResult.success) {
+                      console.log(`[closedloop] Commit/push FAILED - saving to tried-approaches memory`);
 
                       // Track build failure count
                       const buildFailureStatus = trackBuildFailure(issueId);
@@ -711,7 +700,7 @@ export function createProxy(): http.Server {
                       // Save this failed attempt to global memory
                       try {
                         const { saveTriedApproach } = await import('./tried-approaches');
-                        await saveTriedApproach(issueId, issueIdentifier, writtenFiles, buildResult.output || 'Build failed');
+                        await saveTriedApproach(issueId, issueIdentifier, writtenFiles, commitResult.output || 'Commit/push failed');
                         console.log(`[closedloop] Saved failed attempt to global memory`);
                       } catch (err: any) {
                         console.log(`[closedloop] Failed to save tried-approaches: ${err.message}`);
@@ -719,7 +708,7 @@ export function createProxy(): http.Server {
 
                       // Build error hints based on error type
                       let hints = '';
-                      const buildOutput = buildResult.output || '';
+                      const buildOutput = commitResult.output || '';
                       
                       if (buildOutput.includes('multiple package managers') || buildOutput.includes('npm, berry')) {
                         hints = `\n\n**💡 CRITICAL: Package Manager Conflict**\n\n` +
@@ -783,25 +772,25 @@ export function createProxy(): http.Server {
                       } else if (buildFailureStatus.count >= 2) {
                         // After 2 build failures, send to Reviewer for help instead of self-assigning
                         // This breaks the loop and gets a fresh perspective on the problem
-                        console.log(`[closedloop] Build failure #${buildFailureStatus.count} — sending to Reviewer for assistance`);
+                        console.log(`[closedloop] Branch sync failure #${buildFailureStatus.count} — sending to Reviewer for assistance`);
                         await postComment(
                           issueId,
                           AGENTS['local builder'],
-                          `⚠️ **Build Failed - Requesting Reviewer Assistance**\n\n` +
-                          `The build has failed ${buildFailureStatus.count} times. Sending to Reviewer for a fresh perspective.\n\n` +
+                          `⚠️ **Commit/Push Failed - Requesting Reviewer Assistance**\n\n` +
+                          `The branch sync has failed ${buildFailureStatus.count} times. Sending to Reviewer for a fresh perspective.\n\n` +
                           `**Build error:**\n\`\`\`\n${buildOutput}\n\`\`\`\n\n` +
                           `${hints}\n\n` +
                           `**Reviewer:** Please help identify the issue. The Local Builder has been unable to resolve these build errors.`
                         );
                         await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
-                        console.log(`[closedloop] Assigned to Reviewer for build assistance`);
+                        console.log(`[closedloop] Assigned to Reviewer for branch sync assistance`);
                       } else {
                         // Normal flow: send back to Local Builder
                         await postComment(
                           issueId,
                           AGENTS['local builder'],
-                          `⚠️ **Build Failed - Fix Before Review**\n\n` +
-                          `Your code committed successfully but the build failed. Please fix the build errors before sending to Reviewer.\n\n` +
+                          `⚠️ **Commit/Push Failed - Fix Before Review**\n\n` +
+                          `The branch sync failed after writing files. Please fix the git or workspace issue before sending to Reviewer.\n\n` +
                           `\`\`\`\n${buildOutput}\n\`\`\`\n\n` +
                           `**💡 How to fix:**\n` +
                           `1. Read the error message above carefully\n` +
@@ -1195,3 +1184,5 @@ export async function initializeRAG(): Promise<void> {
   setRAGIndexer(ragIndexer);
   console.log('[closedloop] RAG index initialized');
 }
+
+

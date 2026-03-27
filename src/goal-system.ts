@@ -276,13 +276,13 @@ export async function checkGoalCompletion(ticketIssueId: string): Promise<void> 
     await patchIssue(goalId, { status: 'in_review' } as any);
     await postComment(goalId, null, `_All ${siblingIds.length} sub-tickets are complete. Goal moved to in_review._`);
 
-    // Immediately run Epic Reviewer Agent to process ALL epics at once
-    console.log(`[goal] Running Epic Reviewer Agent for all epics`);
+    // Immediately run Epic Reviewer as the build authority for ready epics
+    console.log(`[goal] Running Epic Reviewer build authority for ready epics`);
     try {
       const { runEpicReviewerAgent } = await import('./epic-reviewer-agent');
       await runEpicReviewerAgent();
     } catch (err: any) {
-      console.error(`[goal] Epic Reviewer Agent failed: ${err.message}`);
+      console.error(`[goal] Epic Reviewer build authority failed: ${err.message}`);
     }
   }
 }

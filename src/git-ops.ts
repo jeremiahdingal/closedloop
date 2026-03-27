@@ -5,10 +5,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
-import { getWorkspace, loadConfig } from './config';
+import { getWorkspace } from './config';
 import { getIssueDetails, postComment } from './paperclip-api';
 import { issueBuilderPasses } from './agent-types';
-import { slugify, truncate, listPngFilesRecursive } from './utils';
+import { listPngFilesRecursive } from './utils';
 
 const WORKSPACE = getWorkspace();
 const GH_CLI = 'C:\\Program Files\\GitHub CLI\\gh';
@@ -20,10 +20,8 @@ export function getDefaultBranch(): string {
     const result = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
       cwd: WORKSPACE, stdio: 'pipe', timeout: 5000,
     }).toString().trim();
-    // e.g. "refs/remotes/origin/main"
     return result.split('/').pop() || 'main';
   } catch {
-    // Fallback: check if 'main' branch exists
     try {
       execSync('git rev-parse --verify main', { cwd: WORKSPACE, stdio: 'pipe', timeout: 5000 });
       return 'main';
@@ -44,22 +42,19 @@ export async function getBranchName(issueId: string): Promise<string> {
   return `${identifier}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`.replace(/-+$/, '');
 }
 
-export interface BuildResult {
+export interface CommitResult {
   success: boolean;
   output?: string;
 }
 
 /**
- * Commit changed files to a branch, push, and run build validation.
- * Returns build result so caller can verify before handoff.
+ * Commit changed files to a branch and push them.
  */
 export async function commitAndPush(
   issueId: string,
   files: string[],
   fileContents: Record<string, string>
-): Promise<BuildResult> {
-  const buildResult: BuildResult = { success: false };
-  
+): Promise<CommitResult> {
   if (files.length === 0) return { success: true };
 
   const branchName = await getBranchName(issueId);
@@ -74,32 +69,26 @@ export async function commitAndPush(
   const opts = { cwd: WORKSPACE, stdio: 'pipe' as const, timeout: 30000 };
 
   try {
-    // Discard any uncommitted changes before switching
     try {
       execSync('git checkout -- .', opts);
     } catch {}
 
-    // Create and switch to branch from default branch
     try {
       execSync(`git checkout -b ${branchName} ${defaultBranch}`, opts);
     } catch {
-      // Branch might exist, just switch
       execSync(`git checkout ${branchName}`, opts);
     }
 
-    // Write files directly onto the branch
     for (const f of files) {
       const fullPath = path.join(WORKSPACE, f);
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
       fs.writeFileSync(fullPath, fileContents[f]);
     }
 
-    // Stage the specifically files
     for (const f of files) {
       execSync(`git add "${f}"`, opts);
     }
 
-    // Commit
     const pass = issueBuilderPasses[issueId] || 1;
     const commitMsg = `${identifier}: ${title} (pass ${pass})`;
     try {
@@ -110,30 +99,27 @@ export async function commitAndPush(
       const commitStderr = commitErr.stderr?.toString() || '';
       const commitOutput = commitStdout + commitStderr;
 
-      // "nothing to commit" means files are identical to what's already on branch — treat as success
       if (commitOutput.includes('nothing to commit') || commitOutput.includes('nothing added to commit')) {
-        console.log(`[git] No changes to commit (files unchanged) — treating as already committed`);
-        // Still run build validation on the existing branch
+        console.log('[git] No changes to commit (files unchanged)');
       } else {
-        console.error(`[git] Git commit FAILED:`);
+        console.error('[git] Git commit FAILED:');
         console.error(`[git] ${commitOutput.slice(0, 500)}`);
         throw new Error(`Git commit failed: ${commitStderr || commitStdout || 'unknown error'}`);
       }
     }
 
-    // Push
     try {
       execSync(`git push -u origin ${branchName}`, { ...opts, timeout: 60000 });
       console.log(`[git] Pushed branch: ${branchName}`);
     } catch (err: any) {
-      console.error(`[git] Push failed (no remote?):`, err.message);
+      console.error('[git] Push failed (no remote?):', err.message);
       await postComment(
         issueId,
         null,
         `_Code committed to branch \`${branchName}\` (${files.length} files). Push failed: ${err.message}_`
       );
       execSync(`git checkout ${defaultBranch}`, opts);
-      return buildResult;
+      return { success: false, output: err.message };
     }
 
     await postComment(
@@ -142,97 +128,16 @@ export async function commitAndPush(
       `_Code committed to branch \`${branchName}\` (pass ${pass})_\n\nFiles:\n${files.map((f) => '- `' + f + '`').join('\n')}`
     );
 
-    // Run build validation on the branch
-    console.log(`[git] Running build validation on branch ${branchName}...`);
-    try {
-      // First, ensure yarn.lock is up to date by running yarn install
-      // This is needed because branches may have outdated lockfiles
-      try {
-        console.log(`[git] Running yarn install to update lockfile...`);
-        execSync('yarn install --immutable', {
-          cwd: WORKSPACE,
-          stdio: 'pipe',
-          timeout: 120000,
-        });
-      } catch (installErr: any) {
-        // If immutable install fails, try regular install
-        console.log(`[git] Immutable install failed, trying regular install...`);
-        try {
-          execSync('yarn install', {
-            cwd: WORKSPACE,
-            stdio: 'pipe',
-            timeout: 120000,
-          });
-        } catch {}
-      }
-      
-      try {
-        execSync('yarn turbo prune --scope=@shop-diary/api', {
-          cwd: WORKSPACE,
-          stdio: 'pipe',
-        });
-      } catch {}
-      const buildCmd = loadConfig().commands?.build || 'yarn turbo run build --filter=@shop-diary/ui --filter=@shop-diary/app';
-      execSync(buildCmd, { ...opts, timeout: 180000 });
-      console.log(`[git] Build PASSED on ${branchName}`);
-      await postComment(issueId, null, '_Build validation: PASSED_');
-      buildResult.success = true;
-    } catch (buildErr: any) {
-      const buildStdout = buildErr.stdout?.toString() || '';
-      const buildStderr = buildErr.stderr?.toString() || '';
-      const buildOutput = truncate((buildStdout + '\n' + buildStderr).trim(), 3000);
-
-      console.error(`[git] Build FAILED on ${branchName}`);
-      buildResult.output = buildOutput;
-      
-      // Add helpful hints based on error type
-      let hints = '';
-      if (buildOutput.includes('multiple package managers') || buildOutput.includes('npm, berry')) {
-        hints = `\n\n**💡 HINT: Package Manager Conflict Detected**\n\n` +
-          `This error means yarn is detecting npm lockfiles in the repository. To fix:\n\n` +
-          `1. **DO NOT create package-lock.json** - This project uses Yarn Berry (v3.5.0) only\n\n` +
-          `2. **Check for package-lock.json in your branch**:\n` +
-          `   \`\`\`bash\n   git ls-files | grep package-lock.json\n   \`\`\`\n\n` +
-          `3. **If found, remove it BEFORE committing**:\n` +
-          `   \`\`\`bash\n   git rm --cached package-lock.json\n   del /s /q package-lock.json\n   \`\`\`\n\n` +
-          `4. **Verify yarn.lock exists and is up to date**:\n` +
-          `   \`\`\`bash\n   yarn install\n   \`\`\`\n\n` +
-          `5. **Only commit .ts/.tsx source files** - Don't commit generated files, lockfiles, or node_modules\n\n` +
-          `**The fix:** Only commit your TypeScript code changes. The build system will handle dependencies.`;
-      } else if (buildOutput.includes('Module not found') || buildOutput.includes("Can't resolve")) {
-        hints = `\n\n**💡 HINT: Missing Module/Import**\n\n` +
-          `Check your imports match the packages in package.json. Common fixes:\n\n` +
-          `- Use existing Tamagui imports: \`import { X } from '@tamagui/lucide-icons'\`\n` +
-          `- Use fetcherWithToken from 'app/utils/fetcherWithToken' instead of 'ky' or 'axios'\n` +
-          `- Use native array methods instead of 'lodash'\n` +
-          `- Check packages/app/package.json and packages/ui/package.json for available deps`;
-      } else if (buildOutput.includes('TS2307') || buildOutput.includes('Cannot find module')) {
-        hints = `\n\n**💡 HINT: TypeScript Import Error**\n\n` +
-          `- Verify the file path is correct (relative imports start with './' or '../')\n` +
-          `- Check for typos in import paths\n` +
-          `- Use '@shop-diary/ui' for cross-package imports from app\n` +
-          `- Run \`yarn turbo run build --filter=@shop-diary/ui --filter=@shop-diary/app\` locally to test`;
-      }
-      
-      await postComment(
-        issueId,
-        null,
-        `_Build validation: FAILED_\n\`\`\`\n${buildOutput}\n\`\`\`${hints}`
-      );
-    }
-
-    // Switch back to master
     execSync(`git checkout ${defaultBranch}`, opts);
+    return { success: true };
   } catch (err: any) {
-    console.error(`[git] Git workflow error:`, err.message);
+    console.error('[git] Git workflow error:', err.message);
     try {
       execSync(`git checkout ${defaultBranch}`, opts);
     } catch {}
     await postComment(issueId, null, `_Git workflow error: ${err.message}_`);
-    buildResult.output = err.message;
+    return { success: false, output: err.message };
   }
-  
-  return buildResult;
 }
 
 export async function createPullRequest(issueId: string): Promise<void> {
@@ -249,7 +154,6 @@ export async function createPullRequest(issueId: string): Promise<void> {
   const opts = { cwd: WORKSPACE, stdio: 'pipe' as const, timeout: 30000 };
 
   try {
-    // Check if an OPEN PR already exists for this branch
     let existingPr = '';
     try {
       const prState = execSync(
@@ -267,20 +171,17 @@ export async function createPullRequest(issueId: string): Promise<void> {
       return;
     }
 
-    // Checkout the branch to add screenshots
     try {
       execSync(`git checkout ${branchName}`, opts);
     } catch {
       console.error(`[git] Could not checkout ${branchName} to add screenshots`);
     }
 
-    // Collect screenshots from the per-issue dir
     const screenshotFiles: string[] = [];
     const screenshotDir = path.join(SCREENSHOT_BASE, issueId.slice(0, 8));
     const pngs = listPngFilesRecursive(screenshotDir);
 
     if (pngs.length > 0) {
-      // Copy screenshots into a PR-visible directory on the branch
       const prScreenshotDir = path.join(
         WORKSPACE,
         'docs',
@@ -295,7 +196,6 @@ export async function createPullRequest(issueId: string): Promise<void> {
         screenshotFiles.push(`docs/screenshots/${identifier.toLowerCase()}/${png}`);
       }
 
-      // Stage and commit
       for (const f of screenshotFiles) {
         execSync(`git add "${f}"`, opts);
       }
@@ -308,25 +208,16 @@ export async function createPullRequest(issueId: string): Promise<void> {
       }
     }
 
-    // Switch back to master
     try {
       execSync(`git checkout ${defaultBranch}`, opts);
     } catch {}
 
-    // Build PR body with screenshot images
     const GITHUB_REPO = 'jeremiahdingal/shop-diary-v3';
     let prBody = `Auto-generated from issue ${identifier}\n\n`;
-    prBody += `## Changes\n(see commits on branch)\n\n`;
+    prBody += '## Changes\n(see commits on branch)\n\n';
 
-    // Generate diff summary for PR body
     try {
       const diffStat = execSync(`git diff --stat ${defaultBranch}..${branchName}`, {
-        ...opts,
-        timeout: 30000,
-      })
-        .toString()
-        .trim();
-      const diffShort = execSync(`git diff --name-only ${defaultBranch}..${branchName}`, {
         ...opts,
         timeout: 30000,
       })
@@ -335,14 +226,14 @@ export async function createPullRequest(issueId: string): Promise<void> {
 
       if (diffStat) {
         prBody += `## Files Changed\n\n\`\`\`\n${diffStat}\n\`\`\`\n\n`;
-        prBody += `**Warning:** Review the changes carefully before merging. Check that package.json files retain all necessary dependencies.\n\n`;
+        prBody += '**Warning:** Review the changes carefully before merging. Check that package.json files retain all necessary dependencies.\n\n';
       }
     } catch (e: any) {
       console.log(`[git] Could not generate diff summary: ${e.message}`);
     }
 
     if (screenshotFiles.length > 0) {
-      prBody += `## Screenshots (Artist Feature Recording)\n\n`;
+      prBody += '## Screenshots (Artist Feature Recording)\n\n';
       for (const f of screenshotFiles) {
         const routeName = path.basename(f, '.png');
         const rawUrl = `https://github.com/${GITHUB_REPO}/blob/${branchName}/${f}?raw=true`;
@@ -350,7 +241,6 @@ export async function createPullRequest(issueId: string): Promise<void> {
       }
     }
 
-    // Create PR
     const prOutput = execSync(
       `"${GH_CLI}" pr create --head "${branchName}" --title "${commitMsg.replace(/"/g, '\\"')}" --body "${prBody.replace(/"/g, '\\"')}"`,
       { ...opts, timeout: 60000 }

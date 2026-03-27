@@ -394,31 +394,16 @@ async function spawnPiMono(config: any, sessionDir: string, logPath: string, rol
     appendFileSync(logPath, '\n[LLM STARTING]\n');
     appendFileSync(logPath, '[STATE] mode=' + state.mode + ' attempt=' + state.attemptCount + '/' + state.maxPasses + '\n');
 
-    // SCAFFOLD MODE: If files were already written by scaffold engine, just run build verification
+    // SCAFFOLD MODE: If files were already written by scaffold engine, skip local build gating
     const isScaffoldMode = (config.description || '').includes('Scaffold has already written all files');
     if (isScaffoldMode && role === 'builder') {
-      appendFileSync(logPath, '\n[SCAFFOLD MODE] Skipping LLM — running build verification only\n');
+      appendFileSync(logPath, '\n[SCAFFOLD MODE] Skipping LLM and handing off without local build validation\n');
       const workspace = config.workspace || WORKSPACE;
-
-      runBuild(workspace, logPath, async (buildError, buildResult) => {
-        if (buildError) {
-          appendFileSync(logPath, '[SCAFFOLD BUILD FAILED]\n');
-          const errorText = buildResult?.stderr || buildResult?.stdout || (buildError as Error).message;
-          appendFileSync(logPath, errorText.substring(0, 1000) + '\n');
-
-          // Build failed — fall through to normal LLM iteration for repair
-          appendFileSync(logPath, '[SCAFFOLD] Falling back to LLM for build repair\n');
-          const fixPrompt = `The scaffold engine wrote files but the build failed. Fix the build errors.\n\nBuild error:\n${errorText.substring(0, 500)}\n\nOriginal task: ${config.title}\n${config.description}`;
-          runLlmIteration(config.issueId, fixPrompt, role, workspace, sessionDir, logPath, state, completionHandler);
-          return;
-        }
-
-        appendFileSync(logPath, '\n[SCAFFOLD BUILD SUCCESS]\n');
-        state.lastBuildSucceeded = true;
-        state.mode = 'implementation';
-        touchSessionState(sessionDir, state);
-        onComplete(config.issueId, role, 0).then(resolve).catch(reject);
-      });
+      appendFileSync(logPath, '[SCAFFOLD] Epic Reviewer will validate builds later\n');
+      state.lastBuildSucceeded = false;
+      state.mode = 'implementation';
+      touchSessionState(sessionDir, state);
+      onComplete(config.issueId, role, 0).then(resolve).catch(reject);
       return;
     }
 
@@ -586,70 +571,51 @@ function handleValidationWork(
   const label = role === 'reviewer' ? 'REVIEWER' : 'DIFF GUARDIAN';
   const roleAgentId = getRoleAgentId(role);
   appendFileSync(logPath, '\n[' + label + ' VALIDATION]\n');
-  appendFileSync(logPath, '1. Running workspace build...\n');
-  appendFileSync(logPath, '2. Checking validation gate...\n');
-    const builderState = loadSessionState(getSessionDir(state.issueId, 'builder'), state.issueId, 'builder');
-    const validation = analyzeValidationSummary(role, workspace, builderState);
-    appendFileSync(logPath, '[DIFF SUMMARY] files=' + validation.changedFileCount + ' added=' + validation.addedLines + ' deleted=' + validation.deletedLines + ' ratio=' + validation.deletionRatio.toFixed(2) + '\n');
+  appendFileSync(logPath, '1. Checking validation gate without local build execution...\n');
+  const builderState = loadSessionState(getSessionDir(state.issueId, 'builder'), state.issueId, 'builder');
+  const validation = analyzeValidationSummary(role, workspace, builderState);
+  appendFileSync(logPath, '[DIFF SUMMARY] files=' + validation.changedFileCount + ' added=' + validation.addedLines + ' deleted=' + validation.deletedLines + ' ratio=' + validation.deletionRatio.toFixed(2) + '\n');
 
-  runBuild(workspace, logPath, async (buildError, buildResult) => {
-    if (buildError) {
-      const errorText = buildResult?.stderr || buildResult?.stdout || (buildError as Error).message;
-      appendFileSync(logPath, '[' + label + ' FAILED]\n');
+  if (!validation.passed) {
+    const reasonText = validation.reasons.join(' | ');
+    appendFileSync(logPath, '[' + label + ' REJECTED]\n');
+    appendFileSync(logPath, reasonText + '\n');
 
-      // Save reflection: build failure context for touched files
-      const builderFiles = builderState.lastChangedFiles || [];
-      saveReflection(workspace, builderFiles, 'Build failed during ' + label + ': ' + errorText.substring(0, 300));
-
-      await postComment(
-        state.issueId,
-        label + ' found a build failure. Sending issue back to Local Builder.\n\n' +
-          '```\n' + errorText.substring(0, 1200) + '\n```',
-        roleAgentId
-      );
-      // Revert workspace to last green checkpoint so builder starts clean
+    saveReflection(workspace, validation.touchedFiles, reasonText);
+    postComment(
+      state.issueId,
+      label + ' found diff-risk signals and sent the issue back to Local Builder.\n\n' +
+        'Reasons:\n- ' + validation.reasons.join('\n- ') + '\n',
+      roleAgentId
+    ).then(() => {
       revertToGreenCheckpoint(state.issueId, workspace, logPath);
-
-      await reassignIssue(state.issueId, 'builder');
-      callback(buildError, {
-        escalated: false,
-        reason: 'validation-failed',
-        finalErrorText: errorText,
+      reassignIssue(state.issueId, 'builder').then(() => {
+        callback(new Error(reasonText), {
+          escalated: false,
+          reason: 'validation-failed',
+          finalErrorText: reasonText,
+        });
+      }).catch((err: any) => {
+        callback(err, {
+          escalated: false,
+          reason: 'validation-failed',
+          finalErrorText: reasonText,
+        });
       });
-      return;
-    }
-
-    if (!validation.passed) {
-      const reasonText = validation.reasons.join(' | ');
-      appendFileSync(logPath, '[' + label + ' REJECTED]\n');
-      appendFileSync(logPath, reasonText + '\n');
-
-      // Save reflection memory so future builds learn from this rejection
-      saveReflection(workspace, validation.touchedFiles, reasonText);
-
-      await postComment(
-        state.issueId,
-        label + ' found diff-risk signals and sent the issue back to Local Builder.\n\n' +
-          'Reasons:\n- ' + validation.reasons.join('\n- ') + '\n',
-        roleAgentId
-      );
-      // Revert workspace to last green checkpoint so builder starts clean
-      revertToGreenCheckpoint(state.issueId, workspace, logPath);
-
-      await reassignIssue(state.issueId, 'builder');
-      callback(new Error(reasonText), {
+    }).catch((err: any) => {
+      callback(err, {
         escalated: false,
         reason: 'validation-failed',
         finalErrorText: reasonText,
       });
-      return;
-    }
-
-    appendFileSync(logPath, '[' + label + ' PASSED]\n');
-    callback(null, {
-      escalated: false,
-      reason: 'completed',
     });
+    return;
+  }
+
+  appendFileSync(logPath, '[' + label + ' PASSED]\n');
+  callback(null, {
+    escalated: false,
+    reason: 'completed',
   });
 }
 
@@ -1022,41 +988,36 @@ function handleBuilderWork(
     }
   }
 
-  appendFileSync(logPath, '\nRunning yarn build...\n');
-  runBuild(workspace, logPath, (buildError, buildResult) => {
-    if (buildError) {
-      state.lastBuildSucceeded = false;
-      touchSessionState(sessionDir, state);
-      callback(buildError, buildResult);
+  appendFileSync(logPath, '\n[LOCAL BUILD DISABLED] Syncing builder branch without build validation\n');
+  state.lastBuildSucceeded = false;
+  state.lastGreenCheckpointDir = checkpointDir || state.lastGreenCheckpointDir || state.lastCheckpointDir;
+  state.mode = 'implementation';
+  state.repeatedErrorCount = 0;
+  state.lastErrorFingerprint = null;
+  touchSessionState(sessionDir, state);
+  syncBuilderBranch(state.issueId, workspace, state.lastChangedFiles, logPath).then((gitResult) => {
+    if (!gitResult.success) {
+      callback(new Error(gitResult.message), {
+        success: false,
+        stdout: '',
+        stderr: gitResult.message,
+        exitCode: 1,
+      });
       return;
     }
 
-    appendFileSync(logPath, '\n[BUILD SUCCESS]\n');
-    state.lastBuildSucceeded = true;
-    state.lastGreenCheckpointDir = checkpointDir || state.lastCheckpointDir;
-    state.mode = 'implementation';
-    state.repeatedErrorCount = 0;
-    state.lastErrorFingerprint = null;
-    touchSessionState(sessionDir, state);
-    syncBuilderBranch(state.issueId, workspace, state.lastChangedFiles, logPath).then((gitResult) => {
-      if (!gitResult.success) {
-        callback(new Error(gitResult.message), {
-          success: false,
-          stdout: '',
-          stderr: gitResult.message,
-          exitCode: 1,
-        });
-        return;
-      }
-
-      callback(null, buildResult);
-    }).catch((err: any) => {
-      callback(err, {
-        success: false,
-        stdout: '',
-        stderr: err.message || 'Unknown git sync failure',
-        exitCode: 1,
-      });
+    callback(null, {
+      success: true,
+      stdout: '',
+      stderr: '',
+      exitCode: 0,
+    });
+  }).catch((err: any) => {
+    callback(err, {
+      success: false,
+      stdout: '',
+      stderr: err.message || 'Unknown git sync failure',
+      exitCode: 1,
     });
   });
 }
@@ -1326,7 +1287,6 @@ ${config.description}
 Instructions:
 1. Review the code changes for this issue
 2. Check the following:
-   - Build passes (run: yarn build)
    - Import paths are correct (@shop-diary/ui, not @ui/)
    - No parallel files created
    - No destructive changes
@@ -1350,7 +1310,6 @@ Instructions:
    - Check for parallel files (new files alongside existing)
    - Check deletion ratio (< 70%)
    - Verify exports preserved
-   - Run build: yarn build
 
 2. If all checks pass, output: DIFF_APPROVED
 3. If checks fail, output: DIFF_REJECTED with reasons
@@ -1379,7 +1338,7 @@ CRITICAL RULES:
 2. Write files using FILE: format (see builder template above).
 3. For API code, use bare module paths: import { X } from 'app/types/...' (NOT relative paths to packages/).
 4. For frontend code, use @shop-diary/ui and @shop-diary/app aliases.
-5. After writing files, the build will run automatically.`;
+5. After writing files, the bridge will hand off to Reviewer without running a local build.`;
 }
 
 function getKeyFileContents(workspace: string): string {
@@ -1472,7 +1431,7 @@ async function onComplete(issueId: string, role: string, passCount: number): Pro
   const roleAgentId = getRoleAgentId(role);
 
   if (role === 'builder') {
-    await postComment(issueId, 'Local Builder completed implementation. Build passes. Ready for Reviewer.', roleAgentId);
+    await postComment(issueId, 'Local Builder completed implementation. Ready for Reviewer.', roleAgentId);
     await reassignIssue(issueId, 'reviewer');
     console.log('[complete] ' + issueId + ' -> Reviewer');
   } else if (role === 'reviewer') {
@@ -1751,10 +1710,10 @@ Before generating FILE: blocks, briefly list:
 3. Any assumptions you are making about the codebase
 If something is ambiguous (e.g. unclear which table/schema to use, unclear naming convention), state the assumption explicitly and pick the most conservative option that matches existing patterns.
 
-## Build Check
-- Build runs automatically after you write files
-- The build uses wrangler (esbuild) — it catches import resolution errors immediately
-- "Could not resolve" = wrong import path. Check existing files for the correct pattern.
+## Handoff Check
+- Do not run local builds from this bridge session
+- Keep imports and file structure aligned with existing project patterns
+- Epic Reviewer will handle automated build execution later in the pipeline
 
 ## Output Format
 - Write files using FILE: path/to/file.ext format followed by a code block
@@ -1764,7 +1723,7 @@ If something is ambiguous (e.g. unclear which table/schema to use, unclear namin
   import { Env } from 'app/types/env.types';
   // ... code ...
   \`\`\`
-- Report "BUILD_SUCCESS" when build passes
+- Report completion once the files are written cleanly
 `;
 }
 
@@ -1774,24 +1733,19 @@ function getReviewerTemplate(workspace: string): string {
 ## Review Checklist
 Before approving, verify ALL of the following:
 
-### 1. Build Status
-- [ ] Build passes (yarn build succeeds)
-- [ ] No TypeScript errors
-- [ ] No missing dependencies
-
-### 2. Code Quality
+### 1. Code Quality
 - [ ] Import paths correct (@shop-diary/ui, not @ui/)
 - [ ] TypeScript types correct
 - [ ] Follows existing patterns
 - [ ] React Native components (View, Text, Pressable), not HTML
 
-### 3. Destructive Change Detection
+### 2. Destructive Change Detection
 - [ ] No parallel files (new files duplicating existing functionality)
 - [ ] No removed exports without migration
 - [ ] No excessive deletions (>70% of file)
 - [ ] Existing stores preserved (useUserStore, useShopStore, etc.)
 
-### 4. File Structure
+### 3. File Structure
 - [ ] Screens in packages/app/{feature}/screen.tsx
 - [ ] Hooks in packages/app/apiHooks/
 - [ ] Stores in packages/app/store/
@@ -1801,7 +1755,6 @@ Before approving, verify ALL of the following:
 - To REJECT: List specific issues, output "REVIEW_REJECTED" (sends back to Builder)
 
 ## Common Rejection Reasons
-- Build fails
 - Wrong import paths (@ui/ instead of @shop-diary/ui)
 - Parallel store files (e.g., auth.store.ts when useUserStore.ts exists)
 - Removed exports without migration
@@ -1827,12 +1780,7 @@ function getDiffGuardianTemplate(workspace: string): string {
 - [ ] Store methods intact (signInUser, signOutUser, etc.)
 - [ ] Type definitions intact
 
-### 4. Build Verification
-- [ ] Build passes on branch
-- [ ] No new warnings introduced
-
-## LLM Validation
-After mechanical checks pass, validate:
+### 4. Sanity Validation
 - [ ] Changes make semantic sense
 - [ ] No subtle breaking changes
 - [ ] Follows project conventions

@@ -1,21 +1,25 @@
 /**
- * Epic Reviewer Agent — Cross-epic review and automated fixing
+ * Epic Reviewer Agent - remote review, repair, and build authority for epics.
  *
- * Processes ALL epics at once to save context.
- * Uses GLM-5 via callZAI to review all tickets across all epics.
- * Actually fixes code, builds, and commits to PR branches.
+ * Ticket-level agents no longer run builds. Epic Reviewer is the only automated
+ * build-and-repair loop, with a maximum of 5 attempts per epic.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getWorkspace, getCompanyId, getPaperclipApiUrl } from './config';
-import { getIssueDetails, postComment, patchIssue } from './paperclip-api';
+import { execSync } from 'child_process';
+import { collectMonorepoContext } from './context-builder';
+import { getWorkspace, getCompanyId, getPaperclipApiUrl, loadConfig } from './config';
+import { postComment } from './paperclip-api';
 import { callZAI } from './remote-ai';
 import { getEpicTickets } from './goal-system';
+import { getBranchName, getDefaultBranch } from './git-ops';
+import { truncate } from './utils';
 
 const PAPERCLIP_API = getPaperclipApiUrl();
 const COMPANY_ID = getCompanyId();
 const WORKSPACE = getWorkspace();
+const MAX_EPIC_RETRIES = 5;
 
 interface EpicTicket {
   id: string;
@@ -30,8 +34,11 @@ interface EpicWithTickets {
   tickets: EpicTicket[];
 }
 
+interface TicketWithBranch extends EpicTicket {
+  branchName: string;
+}
+
 interface FileFix {
-  ticketId: string;
   ticketIdentifier: string;
   filePath: string;
   content: string;
@@ -43,22 +50,43 @@ interface ReviewResult {
   summary: string;
 }
 
-/**
- * Collect all active epics with their tickets
- */
-async function collectAllEpics(): Promise<EpicWithTickets[]> {
+interface BuildCheck {
+  branchName: string;
+  ticketIdentifier: string;
+  passed: boolean;
+  output?: string;
+}
+
+interface EpicRetryState {
+  attemptCount: number;
+  injectedFullContext: boolean;
+  lastSummary: string;
+  lastBuildErrors: string;
+  lastAppliedFixes: string[];
+}
+
+const epicRetryStates = new Map<string, EpicRetryState>();
+
+export function resetEpicReviewerState(): void {
+  epicRetryStates.clear();
+}
+
+export function getEpicReviewerState(goalId: string): EpicRetryState | undefined {
+  return epicRetryStates.get(goalId);
+}
+
+async function collectReadyEpics(): Promise<EpicWithTickets[]> {
   const goalsRes = await fetch(`${PAPERCLIP_API}/api/companies/${COMPANY_ID}/goals`);
   if (!goalsRes.ok) return [];
 
   const goals = await goalsRes.json() as any[];
-  const activeGoals = goals.filter(g => g.status === 'active');
+  const activeGoals = goals.filter(g => g.status === 'active' || g.status === 'in_review');
 
   const epics: EpicWithTickets[] = [];
   for (const goal of activeGoals) {
     const tickets = await getEpicTickets(goal.id);
     if (tickets.length === 0) continue;
 
-    // Check if ALL tickets are in_review or done
     const allReady = tickets.every(t => t.status === 'in_review' || t.status === 'done');
     if (!allReady) continue;
 
@@ -68,276 +96,126 @@ async function collectAllEpics(): Promise<EpicWithTickets[]> {
   return epics;
 }
 
-/**
- * Get git diff for a ticket's branch
- */
-async function getTicketDiff(ticket: EpicTicket): Promise<string> {
+async function withBranches(tickets: EpicTicket[]): Promise<TicketWithBranch[]> {
+  const mapped = await Promise.all(
+    tickets.map(async ticket => ({
+      ...ticket,
+      branchName: await getBranchName(ticket.id),
+    }))
+  );
+  return mapped;
+}
+
+async function collectTicketDiff(ticket: TicketWithBranch): Promise<string> {
   try {
-    const { execSync } = await import('child_process');
-    
-    // Build expected branch name pattern from ticket identifier
-    const ticketNum = ticket.identifier.replace('SHO-', '');
-    const branchPattern = `sho-${ticketNum}--`;
-    
-    // Find the actual branch name from local branches
-    const branches = execSync(`git branch`, {
-      cwd: WORKSPACE,
-      encoding: 'utf8',
-      timeout: 10000,
-    }).toString();
-    
-    const branch = branches.split('\n').find(b => b.includes(branchPattern))?.trim().replace('*', '').trim();
-    if (!branch) {
-      console.log(`[epic-reviewer-agent] No branch found for ${ticket.identifier}`);
-      return '';
-    }
-    
-    const diff = execSync(`git diff main...${branch} -- . ":(exclude)docs/screenshots"`, {
+    const defaultBranch = getDefaultBranch();
+    const diff = execSync(`git diff ${defaultBranch}...${ticket.branchName} -- . ":(exclude)docs/screenshots"`, {
       cwd: WORKSPACE,
       encoding: 'utf8',
       timeout: 30000,
       maxBuffer: 10 * 1024 * 1024,
     }).toString();
-    
-    return diff;
+    return truncate(diff, 20000);
   } catch (err: any) {
     console.log(`[epic-reviewer-agent] Could not get diff for ${ticket.identifier}: ${err.message}`);
     return '';
   }
 }
 
-/**
- * Scan monorepo structure and collect key files for context
- * Uses up to 200KB of GLM-5's 256K context window
- */
-async function collectMonorepoContext(): Promise<string> {
-  const { execSync } = await import('child_process');
-  
-  let context = '## Monorepo Structure\n\n';
-  
-  try {
-    // Get directory tree (excluding node_modules, .git, etc.)
-    const tree = execSync('dir /b /s /a-d ^| findstr /v "node_modules \\.git \\.pnpm \\.qwen \\.paperclip dist"', {
-      cwd: WORKSPACE,
-      encoding: 'utf8',
-      timeout: 30000,
-      maxBuffer: 5 * 1024 * 1024,
-    }).toString();
-    
-    context += '```\n';
-    context += tree.split('\n').slice(0, 500).join('\n'); // First 500 files
-    context += '\n```\n\n';
-  } catch {}
-  
-  // Collect all package.json files
-  context += '## Package Dependencies\n\n';
-  try {
-    const { glob } = await import('glob');
-    const pkgFiles = glob.sync('**/package.json', {
-      cwd: WORKSPACE,
-      ignore: ['**/node_modules/**', '**/.pnpm/**'],
-    }).slice(0, 20); // First 20 packages
-    
-    for (const pkgFile of pkgFiles) {
-      try {
-        const pkgPath = path.join(WORKSPACE, pkgFile);
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-        context += `### ${pkgFile}\n`;
-        context += `\`\`\`json\n`;
-        context += JSON.stringify({
-          name: pkg.name,
-          version: pkg.version,
-          dependencies: pkg.dependencies || {},
-          devDependencies: pkg.devDependencies || {},
-          peerDependencies: pkg.peerDependencies || {},
-        }, null, 2);
-        context += `\n\`\`\`\n\n`;
-      } catch {}
-    }
-  } catch {}
-  
-  // Collect TypeScript configs
-  context += '## TypeScript Configuration\n\n';
-  try {
-    const tsConfigPath = path.join(WORKSPACE, 'tsconfig.json');
-    if (fs.existsSync(tsConfigPath)) {
-      const tsConfig = JSON.parse(fs.readFileSync(tsConfigPath, 'utf8'));
-      context += '### Root tsconfig.json\n';
-      context += `\`\`\`json\n${JSON.stringify(tsConfig, null, 2)}\n\`\`\`\n\n`;
-    }
-  } catch {}
-  
-  // Collect ALL source files with FULL contents (up to 150KB)
-  context += '## Source Code (Full Contents)\n\n';
-  let totalSourceChars = 0;
-  const MAX_SOURCE_CHARS = 150000; // 150KB for source code
-  
-  try {
-    const { glob } = await import('glob');
-    // Collect TypeScript/TSX files from packages only
-    const sourceFiles = glob.sync('packages/**/*.{ts,tsx}', {
-      cwd: WORKSPACE,
-      ignore: ['**/node_modules/**', '**/dist/**', '**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts', '**/*.spec.tsx'],
-    }).slice(0, 100); // First 100 source files
-    
-    for (const sourceFile of sourceFiles) {
-      if (totalSourceChars >= MAX_SOURCE_CHARS) {
-        context += '\n... (source files truncated due to size limit)\n';
-        break;
-      }
-      
-      const fullPath = path.join(WORKSPACE, sourceFile);
-      try {
-        const content = fs.readFileSync(fullPath, 'utf8');
-        // Truncate individual files to 5KB each to get more files
-        const truncatedContent = content.length > 5000 ? content.substring(0, 5000) + '\n// ... (truncated)' : content;
-        
-        context += `### ${sourceFile}\n`;
-        context += `\`\`\`typescript\n${truncatedContent}\n\`\`\`\n\n`;
-        totalSourceChars += truncatedContent.length;
-      } catch (err: any) {
-        console.log(`[epic-reviewer-agent] Could not read ${sourceFile}: ${err.message}`);
-      }
-    }
-  } catch (err: any) {
-    console.log(`[epic-reviewer-agent] Error collecting source files: ${err.message}`);
-  }
-  
-  console.log(`[epic-reviewer-agent] Collected ${totalSourceChars} chars of source code`);
-  
-  return context;
-}
-
-/**
- * Build the review prompt for all epics
- */
-async function buildReviewPrompt(epics: EpicWithTickets[]): Promise<string> {
+export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryState): Promise<string> {
   let prompt = '';
 
-  // Collect full monorepo context (uses up to 150K of 256K context window)
-  console.log('[epic-reviewer-agent] Collecting monorepo context...');
-  const monorepoContext = await collectMonorepoContext();
-  prompt += monorepoContext;
-
-  prompt += '\n\n## Epics to Review\n\n';
-  prompt += `Reviewing ${epics.length} epics with ${epics.reduce((sum, e) => sum + e.tickets.length, 0)} total tickets.\n\n`;
-
-  for (const epic of epics) {
-    prompt += `### Epic: ${epic.goal.title}\n`;
-    if (epic.goal.description) {
-      prompt += `${epic.goal.description.substring(0, 1000)}\n`;
+  if (!state.injectedFullContext) {
+    console.log(`[epic-reviewer-agent] Collecting full monorepo context for ${epic.goal.title}`);
+    prompt += `${await collectMonorepoContext()}\n\n`;
+  } else {
+    prompt += '## Carry Forward Context\n\n';
+    prompt += `Attempt: ${state.attemptCount}/${MAX_EPIC_RETRIES}\n`;
+    if (state.lastSummary) {
+      prompt += `Previous summary:\n${truncate(state.lastSummary, 4000)}\n\n`;
     }
-    prompt += '\n';
-
-    for (const ticket of epic.tickets) {
-      prompt += `#### ${ticket.identifier}: ${ticket.title}\n`;
-      prompt += `Status: ${ticket.status}\n\n`;
+    if (state.lastAppliedFixes.length > 0) {
+      prompt += `Previously applied fixes:\n${state.lastAppliedFixes.map(f => `- ${f}`).join('\n')}\n\n`;
     }
-    prompt += '\n';
+    if (state.lastBuildErrors) {
+      prompt += `Previous build failures:\n\`\`\`\n${truncate(state.lastBuildErrors, 8000)}\n\`\`\`\n\n`;
+    }
   }
 
-  prompt += '## Ticket Diffs\n\n';
-  let totalDiffChars = 0;
-  const MAX_DIFF_CHARS = 100000; // Limit total diff size to 100KB
-  
-  for (const epic of epics) {
-    for (const ticket of epic.tickets) {
-      if (totalDiffChars >= MAX_DIFF_CHARS) {
-        prompt += '\n... (diffs truncated due to size limit)\n';
-        break;
-      }
-      
-      const diff = await getTicketDiff(ticket);
-      if (diff) {
-        const truncatedDiff = diff.substring(0, 20000); // Max 20KB per ticket
-        prompt += `### ${ticket.identifier}: ${ticket.title}\n`;
-        prompt += `\`\`\`diff\n${truncatedDiff}\n\`\`\`\n\n`;
-        totalDiffChars += truncatedDiff.length;
-      }
-    }
-    if (totalDiffChars >= MAX_DIFF_CHARS) break;
+  prompt += `## Epic\nTitle: ${epic.goal.title}\n`;
+  if (epic.goal.description) {
+    prompt += `Description:\n${truncate(epic.goal.description, 2000)}\n`;
+  }
+  prompt += `Attempt ${state.attemptCount} of ${MAX_EPIC_RETRIES}\n\n`;
+
+  const ticketInfos = await withBranches(epic.tickets);
+  prompt += '## Tickets\n';
+  for (const ticket of ticketInfos) {
+    prompt += `- ${ticket.identifier}: ${ticket.title} (${ticket.branchName})\n`;
+  }
+  prompt += '\n## Ticket Diffs\n\n';
+
+  for (const ticket of ticketInfos) {
+    const diff = await collectTicketDiff(ticket);
+    if (!diff) continue;
+    prompt += `### ${ticket.identifier}: ${ticket.title}\n`;
+    prompt += `\`\`\`diff\n${diff}\n\`\`\`\n\n`;
   }
 
   return prompt;
 }
 
-/**
- * Build system prompt for the reviewer
- */
 function buildSystemPrompt(): string {
-  return `You are a senior staff engineer reviewing multiple epics before they ship to production.
+  return `You are the Epic Reviewer, the only automated build-and-repair authority for this system.
 
-You are reviewing the COMBINED output of multiple tickets across multiple epics.
-Your job is to catch issues that per-ticket reviews miss:
-- Cross-file inconsistencies (type mismatches, wrong imports between files)
-- Missing integration points (route not registered, hook not exported, type not added to db.types)
-- Naming/pattern violations vs the project conventions
-- Logical gaps (e.g., API endpoint exists but no frontend calls it, or vice versa)
-- Duplicate code across tickets
+Review one epic at a time. Find cross-ticket issues, output exact file fixes, and use any prior build errors to repair the branches.
 
-OUTPUT FORMAT — you MUST follow this exactly:
-
-If everything looks good:
-VERDICT: APPROVED
-(brief summary of what looks good)
-
-If changes are needed:
-VERDICT: CHANGES_REQUESTED
-
-For EACH file that needs fixing, output the COMPLETE corrected file:
-
+Required output:
+- If no code changes are needed, start with VERDICT: APPROVED
+- If changes are needed, start with VERDICT: CHANGES_REQUESTED
+- For every file to change, emit:
 TICKET: SHO-XX
 FILE: relative/path/to/file.ext
 \`\`\`typescript
-// complete corrected file content here
+// complete file content
 \`\`\`
-
+- Finish with:
 SUMMARY:
-(brief explanation of what was wrong and what you fixed)
+brief explanation
 
-IMPORTANT:
-- Output the FULL corrected file content, not just the diff or snippet
-- Tag each FILE: block to the TICKET it belongs to
-- Only fix real bugs and integration issues, not style preferences
-- If a file is fine, don't include it — only output files that need changes`;
+Rules:
+- Output full files, not diffs
+- Only tag files to tickets that exist in this epic
+- Prior build errors are high-priority signals
+- If a previous attempt failed to build, focus on getting the next attempt green`;
 }
 
-/**
- * Parse the LLM response to extract fixes
- */
 function parseReviewResult(content: string): ReviewResult {
   const fixes: FileFix[] = [];
-  const approved = content.includes('VERDICT: APPROVED');
-
-  // Extract TICKET/FILE blocks
-  const ticketFileRegex = /TICKET:\s*(SHO-\d+)\s*\nFILE:\s*([^\n]+)\s*\n\`\`\`\w*\n([\s\S]*?)\n\`\`\`/g;
+  const approved = /VERDICT:\s*APPROVED/i.test(content);
+  const ticketFileRegex = /TICKET:\s*(SHO-\d+)\s*\nFILE:\s*([^\n]+)\s*\n```[^\n]*\n([\s\S]*?)\n```/g;
   let match: RegExpExecArray | null;
 
   while ((match = ticketFileRegex.exec(content)) !== null) {
     const [, ticketIdentifier, filePath, fileContent] = match;
     fixes.push({
-      ticketId: '',
       ticketIdentifier,
       filePath: filePath.trim(),
       content: fileContent.trim(),
     });
   }
 
-  // Extract summary
   const summaryMatch = content.match(/SUMMARY:\s*([\s\S]+)/i);
-  const summary = summaryMatch ? summaryMatch[1].trim() : '';
-
+  const summary = summaryMatch ? summaryMatch[1].trim() : truncate(content, 1000);
   return { approved, fixes, summary };
 }
 
-/**
- * Apply fixes to files and commit to branches
- */
-async function applyFixes(epics: EpicWithTickets[], fixes: FileFix[]): Promise<void> {
-  const { execSync } = await import('child_process');
-
-  // Group fixes by ticket
+async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<string[]> {
+  const applied: string[] = [];
+  const defaultBranch = getDefaultBranch();
+  const tickets = await withBranches(epic.tickets);
   const fixesByTicket = new Map<string, FileFix[]>();
+
   for (const fix of fixes) {
     if (!fixesByTicket.has(fix.ticketIdentifier)) {
       fixesByTicket.set(fix.ticketIdentifier, []);
@@ -345,183 +223,213 @@ async function applyFixes(epics: EpicWithTickets[], fixes: FileFix[]): Promise<v
     fixesByTicket.get(fix.ticketIdentifier)!.push(fix);
   }
 
-  for (const [ticketIdentifier, ticketFixes] of fixesByTicket) {
-    // Find the ticket
-    let ticket: EpicTicket | undefined;
-    for (const epic of epics) {
-      ticket = epic.tickets.find(t => t.identifier === ticketIdentifier);
-      if (ticket) break;
-    }
-
-    if (!ticket) {
-      console.log(`[epic-reviewer-agent] Ticket ${ticketIdentifier} not found, skipping fixes`);
-      continue;
-    }
-
-    // Get branch name - find actual branch from git
-    const ticketNum = ticketIdentifier.replace('SHO-', '');
-    const branchPattern = `sho-${ticketNum}--`;
-    const { execSync } = await import('child_process');
-    
-    let branchName = '';
-    try {
-      const branches = execSync(`git branch`, {
-        cwd: WORKSPACE,
-        encoding: 'utf8',
-        timeout: 10000,
-      }).toString();
-      branchName = branches.split('\n').find(b => b.includes(branchPattern))?.trim().replace('*', '').trim() || '';
-    } catch {}
-
-    if (!branchName) {
-      console.log(`[epic-reviewer-agent] No branch found for ${ticketIdentifier}, skipping fixes`);
-      continue;
-    }
+  for (const ticket of tickets) {
+    const ticketFixes = fixesByTicket.get(ticket.identifier);
+    if (!ticketFixes || ticketFixes.length === 0) continue;
 
     try {
-      // Checkout branch
-      execSync(`git checkout ${branchName}`, {
+      execSync(`git checkout ${ticket.branchName}`, {
         cwd: WORKSPACE,
         stdio: 'pipe',
         timeout: 10000,
       });
 
-      // Apply fixes
       for (const fix of ticketFixes) {
         const fullPath = path.join(WORKSPACE, fix.filePath);
         fs.mkdirSync(path.dirname(fullPath), { recursive: true });
         fs.writeFileSync(fullPath, fix.content, 'utf8');
-        console.log(`[epic-reviewer-agent] Wrote ${fix.filePath} for ${ticketIdentifier}`);
+        execSync(`git add "${fix.filePath}"`, { cwd: WORKSPACE, stdio: 'pipe' });
+        applied.push(`${ticket.identifier}: ${fix.filePath}`);
       }
 
-      // Try to build
-      console.log(`[epic-reviewer-agent] Building ${ticketIdentifier}...`);
-      let buildFailed = false;
       try {
-        execSync('yarn turbo run build --filter=@shop-diary/ui --filter=@shop-diary/app', {
-          cwd: WORKSPACE,
-          stdio: 'pipe',
-          timeout: 180000,
-        });
-        console.log(`[epic-reviewer-agent] Build PASSED for ${ticketIdentifier}`);
-      } catch (buildErr: any) {
-        console.log(`[epic-reviewer-agent] Build FAILED for ${ticketIdentifier}: ${buildErr.message}`);
-        buildFailed = true;
-        // Continue anyway - commit the fixes
-      }
-
-      // Commit and push
-      const commitMsg = `${ticketIdentifier}: Epic Reviewer automated fixes`;
-      execSync('git add -A', { cwd: WORKSPACE, stdio: 'pipe' });
-
-      try {
-        execSync(`git commit -m "${commitMsg}"`, {
+        execSync(`git commit -m "${ticket.identifier}: Epic Reviewer automated fixes"`, {
           cwd: WORKSPACE,
           stdio: 'pipe',
           timeout: 10000,
         });
-        execSync(`git push origin HEAD`, {
-          cwd: WORKSPACE,
-          stdio: 'pipe',
-          timeout: 60000,
-        });
-        console.log(`[epic-reviewer-agent] Committed and pushed fixes for ${ticketIdentifier}`);
-
-        // Post comment
-        await postComment(
-          ticket.id,
-          null,
-          `**Epic Reviewer Automated Fixes**\n\n` +
-          `Applied cross-epic consistency fixes:\n` +
-          ticketFixes.map(f => `- \`${f.filePath}\``).join('\n') +
-          `\n\nBuild: ${buildFailed ? 'FAILED (see output)' : 'PASSED'}\n\n` +
-          `These fixes were applied automatically by the Epic Reviewer agent.`
-        );
-      } catch (commitErr: any) {
-        if (!commitErr.message?.includes('nothing to commit')) {
-          console.log(`[epic-reviewer-agent] Commit failed for ${ticketIdentifier}: ${commitErr.message}`);
+      } catch (err: any) {
+        const output = `${err.stdout?.toString() || ''}${err.stderr?.toString() || ''}`;
+        if (!output.includes('nothing to commit')) {
+          throw err;
         }
       }
 
-      // Checkout back to main
-      execSync('git checkout main', { cwd: WORKSPACE, stdio: 'pipe' });
-    } catch (err: any) {
-      console.error(`[epic-reviewer-agent] Failed to apply fixes for ${ticketIdentifier}: ${err.message}`);
+      execSync(`git push origin ${ticket.branchName}`, {
+        cwd: WORKSPACE,
+        stdio: 'pipe',
+        timeout: 60000,
+      });
+
+      await postComment(
+        ticket.id,
+        null,
+        `**Epic Reviewer Automated Fixes**\n\nApplied fixes:\n${ticketFixes.map(f => `- \`${f.filePath}\``).join('\n')}`
+      ).catch(() => {});
+    } finally {
+      try {
+        execSync(`git checkout ${defaultBranch}`, {
+          cwd: WORKSPACE,
+          stdio: 'pipe',
+          timeout: 10000,
+        });
+      } catch {}
     }
+  }
+
+  return applied;
+}
+
+function getBuildCommand(): string {
+  return loadConfig().commands?.build || 'yarn turbo run build --filter=@shop-diary/ui --filter=@shop-diary/app';
+}
+
+async function buildEpicBranches(epic: EpicWithTickets): Promise<BuildCheck[]> {
+  const defaultBranch = getDefaultBranch();
+  const buildCommand = getBuildCommand();
+  const tickets = await withBranches(epic.tickets);
+  const results: BuildCheck[] = [];
+
+  for (const ticket of tickets) {
+    try {
+      execSync(`git checkout ${ticket.branchName}`, {
+        cwd: WORKSPACE,
+        stdio: 'pipe',
+        timeout: 10000,
+      });
+      execSync(buildCommand, {
+        cwd: WORKSPACE,
+        stdio: 'pipe',
+        timeout: 180000,
+      });
+      results.push({
+        branchName: ticket.branchName,
+        ticketIdentifier: ticket.identifier,
+        passed: true,
+      });
+    } catch (err: any) {
+      const output = truncate(`${err.stdout?.toString() || ''}\n${err.stderr?.toString() || ''}`.trim(), 5000);
+      results.push({
+        branchName: ticket.branchName,
+        ticketIdentifier: ticket.identifier,
+        passed: false,
+        output,
+      });
+    } finally {
+      try {
+        execSync(`git checkout ${defaultBranch}`, {
+          cwd: WORKSPACE,
+          stdio: 'pipe',
+          timeout: 10000,
+        });
+      } catch {}
+    }
+  }
+
+  return results;
+}
+
+async function postEpicSuccess(epic: EpicWithTickets, summary: string): Promise<void> {
+  for (const ticket of epic.tickets) {
+    await postComment(
+      ticket.id,
+      null,
+      `**Epic Review: APPROVED**\n\nEpic Reviewer validated the epic and all build checks passed.\n\n${summary}`
+    ).catch(() => {});
+  }
+  await postComment(
+    epic.goal.id,
+    null,
+    `**Epic Reviewer Complete**\n\nBuild authority result: green.\n\n${summary}`
+  ).catch(() => {});
+}
+
+async function postEpicFailure(epic: EpicWithTickets, state: EpicRetryState): Promise<void> {
+  const message =
+    `**Epic Reviewer Capped at ${MAX_EPIC_RETRIES} Attempts**\n\n` +
+    `Epic Reviewer remained the build authority for this epic but could not get it green.\n\n` +
+    (state.lastSummary ? `Latest summary:\n${state.lastSummary}\n\n` : '') +
+    (state.lastBuildErrors ? `Latest build errors:\n\`\`\`\n${truncate(state.lastBuildErrors, 5000)}\n\`\`\`\n` : '');
+
+  await postComment(epic.goal.id, null, message).catch(() => {});
+  for (const ticket of epic.tickets) {
+    await postComment(ticket.id, null, message).catch(() => {});
   }
 }
 
-/**
- * Main entry point - review all epics and apply fixes
- */
-export async function runEpicReviewerAgent(): Promise<void> {
-  console.log('[epic-reviewer-agent] Starting Epic Reviewer Agent');
+async function processEpic(epic: EpicWithTickets): Promise<void> {
+  const state = epicRetryStates.get(epic.goal.id) || {
+    attemptCount: 0,
+    injectedFullContext: false,
+    lastSummary: '',
+    lastBuildErrors: '',
+    lastAppliedFixes: [],
+  };
 
-  // 1. Collect all active epics
-  const epics = await collectAllEpics();
-  if (epics.length === 0) {
-    console.log('[epic-reviewer-agent] No epics ready for review');
-    return;
-  }
+  while (state.attemptCount < MAX_EPIC_RETRIES) {
+    state.attemptCount += 1;
+    const prompt = await buildReviewPrompt(epic, state);
+    console.log(`[epic-reviewer-agent] Reviewing epic "${epic.goal.title}" attempt ${state.attemptCount}/${MAX_EPIC_RETRIES}`);
 
-  const totalTickets = epics.reduce((sum, e) => sum + e.tickets.length, 0);
-  console.log(`[epic-reviewer-agent] Found ${epics.length} epics with ${totalTickets} tickets ready for review`);
-
-  // 2. Build prompt with all epics
-  const prompt = await buildReviewPrompt(epics);
-  console.log(`[epic-reviewer-agent] Built prompt (${prompt.length} chars)`);
-
-  // 3. Call GLM-5
-  console.log('[epic-reviewer-agent] Sending to GLM-5...');
-  let reviewContent: string;
-  try {
-    reviewContent = await callZAI(prompt, buildSystemPrompt());
-  } catch (err: any) {
-    console.error(`[epic-reviewer-agent] GLM-5 call failed: ${err.message}`);
-    return;
-  }
-
-  // 4. Parse result
-  const result = parseReviewResult(reviewContent);
-  console.log(`[epic-reviewer-agent] Result: ${result.approved ? 'APPROVED' : 'CHANGES_REQUESTED'}`);
-  console.log(`[epic-reviewer-agent] Fixes to apply: ${result.fixes.length}`);
-
-  if (result.approved) {
-    console.log('[epic-reviewer-agent] All epics approved - no fixes needed');
-    // Post approval comment to all tickets
-    for (const epic of epics) {
-      for (const ticket of epic.tickets) {
-        await postComment(
-          ticket.id,
-          null,
-          `**Epic Review: APPROVED** ✅\n\n` +
-          `All cross-epic consistency checks passed. Ready to merge.\n\n` +
-          `${result.summary}`
-        ).catch(() => {});
-      }
+    let reviewContent: string;
+    try {
+      reviewContent = await callZAI(prompt, buildSystemPrompt());
+    } catch (err: any) {
+      console.error(`[epic-reviewer-agent] GLM-5 call failed for ${epic.goal.title}: ${err.message}`);
+      break;
     }
-    return;
-  }
 
-  // 5. Apply fixes
-  if (result.fixes.length > 0) {
-    console.log(`[epic-reviewer-agent] Applying ${result.fixes.length} fixes...`);
-    await applyFixes(epics, result.fixes);
-    console.log('[epic-reviewer-agent] Fixes applied');
-  }
+    state.injectedFullContext = true;
+    const result = parseReviewResult(reviewContent);
+    state.lastSummary = result.summary;
 
-  // 6. Post summary
-  for (const epic of epics) {
+    if (result.fixes.length > 0) {
+      state.lastAppliedFixes = await applyFixes(epic, result.fixes);
+    } else {
+      state.lastAppliedFixes = [];
+    }
+
+    const buildResults = await buildEpicBranches(epic);
+    const failures = buildResults.filter(result => !result.passed);
+    state.lastBuildErrors = failures
+      .map(result => `${result.ticketIdentifier} (${result.branchName})\n${result.output || 'Unknown build failure'}`)
+      .join('\n\n');
+
+    epicRetryStates.set(epic.goal.id, { ...state });
+
+    if (failures.length === 0) {
+      await postEpicSuccess(epic, result.summary);
+      return;
+    }
+
     await postComment(
       epic.goal.id,
       null,
-      `**Epic Review Complete**\n\n` +
-      `Reviewed ${epic.tickets.length} tickets.\n\n` +
-      `Result: ${result.approved ? 'APPROVED ✅' : 'CHANGES_REQUESTED 🔧'}\n\n` +
-      `${result.summary}\n\n` +
-      (result.fixes.length > 0 ? `Applied ${result.fixes.length} automated fixes across tickets.` : '')
+      `**Epic Reviewer Attempt ${state.attemptCount}/${MAX_EPIC_RETRIES}**\n\n` +
+      `Build remained red after review.\n\n` +
+      `Summary:\n${result.summary}\n\n` +
+      `Build failures:\n\`\`\`\n${truncate(state.lastBuildErrors, 5000)}\n\`\`\``
     ).catch(() => {});
   }
 
-  console.log('[epic-reviewer-agent] Review complete');
+  epicRetryStates.set(epic.goal.id, { ...state });
+  await postEpicFailure(epic, state);
+}
+
+/**
+ * Main entry point - review ready epics and keep Epic Reviewer as build authority.
+ */
+export async function runEpicReviewerAgent(): Promise<void> {
+  console.log('[epic-reviewer-agent] Starting Epic Reviewer build authority');
+
+  const epics = await collectReadyEpics();
+  if (epics.length === 0) {
+    console.log('[epic-reviewer-agent] No epics ready for Epic Reviewer');
+    return;
+  }
+
+  console.log(`[epic-reviewer-agent] Found ${epics.length} ready epic(s)`);
+  for (const epic of epics) {
+    await processEpic(epic);
+  }
 }

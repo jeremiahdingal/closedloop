@@ -31,10 +31,11 @@ export function getRAGIndexer(): any {
  */
 export async function collectMonorepoContext(): Promise<string> {
   let context = '## Monorepo Structure\n\n';
+  const excludedPattern = 'node_modules \\.git \\.pnpm \\.qwen \\.paperclip dist packages\\\\paperclip-fork';
   
   try {
     // Get directory tree (excluding node_modules, .git, etc.)
-    const tree = execSync('dir /b /s /a-d ^| findstr /v "node_modules \\.git \\.pnpm \\.qwen \\.paperclip dist"', {
+    const tree = execSync(`dir /b /s /a-d ^| findstr /v "${excludedPattern}"`, {
       cwd: WORKSPACE,
       encoding: 'utf8',
       timeout: 30000,
@@ -52,7 +53,7 @@ export async function collectMonorepoContext(): Promise<string> {
     const { glob } = await import('glob');
     const pkgFiles = glob.sync('**/package.json', {
       cwd: WORKSPACE,
-      ignore: ['**/node_modules/**', '**/.pnpm/**'],
+      ignore: ['**/node_modules/**', '**/.pnpm/**', 'packages/paperclip-fork/**'],
     }).slice(0, 15); // First 15 packages
     
     for (const pkgFile of pkgFiles) {
@@ -82,7 +83,15 @@ export async function collectMonorepoContext(): Promise<string> {
     // Collect TypeScript/TSX files from packages only
     const sourceFiles = glob.sync('packages/**/*.{ts,tsx}', {
       cwd: WORKSPACE,
-      ignore: ['**/node_modules/**', '**/dist/**', '**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts', '**/*.spec.tsx'],
+      ignore: [
+        '**/node_modules/**',
+        '**/dist/**',
+        '**/*.test.ts',
+        '**/*.test.tsx',
+        '**/*.spec.ts',
+        '**/*.spec.tsx',
+        'packages/paperclip-fork/**',
+      ],
     }).slice(0, 50); // First 50 source files
     
     for (const sourceFile of sourceFiles) {

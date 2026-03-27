@@ -72,13 +72,13 @@ setTimeout(async () => {
   await resetErroredAgents();
   await checkAssignedIssues();
   
-  // Run Epic Reviewer Agent on startup to check all epics
+  // Run Epic Reviewer Agent on startup as the build authority for ready epics
   try {
     const { runEpicReviewerAgent } = await import('./epic-reviewer-agent');
     await runEpicReviewerAgent();
-    console.log('[closedloop] Epic Reviewer Agent completed startup check');
+    console.log('[closedloop] Epic Reviewer build authority completed startup check');
   } catch (err: any) {
-    console.log(`[closedloop] Epic Reviewer Agent failed: ${err.message}`);
+    console.log(`[closedloop] Epic Reviewer build authority failed: ${err.message}`);
   }
 }, 5000);
 

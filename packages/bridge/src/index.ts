@@ -3,7 +3,7 @@
  * Simple version without type imports
  */
 
-import express from 'express';
+import express, { Request, Response } from 'express';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { spawnSession } from './session';
@@ -52,12 +52,12 @@ const AGENT_IDS = loadAgentIds();
 app.use(express.json());
 
 // Health check
-app.get('/health', (_req, res) => {
+app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'closedloop-bridge' });
 });
 
 // Paperclip webhook: issue assigned to any agent
-app.post('/webhook/issue-assigned', async (req, res) => {
+app.post('/webhook/issue-assigned', async (req: Request, res: Response) => {
   console.log('[webhook] === REQUEST START ===');
   try {
     const { issueId, assigneeAgentId, title, description, modelOverride } = req.body;
