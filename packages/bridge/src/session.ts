@@ -148,7 +148,7 @@ function createInitialState(issueId: string, role: string): SessionState {
     issueId,
     role,
     attemptCount: 0,
-    maxPasses: 20,
+    maxPasses: 5,
     mode: 'implementation',
     lastErrorFingerprint: null,
     repeatedErrorCount: 0,
@@ -480,6 +480,14 @@ function runLlmIteration(
 
     console.log('[llm] Completed:', result.summary);
     appendFileSync(logPath, '[LLM COMPLETED]\n' + result.summary + '\n');
+
+    const roleAgentId = getRoleAgentId(role);
+    const modelOutputComment =
+      `**${role.toUpperCase()} Model Output**\n\n` +
+      '```\n' + formatModelOutputForComment(String(result.output || '')) + '\n```';
+    postComment(issueId, modelOutputComment, roleAgentId).catch((err: any) => {
+      appendFileSync(logPath, '[COMMENT ERROR] Failed to post model output: ' + err.message + '\n');
+    });
 
     if (role === 'builder') {
       handleBuilderWork(result, workspace, sessionDir, state, logPath, (buildError, buildResult) => {
@@ -1446,32 +1454,12 @@ async function onComplete(issueId: string, role: string, passCount: number): Pro
 }
 
 async function onLoopExceeded(issueId: string, role: string, passCount: number, error: string): Promise<void> {
-  console.log('[loop] ' + issueId + ' exceeded 20 passes');
+  console.log('[loop] ' + issueId + ' exceeded 5 passes');
   const roleAgentId = getRoleAgentId(role);
 
-  // Attempt Remote Rescue before escalating to human
-  if (Z_AI_API_KEY) {
-    console.log('[loop] Attempting Remote Rescue (GLM-5) before human escalation');
-    const sessionDir = getSessionDir(issueId, role);
-    const state = loadSessionState(sessionDir, issueId, role);
-    const logPath = join(sessionDir, 'session.log');
-    const rescueContent = await callRemoteRescue(issueId, error, state, logPath, roleAgentId);
-    if (rescueContent) {
-      state.attemptCount = 0;
-      state.mode = 'implementation';
-      state.repeatedErrorCount = 0;
-      state.lastErrorFingerprint = null;
-      saveSessionState(sessionDir, state);
-      await reassignIssue(issueId, 'builder');
-      console.log('[loop] Remote Rescue provided fixes — restarting builder');
-      return;
-    }
-    console.log('[loop] Remote Rescue unavailable or failed — escalating to human');
-  }
-
   const message =
-    '**Build Loop Exceeded (20 passes)**\n\n' +
-    'Local Builder has attempted to fix build errors 20 times without success.\n\n' +
+    '**Build Loop Exceeded (5 passes)**\n\n' +
+    'Local Builder has attempted to fix build errors 5 times without success.\n\n' +
     '**Last error**:\n```\n' + error + '\n```\n\n' +
     '**This indicates**:\n' +
     '- Complex dependency issues needing human review\n' +
@@ -1665,6 +1653,13 @@ function sanitizeForWin1252(str: string): string {
     .replace(/\u2022/g, '*')
     .replace(/\u00a0/g, ' ')
     .replace(/[^\x00-\xFF]/g, '');
+}
+
+function formatModelOutputForComment(output: string, maxLen = 12000): string {
+  const trimmed = sanitizeForWin1252((output || '').trim());
+  if (!trimmed) return '(empty model output)';
+  if (trimmed.length <= maxLen) return trimmed;
+  return trimmed.substring(0, maxLen) + '\n\n... (truncated)';
 }
 
 function getAgentsTemplate(workspace: string, role: string): string {

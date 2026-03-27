@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspace, getPaperclipApiUrl, getCompanyId } from './config';
 import { AGENTS, goalTicketMap, ticketGoalMap, issueComplexityCache } from './agent-types';
-import { postComment, patchIssue, getIssueDetails } from './paperclip-api';
+import { postComment, patchIssue, getIssueDetails, getIssueLabel } from './paperclip-api';
 import { slugify } from './utils';
 import { Issue } from './types';
 
@@ -175,10 +175,11 @@ export async function decomposeGoalIntoTickets(
       if (res.ok) {
         const created = await res.json() as any;
         const ticketId = created.id || created.issueId;
+        const ticketLabel = created.identifier || ticketId?.slice(0, 8);
         createdIds.push(ticketId);
         goalTicketMap[goalIssueId].push(ticketId);
         ticketGoalMap[ticketId] = goalIssueId;
-        console.log(`[goal] Created ticket ${nn}: ${t.title} -> ${ticketId?.slice(0, 8)}`);
+        console.log(`[goal] Created ticket ${nn}: ${t.title} -> ${ticketLabel}`);
       } else {
         console.error(`[goal] Failed to create ticket ${t.title}: ${res.status}`);
       }
@@ -267,14 +268,14 @@ export async function checkGoalCompletion(ticketIssueId: string): Promise<void> 
   let allDone = true;
   for (const sibId of siblingIds) {
     const sib = await getIssueDetails(sibId);
-    if (!sib || (sib.status !== 'in_review' && sib.status !== 'done')) {
+    if (!sib || sib.status !== 'in_review') {
       allDone = false;
       break;
     }
   }
 
   if (allDone) {
-    console.log(`[goal] All ${siblingIds.length} tickets complete — marking goal ${goalId.slice(0, 8)} as in_review`);
+    console.log(`[goal] All ${siblingIds.length} tickets reached in_review - marking goal ${await getIssueLabel(goalId)} as in_review`);
     await patchIssue(goalId, { status: 'in_review' } as any);
     await postComment(goalId, null, `_All ${siblingIds.length} sub-tickets are complete. Goal moved to in_review._`);
 

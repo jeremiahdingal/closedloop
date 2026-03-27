@@ -8,6 +8,7 @@ const getBranchNameMock = vi.fn(async (issueId: string) => `branch-${issueId}`);
 const execSyncMock = vi.fn();
 const mkdirSyncMock = vi.fn();
 const writeFileSyncMock = vi.fn();
+const readFileSyncMock = vi.fn();
 const fetchMock = vi.fn();
 
 vi.stubGlobal('fetch', fetchMock);
@@ -47,6 +48,7 @@ vi.mock('child_process', () => ({
 vi.mock('fs', () => ({
   mkdirSync: mkdirSyncMock,
   writeFileSync: writeFileSyncMock,
+  readFileSync: readFileSyncMock,
 }));
 
 describe('epic-reviewer-agent', () => {
@@ -60,6 +62,7 @@ describe('epic-reviewer-agent', () => {
     execSyncMock.mockReset();
     mkdirSyncMock.mockReset();
     writeFileSyncMock.mockReset();
+    readFileSyncMock.mockReset();
     fetchMock.mockReset();
   });
 
@@ -84,6 +87,10 @@ describe('epic-reviewer-agent', () => {
       lastSummary: '',
       lastBuildErrors: '',
       lastAppliedFixes: [],
+      overlappingFiles: [],
+      overlapSummary: '',
+      reconciliationBranchName: '',
+      reconciliationActive: false,
     });
 
     const secondPrompt = await buildReviewPrompt(epic as any, {
@@ -92,6 +99,10 @@ describe('epic-reviewer-agent', () => {
       lastSummary: 'Prior review',
       lastBuildErrors: 'Type error',
       lastAppliedFixes: ['SHO-1: src/file.ts'],
+      overlappingFiles: ['src/file.ts'],
+      overlapSummary: '- src/file.ts <- SHO-1, SHO-2',
+      reconciliationBranchName: '',
+      reconciliationActive: false,
     });
 
     expect(firstPrompt).toContain('FULL TARGET PROJECT CONTEXT');
@@ -181,6 +192,73 @@ describe('epic-reviewer-agent', () => {
     expect(callZAIMock).toHaveBeenCalledTimes(5);
     expect(
       postCommentMock.mock.calls.some(call => String((call as any[])[2]).includes('Capped at 5 Attempts'))
+    ).toBe(true);
+  });
+
+  it('switches to reconciliation mode after overlap is detected', async () => {
+    const { runEpicReviewerAgent, getEpicReviewerState, resetEpicReviewerState } = await import('./epic-reviewer-agent');
+    resetEpicReviewerState();
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => [{ id: 'goal-3', title: 'Epic Three', description: 'Desc', status: 'active' }],
+    });
+    getEpicTicketsMock.mockResolvedValue([
+      { id: 'ticket-3', identifier: 'SHO-3', title: 'Third ticket', status: 'in_review', goalId: 'goal-3' },
+      { id: 'ticket-4', identifier: 'SHO-4', title: 'Fourth ticket', status: 'in_review', goalId: 'goal-3' },
+    ]);
+
+    callZAIMock
+      .mockResolvedValueOnce('VERDICT: APPROVED\nSUMMARY:\nNeed integration reconciliation')
+      .mockResolvedValueOnce(
+        'VERDICT: CHANGES_REQUESTED\n' +
+        'TARGET: EPIC_RECONCILE\n' +
+        'FILE: src/shared.ts\n```ts\nexport const reconciled = true;\n```\n' +
+        'SUMMARY:\nResolved epic conflicts'
+      );
+
+    let buildAttempts = 0;
+    readFileSyncMock.mockReturnValue('<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\n');
+    execSyncMock.mockImplementation((command: string) => {
+      if (command.includes('--name-only') && command.includes('branch-ticket-3')) {
+        return 'src/shared.ts\nsrc/one.ts\n';
+      }
+      if (command.includes('--name-only') && command.includes('branch-ticket-4')) {
+        return 'src/shared.ts\nsrc/two.ts\n';
+      }
+      if (command.includes('git diff main...branch-ticket-')) {
+        return 'diff --git a/src/shared.ts b/src/shared.ts\n+change';
+      }
+      if (command.includes('git diff main...epic/')) {
+        return 'diff --git a/src/shared.ts b/src/shared.ts\n<<<<<<< HEAD\n=======\n>>>>>>>';
+      }
+      if (command === 'git diff --name-only --diff-filter=U') {
+        return 'src/shared.ts\n';
+      }
+      if (command === 'yarn build') {
+        buildAttempts += 1;
+        if (buildAttempts === 1) {
+          const error = new Error('build failed') as any;
+          error.stdout = Buffer.from('failing before reconcile');
+          error.stderr = Buffer.from('compile error');
+          throw error;
+        }
+        return '';
+      }
+      return '';
+    });
+
+    await runEpicReviewerAgent();
+
+    const state = getEpicReviewerState('goal-3');
+    expect(state?.attemptCount).toBe(2);
+    expect(state?.reconciliationActive).toBe(true);
+    expect(state?.overlappingFiles).toContain('src/shared.ts');
+    expect(
+      execSyncMock.mock.calls.some(call => String((call as any[])[0]).includes('git merge --no-ff --no-commit branch-ticket-3'))
+    ).toBe(true);
+    expect(
+      postCommentMock.mock.calls.some(call => String((call as any[])[2]).includes('Epic Reconciliation Branch Created'))
     ).toBe(true);
   });
 });

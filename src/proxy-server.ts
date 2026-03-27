@@ -8,7 +8,7 @@
 
 import * as http from 'http';
 import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentModel, getAgentKeys } from './config';
-import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue } from './paperclip-api';
+import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue, getIssueLabel } from './paperclip-api';
 import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses, issueBuilderBurstMode, issueImportFailures } from './agent-types';
 import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion, getEpicTickets } from './goal-system';
 import { callRemoteArchitect, callZAI } from './remote-ai';
@@ -197,7 +197,7 @@ export function createProxy(): http.Server {
       const assignedIssueId = await findAssignedIssue(agentId);
       if (assignedIssueId) {
         issueId = assignedIssueId;
-        console.log(`[closedloop] Auto-resolved issue for ${agentName}: ${issueId.slice(0, 8)}`);
+        console.log(`[closedloop] Auto-resolved issue for ${agentName}: ${await getIssueLabel(issueId)}`);
       }
     }
 
@@ -277,7 +277,7 @@ export function createProxy(): http.Server {
       const builderIssue = await getIssueDetails(issueId);
       if (builderIssue && isGoalIssue(builderIssue)) {
         const complexity = scoreComplexity(builderIssue.title, builderIssue.description || '');
-        console.log(`[closedloop] Goal guard: ${issueId.slice(0, 8)} complexity ${complexity.score}/10 -> Epic Decoder`);
+        console.log(`[closedloop] Goal guard: ${builderIssue.identifier || issueId.slice(0, 8)} complexity ${complexity.score}/10 -> Epic Decoder`);
         await postComment(
           issueId,
           null,
@@ -293,7 +293,7 @@ export function createProxy(): http.Server {
 
     // Hook 1b: Epic Decoder — decompose high-complexity goals using GLM-5
     if (issueId && agentId === AGENTS['epic decoder']) {
-      console.log(`[closedloop] Epic Decoder processing high-complexity Goal ${issueId.slice(0, 8)}`);
+      console.log(`[closedloop] Epic Decoder processing goal ${await getIssueLabel(issueId)}`);
       // Call epic-decoder module directly (uses GLM-5 via callZAI)
       setImmediate(async () => {
         try {
@@ -346,7 +346,7 @@ export function createProxy(): http.Server {
     if (agentId === AGENTS['local builder'] && issueId && issueBuilderBurstMode.has(issueId)) {
       const burstModel = getAgentModel('local builder burst');
       if (burstModel === 'remote') {
-        console.log(`[closedloop] Burst mode: routing to REMOTE (glm-5) for ${issueId.slice(0, 8)}`);
+        console.log(`[closedloop] Burst mode: routing to REMOTE (glm-5) for ${await getIssueLabel(issueId)}`);
         try {
           const issueContext =  await buildLocalBuilderContext(issueId, agentId);
           const messages = [...(parsedBody.messages || [])];
@@ -365,13 +365,13 @@ export function createProxy(): http.Server {
         }
       } else if (burstModel) {
         parsedBody.model = burstModel;
-        console.log(`[closedloop] Burst mode: using ${burstModel} for ${issueId.slice(0, 8)}`);
+        console.log(`[closedloop] Burst mode: using ${burstModel} for ${await getIssueLabel(issueId)}`);
       }
     }
 
     // Hook 3: Coder Remote — route to GLM-5 via z.ai instead of Ollama
     if (agentId === AGENTS['coder remote'] && issueId) {
-      console.log(`[proxy:${proxyPort}] Coder Remote -> GLM-5 (remote) | issue=${issueId.slice(0, 8)}`);
+      console.log(`[proxy:${proxyPort}] Coder Remote -> GLM-5 (remote) | issue=${await getIssueLabel(issueId)}`);
       try {
         const issueContext = await buildLocalBuilderContext(issueId, agentId);
         const messages = [...(parsedBody.messages || [])];
@@ -415,7 +415,7 @@ export function createProxy(): http.Server {
 
     // Visual Reviewer bypasses Ollama and runs deterministic recorder
     if (issueId && agentId === AGENTS['visual reviewer']) {
-      console.log(`[proxy:${proxyPort}] ${agentName} -> feature recorder | issue=${issueId.slice(0, 8)}`);
+      console.log(`[proxy:${proxyPort}] ${agentName} -> feature recorder | issue=${await getIssueLabel(issueId)}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({
@@ -460,7 +460,7 @@ export function createProxy(): http.Server {
     }
 
     console.log(
-      `[proxy:${proxyPort}] ${agentName} -> ollama:${ollamaPort} | model=${ollamaPayload.model} | issue=${issueId?.slice(0, 8) || 'none'} | msgs=${ollamaPayload.messages.length}`
+      `[proxy:${proxyPort}] ${agentName} -> ollama:${ollamaPort} | model=${ollamaPayload.model} | issue=${issueId ? await getIssueLabel(issueId) : 'none'} | msgs=${ollamaPayload.messages.length}`
     );
 
     try {
@@ -523,7 +523,7 @@ export function createProxy(): http.Server {
               const routerIssue = await getIssueDetails(issueId);
               if (routerIssue) {
                 if (isGoalIssue(routerIssue)) {
-                  console.log(`[closedloop] Complexity Router received goal ${issueId.slice(0, 8)} -> ignoring unexpected goal assignment`);
+                  console.log(`[closedloop] Complexity Router received goal ${routerIssue.identifier || issueId.slice(0, 8)} -> ignoring unexpected goal assignment`);
                   await postComment(
                     issueId,
                     null,
@@ -531,7 +531,7 @@ export function createProxy(): http.Server {
                   );
                 } else {
                   const complexity = scoreComplexity(routerIssue.title, routerIssue.description || '');
-                  console.log(`[closedloop] Complexity Router scored ${issueId.slice(0, 8)}: ${complexity.score}/10 [${complexity.signals.join(', ')}]`);
+                  console.log(`[closedloop] Complexity Router scored ${routerIssue.identifier || issueId.slice(0, 8)}: ${complexity.score}/10 [${complexity.signals.join(', ')}]`);
                   if (complexity.score >= 7) {
                     await callRemoteArchitect(issueId, routerIssue);
                     console.log(`[closedloop] High complexity — marked for parallel exploration`);
@@ -548,14 +548,14 @@ export function createProxy(): http.Server {
             if (agentId === AGENTS.strategist && issueId) {
               const stratIssue = await getIssueDetails(issueId);
               if (stratIssue && isGoalIssue(stratIssue) && content.includes('## Ticket:')) {
-                console.log(`[closedloop] Ignoring Strategist goal decomposition output for ${issueId.slice(0, 8)} because Epic Decoder owns goal decomposition`);
+                console.log(`[closedloop] Ignoring Strategist goal decomposition output for ${stratIssue.identifier || issueId.slice(0, 8)} because Epic Decoder owns goal decomposition`);
               }
             }
 
             // Local Builder: extract code blocks, write files, commit (no PR yet)
             if (agentId === AGENTS['local builder']) {
               if (issueProcessingLock[issueId]) {
-                console.log(`[closedloop] Skipping duplicate Local Builder run for ${issueId.slice(0, 8)} (already processing)`);
+                console.log(`[closedloop] Skipping duplicate Local Builder run for ${await getIssueLabel(issueId)} (already processing)`);
               } else {
                 issueProcessingLock[issueId] = true;
                 try {

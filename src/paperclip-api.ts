@@ -6,6 +6,7 @@ import { Issue, Comment } from './types';
 import { getPaperclipApiUrl, getCompanyId, getAgentKeys } from './config';
 
 const agentNameCache: Record<string, string> = {};
+const issueLabelCache: Record<string, string> = {};
 
 export async function getAgentName(agentId: string): Promise<string> {
   if (!agentId) return 'unknown';
@@ -33,6 +34,16 @@ export async function getIssueDetails(issueId: string): Promise<Issue | null> {
     // Silent fail
   }
   return null;
+}
+
+export async function getIssueLabel(issueId: string): Promise<string> {
+  if (!issueId) return 'unknown';
+  if (issueLabelCache[issueId]) return issueLabelCache[issueId];
+
+  const issue = await getIssueDetails(issueId);
+  const label = issue?.identifier || issueId.slice(0, 8);
+  issueLabelCache[issueId] = label;
+  return label;
 }
 
 export async function getIssueComments(issueId: string): Promise<Comment[]> {
@@ -145,7 +156,7 @@ export async function postComment(
         const text = await res.text();
         console.error(`[paperclip] Failed to post comment: ${res.status} ${text}`);
       } else {
-        console.log(`[paperclip] Posted comment to issue ${issueId.slice(0, 8)}`);
+        console.log(`[paperclip] Posted comment to issue ${await getIssueLabel(issueId)}`);
       }
       return;
     } catch (err) {

@@ -39,7 +39,8 @@ interface TicketWithBranch extends EpicTicket {
 }
 
 interface FileFix {
-  ticketIdentifier: string;
+  target: string;
+  targetType: 'ticket' | 'reconciliation';
   filePath: string;
   content: string;
 }
@@ -63,6 +64,10 @@ interface EpicRetryState {
   lastSummary: string;
   lastBuildErrors: string;
   lastAppliedFixes: string[];
+  overlappingFiles: string[];
+  overlapSummary: string;
+  reconciliationBranchName: string;
+  reconciliationActive: boolean;
 }
 
 const epicRetryStates = new Map<string, EpicRetryState>();
@@ -87,7 +92,7 @@ async function collectReadyEpics(): Promise<EpicWithTickets[]> {
     const tickets = await getEpicTickets(goal.id);
     if (tickets.length === 0) continue;
 
-    const allReady = tickets.every(t => t.status === 'in_review' || t.status === 'done');
+    const allReady = tickets.every(t => t.status === 'in_review');
     if (!allReady) continue;
 
     epics.push({ goal, tickets });
@@ -122,6 +127,175 @@ async function collectTicketDiff(ticket: TicketWithBranch): Promise<string> {
   }
 }
 
+async function collectChangedFiles(ticket: TicketWithBranch): Promise<string[]> {
+  try {
+    const defaultBranch = getDefaultBranch();
+    const changed = execSync(`git diff ${defaultBranch}...${ticket.branchName} --name-only -- . ":(exclude)docs/screenshots"`, {
+      cwd: WORKSPACE,
+      encoding: 'utf8',
+      timeout: 30000,
+      maxBuffer: 5 * 1024 * 1024,
+    }).toString();
+    return changed
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean);
+  } catch (err: any) {
+    console.log(`[epic-reviewer-agent] Could not get changed files for ${ticket.identifier}: ${err.message}`);
+    return [];
+  }
+}
+
+async function detectOverlappingFiles(epic: EpicWithTickets): Promise<{
+  overlappingFiles: string[];
+  overlapSummary: string;
+}> {
+  const tickets = await withBranches(epic.tickets);
+  const fileOwners = new Map<string, string[]>();
+
+  for (const ticket of tickets) {
+    const changedFiles = await collectChangedFiles(ticket);
+    for (const filePath of changedFiles) {
+      const owners = fileOwners.get(filePath) || [];
+      owners.push(ticket.identifier);
+      fileOwners.set(filePath, owners);
+    }
+  }
+
+  const overlaps = Array.from(fileOwners.entries())
+    .filter(([, owners]) => owners.length > 1)
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  const overlappingFiles = overlaps.map(([filePath]) => filePath);
+  const overlapSummary = overlaps.length === 0
+    ? ''
+    : overlaps
+        .map(([filePath, owners]) => `- ${filePath} <- ${owners.join(', ')}`)
+        .join('\n');
+
+  return { overlappingFiles, overlapSummary };
+}
+
+function getReconciliationBranchName(epic: EpicWithTickets): string {
+  const goalSlug = String(epic.goal.title || epic.goal.id || 'epic')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24) || 'epic';
+  return `epic/${goalSlug}-${String(epic.goal.id).slice(0, 8)}-reconcile`;
+}
+
+function getConflictedFiles(): string[] {
+  try {
+    return execSync('git diff --name-only --diff-filter=U', {
+      cwd: WORKSPACE,
+      encoding: 'utf8',
+      timeout: 10000,
+    })
+      .toString()
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function getFilesContainingConflictMarkers(filePaths: string[]): string[] {
+  return filePaths.filter(filePath => {
+    try {
+      const fullPath = path.join(WORKSPACE, filePath);
+      const content = fs.readFileSync(fullPath, 'utf8');
+      return content.includes('<<<<<<<') && content.includes('=======') && content.includes('>>>>>>>');
+    } catch {
+      return false;
+    }
+  });
+}
+
+function readConflictedFileContents(filePaths: string[]): string {
+  const sections: string[] = [];
+
+  for (const filePath of filePaths) {
+    try {
+      const fullPath = path.join(WORKSPACE, filePath);
+      const content = fs.readFileSync(fullPath, 'utf8');
+      sections.push(`### ${filePath}\n\`\`\`\n${truncate(content, 12000)}\n\`\`\``);
+    } catch (err: any) {
+      sections.push(`### ${filePath}\nCould not read conflicted file: ${err.message}`);
+    }
+  }
+
+  return sections.join('\n\n');
+}
+
+function tryGit(command: string, timeout = 30000): void {
+  execSync(command, {
+    cwd: WORKSPACE,
+    stdio: 'pipe',
+    timeout,
+  });
+}
+
+async function ensureReconciliationBranch(epic: EpicWithTickets, state: EpicRetryState): Promise<string> {
+  if (state.reconciliationBranchName) {
+    return state.reconciliationBranchName;
+  }
+
+  const defaultBranch = getDefaultBranch();
+  const branchName = getReconciliationBranchName(epic);
+  const tickets = await withBranches(epic.tickets);
+
+  try {
+    tryGit(`git checkout ${defaultBranch}`, 10000);
+    try {
+      tryGit(`git branch -D ${branchName}`, 10000);
+    } catch {}
+    tryGit(`git checkout -b ${branchName} ${defaultBranch}`, 10000);
+
+    for (const ticket of tickets) {
+      try {
+        tryGit(`git merge --no-ff --no-commit ${ticket.branchName}`, 20000);
+        try {
+          tryGit(`git commit -m "Merge ${ticket.identifier} into ${branchName}"`, 20000);
+        } catch (err: any) {
+          const output = `${err.stdout?.toString() || ''}${err.stderr?.toString() || ''}`;
+          if (!output.includes('nothing to commit')) {
+            throw err;
+          }
+        }
+      } catch (err: any) {
+        const conflictedFiles = getConflictedFiles();
+        if (conflictedFiles.length === 0) {
+          throw err;
+        }
+
+        for (const filePath of conflictedFiles) {
+          tryGit(`git add "${filePath}"`, 10000);
+        }
+        tryGit(`git commit -m "WIP unresolved reconciliation conflicts after merging ${ticket.identifier}"`, 20000);
+      }
+    }
+
+    tryGit(`git push -u origin ${branchName} --force`, 60000);
+    state.reconciliationBranchName = branchName;
+    state.reconciliationActive = true;
+
+    const summary = state.overlapSummary || state.overlappingFiles.map(filePath => `- ${filePath}`).join('\n');
+    await postComment(
+      epic.goal.id,
+      null,
+      `**Epic Reconciliation Branch Created**\n\nBranch: \`${branchName}\`\n\nOverlapping files detected:\n${summary || '- overlap detected'}`
+    ).catch(() => {});
+
+    return branchName;
+  } finally {
+    try {
+      tryGit(`git checkout ${defaultBranch}`, 10000);
+    } catch {}
+  }
+}
+
 export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryState): Promise<string> {
   let prompt = '';
 
@@ -140,6 +314,9 @@ export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryS
     if (state.lastBuildErrors) {
       prompt += `Previous build failures:\n\`\`\`\n${truncate(state.lastBuildErrors, 8000)}\n\`\`\`\n\n`;
     }
+    if (state.overlapSummary) {
+      prompt += `Overlapping files detected across ticket branches:\n${state.overlapSummary}\n\n`;
+    }
   }
 
   prompt += `## Epic\nTitle: ${epic.goal.title}\n`;
@@ -153,6 +330,9 @@ export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryS
   for (const ticket of ticketInfos) {
     prompt += `- ${ticket.identifier}: ${ticket.title} (${ticket.branchName})\n`;
   }
+  if (state.overlapSummary) {
+    prompt += `\n## Overlap Detection\n${state.overlapSummary}\n`;
+  }
   prompt += '\n## Ticket Diffs\n\n';
 
   for (const ticket of ticketInfos) {
@@ -160,6 +340,34 @@ export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryS
     if (!diff) continue;
     prompt += `### ${ticket.identifier}: ${ticket.title}\n`;
     prompt += `\`\`\`diff\n${diff}\n\`\`\`\n\n`;
+  }
+
+  if (state.reconciliationActive && state.reconciliationBranchName) {
+    const defaultBranch = getDefaultBranch();
+    try {
+      const branchDiff = execSync(`git diff ${defaultBranch}...${state.reconciliationBranchName} -- . ":(exclude)docs/screenshots"`, {
+        cwd: WORKSPACE,
+        encoding: 'utf8',
+        timeout: 30000,
+        maxBuffer: 10 * 1024 * 1024,
+      }).toString();
+      prompt += `## Reconciliation Branch\nBranch: ${state.reconciliationBranchName}\n\n`;
+      prompt += `\`\`\`diff\n${truncate(branchDiff, 25000)}\n\`\`\`\n\n`;
+    } catch (err: any) {
+      prompt += `## Reconciliation Branch\nBranch: ${state.reconciliationBranchName}\nCould not collect reconciliation diff: ${err.message}\n\n`;
+    }
+
+    try {
+      tryGit(`git checkout ${state.reconciliationBranchName}`, 10000);
+      const conflictedFiles = getFilesContainingConflictMarkers(state.overlappingFiles);
+      if (conflictedFiles.length > 0) {
+        prompt += `## Conflicted Files\n${readConflictedFileContents(conflictedFiles)}\n\n`;
+      }
+    } finally {
+      try {
+        tryGit(`git checkout ${defaultBranch}`, 10000);
+      } catch {}
+    }
   }
 
   return prompt;
@@ -173,8 +381,14 @@ Review one epic at a time. Find cross-ticket issues, output exact file fixes, an
 Required output:
 - If no code changes are needed, start with VERDICT: APPROVED
 - If changes are needed, start with VERDICT: CHANGES_REQUESTED
-- For every file to change, emit:
+- For normal ticket-branch fixes, emit:
 TICKET: SHO-XX
+FILE: relative/path/to/file.ext
+\`\`\`typescript
+// complete file content
+\`\`\`
+- For reconciliation-branch fixes, emit:
+TARGET: EPIC_RECONCILE
 FILE: relative/path/to/file.ext
 \`\`\`typescript
 // complete file content
@@ -186,6 +400,7 @@ brief explanation
 Rules:
 - Output full files, not diffs
 - Only tag files to tickets that exist in this epic
+- Use TARGET: EPIC_RECONCILE only when reconciliation mode is active
 - Prior build errors are high-priority signals
 - If a previous attempt failed to build, focus on getting the next attempt green`;
 }
@@ -194,12 +409,24 @@ function parseReviewResult(content: string): ReviewResult {
   const fixes: FileFix[] = [];
   const approved = /VERDICT:\s*APPROVED/i.test(content);
   const ticketFileRegex = /TICKET:\s*(SHO-\d+)\s*\nFILE:\s*([^\n]+)\s*\n```[^\n]*\n([\s\S]*?)\n```/g;
+  const reconciliationFileRegex = /TARGET:\s*EPIC_RECONCILE\s*\nFILE:\s*([^\n]+)\s*\n```[^\n]*\n([\s\S]*?)\n```/g;
   let match: RegExpExecArray | null;
 
   while ((match = ticketFileRegex.exec(content)) !== null) {
     const [, ticketIdentifier, filePath, fileContent] = match;
     fixes.push({
-      ticketIdentifier,
+      target: ticketIdentifier,
+      targetType: 'ticket',
+      filePath: filePath.trim(),
+      content: fileContent.trim(),
+    });
+  }
+
+  while ((match = reconciliationFileRegex.exec(content)) !== null) {
+    const [, filePath, fileContent] = match;
+    fixes.push({
+      target: 'EPIC_RECONCILE',
+      targetType: 'reconciliation',
       filePath: filePath.trim(),
       content: fileContent.trim(),
     });
@@ -215,12 +442,14 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
   const defaultBranch = getDefaultBranch();
   const tickets = await withBranches(epic.tickets);
   const fixesByTicket = new Map<string, FileFix[]>();
+  const reconciliationFixes = fixes.filter(fix => fix.targetType === 'reconciliation');
 
   for (const fix of fixes) {
-    if (!fixesByTicket.has(fix.ticketIdentifier)) {
-      fixesByTicket.set(fix.ticketIdentifier, []);
+    if (fix.targetType !== 'ticket') continue;
+    if (!fixesByTicket.has(fix.target)) {
+      fixesByTicket.set(fix.target, []);
     }
-    fixesByTicket.get(fix.ticketIdentifier)!.push(fix);
+    fixesByTicket.get(fix.target)!.push(fix);
   }
 
   for (const ticket of tickets) {
@@ -265,6 +494,58 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
         ticket.id,
         null,
         `**Epic Reviewer Automated Fixes**\n\nApplied fixes:\n${ticketFixes.map(f => `- \`${f.filePath}\``).join('\n')}`
+      ).catch(() => {});
+    } finally {
+      try {
+        execSync(`git checkout ${defaultBranch}`, {
+          cwd: WORKSPACE,
+          stdio: 'pipe',
+          timeout: 10000,
+        });
+      } catch {}
+    }
+  }
+
+  const reconciliationBranchName = fixes.find(fix => fix.targetType === 'reconciliation') ? getReconciliationBranchName(epic) : '';
+  if (reconciliationBranchName && reconciliationFixes.length > 0) {
+    try {
+      execSync(`git checkout ${reconciliationBranchName}`, {
+        cwd: WORKSPACE,
+        stdio: 'pipe',
+        timeout: 10000,
+      });
+
+      for (const fix of reconciliationFixes) {
+        const fullPath = path.join(WORKSPACE, fix.filePath);
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+        fs.writeFileSync(fullPath, fix.content, 'utf8');
+        execSync(`git add "${fix.filePath}"`, { cwd: WORKSPACE, stdio: 'pipe' });
+        applied.push(`EPIC_RECONCILE: ${fix.filePath}`);
+      }
+
+      try {
+        execSync(`git commit -m "Epic Reviewer reconciliation fixes for ${epic.goal.id}"`, {
+          cwd: WORKSPACE,
+          stdio: 'pipe',
+          timeout: 10000,
+        });
+      } catch (err: any) {
+        const output = `${err.stdout?.toString() || ''}${err.stderr?.toString() || ''}`;
+        if (!output.includes('nothing to commit')) {
+          throw err;
+        }
+      }
+
+      execSync(`git push origin ${reconciliationBranchName} --force`, {
+        cwd: WORKSPACE,
+        stdio: 'pipe',
+        timeout: 60000,
+      });
+
+      await postComment(
+        epic.goal.id,
+        null,
+        `**Epic Reviewer Reconciliation Fixes**\n\nApplied fixes on \`${reconciliationBranchName}\`:\n${reconciliationFixes.map(f => `- \`${f.filePath}\``).join('\n')}`
       ).catch(() => {});
     } finally {
       try {
@@ -329,6 +610,45 @@ async function buildEpicBranches(epic: EpicWithTickets): Promise<BuildCheck[]> {
   return results;
 }
 
+async function buildReconciliationBranch(branchName: string): Promise<BuildCheck[]> {
+  const defaultBranch = getDefaultBranch();
+  const buildCommand = getBuildCommand();
+
+  try {
+    execSync(`git checkout ${branchName}`, {
+      cwd: WORKSPACE,
+      stdio: 'pipe',
+      timeout: 10000,
+    });
+    execSync(buildCommand, {
+      cwd: WORKSPACE,
+      stdio: 'pipe',
+      timeout: 180000,
+    });
+    return [{
+      branchName,
+      ticketIdentifier: 'EPIC_RECONCILE',
+      passed: true,
+    }];
+  } catch (err: any) {
+    const output = truncate(`${err.stdout?.toString() || ''}\n${err.stderr?.toString() || ''}`.trim(), 5000);
+    return [{
+      branchName,
+      ticketIdentifier: 'EPIC_RECONCILE',
+      passed: false,
+      output,
+    }];
+  } finally {
+    try {
+      execSync(`git checkout ${defaultBranch}`, {
+        cwd: WORKSPACE,
+        stdio: 'pipe',
+        timeout: 10000,
+      });
+    } catch {}
+  }
+}
+
 async function postEpicSuccess(epic: EpicWithTickets, summary: string): Promise<void> {
   for (const ticket of epic.tickets) {
     await postComment(
@@ -364,10 +684,30 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
     lastSummary: '',
     lastBuildErrors: '',
     lastAppliedFixes: [],
+    overlappingFiles: [],
+    overlapSummary: '',
+    reconciliationBranchName: '',
+    reconciliationActive: false,
   };
+
+  if (state.overlappingFiles.length === 0 && !state.overlapSummary) {
+    const overlap = await detectOverlappingFiles(epic);
+    state.overlappingFiles = overlap.overlappingFiles;
+    state.overlapSummary = overlap.overlapSummary;
+    if (state.overlappingFiles.length > 0) {
+      await postComment(
+        epic.goal.id,
+        null,
+        `**Epic Reviewer Overlap Detection**\n\nMultiple ticket branches modify the same files:\n${state.overlapSummary}\n\nEpic Reviewer will switch to reconciliation mode on a follow-up pass if build authority stays red.`
+      ).catch(() => {});
+    }
+  }
 
   while (state.attemptCount < MAX_EPIC_RETRIES) {
     state.attemptCount += 1;
+    if (state.attemptCount >= 2 && state.overlappingFiles.length > 0) {
+      await ensureReconciliationBranch(epic, state);
+    }
     const prompt = await buildReviewPrompt(epic, state);
     console.log(`[epic-reviewer-agent] Reviewing epic "${epic.goal.title}" attempt ${state.attemptCount}/${MAX_EPIC_RETRIES}`);
 
@@ -389,7 +729,9 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
       state.lastAppliedFixes = [];
     }
 
-    const buildResults = await buildEpicBranches(epic);
+    const buildResults = state.reconciliationActive && state.reconciliationBranchName
+      ? await buildReconciliationBranch(state.reconciliationBranchName)
+      : await buildEpicBranches(epic);
     const failures = buildResults.filter(result => !result.passed);
     state.lastBuildErrors = failures
       .map(result => `${result.ticketIdentifier} (${result.branchName})\n${result.output || 'Unknown build failure'}`)

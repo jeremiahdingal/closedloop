@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { getWorkspace } from './config';
-import { postComment } from './paperclip-api';
+import { getIssueLabel, postComment } from './paperclip-api';
 import { getDefaultBranch, getBranchName } from './git-ops';
 
 const WORKSPACE = getWorkspace();
@@ -39,6 +39,7 @@ export interface DiffGuardianResult {
  */
 export async function runDiffGuardian(issueId: string): Promise<DiffGuardianResult> {
   const opts = { cwd: WORKSPACE, encoding: 'utf8' as const, timeout: 30000 };
+  const issueLabel = await getIssueLabel(issueId);
 
   try {
     const defaultBranch = getDefaultBranch();
@@ -48,7 +49,7 @@ export async function runDiffGuardian(issueId: string): Promise<DiffGuardianResu
       .filter(f => f.trim());
 
     if (changedFiles.length === 0) {
-      console.log(`[DiffGuardian] No changes detected for ${issueId.slice(0, 8)} (ref: ${featureBranch})`);
+      console.log(`[DiffGuardian] No changes detected for ${issueLabel} (ref: ${featureBranch})`);
       return { approved: true, issues: [] };
     }
 
@@ -121,11 +122,11 @@ export async function runDiffGuardian(issueId: string): Promise<DiffGuardianResu
     }
 
     if (issues.length === 0) {
-      console.log(`[DiffGuardian] Approved for ${issueId.slice(0, 8)}`);
+      console.log(`[DiffGuardian] Approved for ${issueLabel}`);
       return { approved: true, issues: [] };
     }
 
-    console.log(`[DiffGuardian] Found ${issues.length} issues for ${issueId.slice(0, 8)}`);
+    console.log(`[DiffGuardian] Found ${issues.length} issues for ${issueLabel}`);
     const fixesApplied = await applyAutoFixes(issues);
     await postComment(issueId, null, buildDiffGuardianReport(issues, fixesApplied, false));
     return { approved: false, issues };

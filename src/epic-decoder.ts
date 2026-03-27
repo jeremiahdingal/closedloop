@@ -18,7 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspace, getCompanyId, getPaperclipApiUrl } from './config';
-import { postComment, patchIssue } from './paperclip-api';
+import { getIssueLabel, postComment, patchIssue } from './paperclip-api';
 import { callZAI } from './remote-ai';
 import { AGENTS } from './agent-types';
 import { decomposeGoalIntoTickets } from './goal-system';
@@ -76,22 +76,23 @@ export async function decodeEpic(goalId: string): Promise<boolean> {
   try {
     const goal = await getGoal(goalId);
     if (!goal) return false;
+    const goalLabel = await getIssueLabel(goalId);
 
     // Check file-based lock FIRST (prevents duplicates across bridge restarts)
     if (isEpicDecomposed(goalId)) {
-      console.log(`[epic-decoder] Epic ${goalId.slice(0, 8)} is locked (already decomposed) — SKIPPING`);
+      console.log(`[epic-decoder] Epic ${goalLabel} is locked (already decomposed) - skipping`);
       return false;
     }
 
     // Check if already decomposed (has child tickets)
     const existingTickets = await getEpicTickets(goalId);
     if (existingTickets.length > 0) {
-      console.log(`[epic-decoder] Epic ${goalId.slice(0, 8)} already has ${existingTickets.length} tickets — SKIPPING`);
+      console.log(`[epic-decoder] Epic ${goalLabel} already has ${existingTickets.length} tickets - skipping`);
       markEpicDecomposed(goalId); // Ensure lock exists
       return false;
     }
 
-    console.log(`[epic-decoder] Epic "${goal.title}" ready for decomposition`);
+    console.log(`[epic-decoder] Epic ${goalLabel} "${goal.title}" ready for decomposition`);
     await runEpicDecode(goal);
     markEpicDecomposed(goalId); // Mark as decomposed AFTER success
     return true;
@@ -272,7 +273,8 @@ export async function checkActiveGoalsForDecode(): Promise<void> {
         continue;
       }
 
-      console.log(`[epic-decoder] Active-goal heartbeat starting ${goal.title} (${goal.id.slice(0, 8)})`);
+      const goalLabel = await getIssueLabel(goal.id);
+      console.log(`[epic-decoder] Active-goal heartbeat starting ${goalLabel} "${goal.title}"`);
       await decodeEpic(goal.id);
     }
   } catch (err: any) {

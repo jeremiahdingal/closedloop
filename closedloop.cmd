@@ -41,6 +41,15 @@ echo.
 echo  [*] Starting ClosedLoop...
 echo.
 
+call :BUILD_RUNTIME
+if errorlevel 1 (
+    echo.
+    echo  [ERROR] Build failed. Start aborted to avoid stale dist output.
+    echo.
+    pause
+    goto MENU
+)
+
 :: 1. Ollama
 echo  [1/3] Starting Ollama...
 tasklist /FI "IMAGENAME eq ollama.exe" 2>nul | find /I "ollama.exe" >nul
@@ -131,6 +140,15 @@ cls
 echo.
 echo  [*] Restarting...
 echo.
+
+call :BUILD_RUNTIME
+if errorlevel 1 (
+    echo.
+    echo  [ERROR] Build failed. Restart aborted to avoid stale dist output.
+    echo.
+    pause
+    goto MENU
+)
 
 :: Stop ClosedLoop
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":3201 " 2^>nul') do taskkill /PID %%a /F >nul 2>&1
@@ -295,6 +313,15 @@ echo.
 echo  Starting ClosedLoop server on :3201...
 echo.
 
+call :BUILD_RUNTIME
+if errorlevel 1 (
+    echo.
+    echo  [ERROR] Build failed. Start aborted to avoid stale dist output.
+    echo.
+    pause
+    goto MENU
+)
+
 :: Check if already running
 set PROXY_PID=
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3201 "') do set PROXY_PID=%%a
@@ -349,6 +376,26 @@ if defined PROXY_PID (
     echo        ClosedLoop did not come up on :3201 yet. Check closedloop-err.log.
 )
 goto :eof
+
+:BUILD_RUNTIME
+echo  [build] Rebuilding ClosedLoop runtime...
+call npm run build
+if errorlevel 1 (
+    echo  [build] Root build failed.
+    exit /b 1
+)
+
+echo  [build] Rebuilding bridge runtime...
+pushd packages\bridge >nul
+call npm run build
+if errorlevel 1 (
+    popd >nul
+    echo  [build] Bridge build failed.
+    exit /b 1
+)
+popd >nul
+echo  [build] Runtime builds complete.
+exit /b 0
 
 :TRIGGER_CHECKER
 cls
