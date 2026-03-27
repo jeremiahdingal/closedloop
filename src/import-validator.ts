@@ -232,7 +232,7 @@ export function validateImports(files: Array<{ path: string; content: string }>)
       { pattern: /ky/i, suggestion: 'Use fetcherWithToken from app/utils/fetcherWithToken instead' },
       { pattern: /axios/i, suggestion: 'Use native fetch or fetcherWithToken instead' },
       { pattern: /lodash/i, suggestion: 'Use native array methods or @radix-ui utilities instead' },
-      { pattern: /styled-components|emotion|@emotion/i, suggestion: 'Use React Native StyleSheet.create() instead' },
+      { pattern: /styled-components|emotion|@emotion/i, suggestion: 'Use Tamagui components/tokens instead' },
     ];
     
     const content = file.content;

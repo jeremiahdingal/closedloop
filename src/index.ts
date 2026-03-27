@@ -11,6 +11,7 @@ import { getConfig, getPaperclipApiUrl, getCompanyId, getAgentKeys } from './con
 import { AGENTS } from './agent-types';
 import { checkActiveGoalsForDecode } from './epic-decoder';
 import { reloadGoalTicketMappings } from './goal-system';
+import { wakeAgent } from './paperclip-api';
 
 // Load configuration
 const config = getConfig();
@@ -54,10 +55,11 @@ initializeRAG().catch((err) => {
 // Start the proxy server
 createProxy();
 
-// Run background checker every 60 seconds
+// Run background checker every 10 minutes.
+// Startup still performs an immediate check so we don't lose newly restarted work.
 setInterval(() => {
   checkAssignedIssues().catch(() => {});
-}, 60000);
+}, 10 * 60 * 1000);
 
 // Run Epic Decoder heartbeat every 60 seconds so active goals can start the flow.
 setInterval(() => {
@@ -72,13 +74,11 @@ setTimeout(async () => {
   await checkActiveGoalsForDecode();
   await checkAssignedIssues();
   
-  // Epic Reviewer is the final build authority, not the decomposition entrypoint.
-  try {
-    const { runEpicReviewerAgent } = await import('./epic-reviewer-agent');
-    await runEpicReviewerAgent();
-    console.log('[closedloop] Epic Reviewer build authority completed startup check');
-  } catch (err: any) {
-    console.log(`[closedloop] Epic Reviewer build authority failed: ${err.message}`);
+  const woke = await wakeAgent(AGENTS['epic reviewer'], 'startup_ready_epics_check', 'automation');
+  if (woke) {
+    console.log('[closedloop] Epic Reviewer agent woken for startup ready-epic check');
+  } else {
+    console.log('[closedloop] Epic Reviewer agent wake failed during startup');
   }
 }, 5000);
 

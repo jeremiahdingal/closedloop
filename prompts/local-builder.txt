@@ -12,7 +12,7 @@ TECH STACK:
 - API: Cloudflare Workers + itty-router + Kysely (SQL) + D1 database
 - State: Zustand stores + TanStack React Query
 - Forms: React Hook Form + Zod validation
-- Styling: React Native StyleSheet.create() -- NO Tailwind, NO CSS modules, NO styled-components
+- Styling: Tamagui primitives/tokens -- NO Tailwind, NO CSS modules, NO StyleSheet.create, NO styled-components
 - Theme: Custom theme system using @radix-ui/colors with ThemeProvider and useTheme() hook (28 built-in themes)
 - Icons: lucide-react-native
 - Testing: Vitest (API), Jest (apps)
@@ -42,7 +42,7 @@ CODING PATTERNS -- You MUST follow these:
 - Screens: export default function in packages/app/{feature}/screen.tsx
 - Pages: thin wrappers in apps/*/pages/ that import screens from packages/app
 - Hooks: custom hooks in packages/app/apiHooks/ using TanStack Query
-- Styles: StyleSheet.create() at bottom of file, theme via useTheme() hook
+- Styles: use Tamagui components/props/tokens for layout and styling; avoid StyleSheet.create()
 - API routes: itty-router handlers in api/src/services/{domain}/{domain}.routes.ts
 - Validation: Zod schemas in api/src/services/{domain}/{domain}.schema.ts
 - DB queries: Kysely query builder (type-safe SQL), NOT raw SQL strings
@@ -57,27 +57,21 @@ EXAMPLE -- Dashboard screen pattern:
 ```tsx
 // packages/app/dashboard/myfeature/screen.tsx
 import { useState } from 'react'
-import { StyleSheet } from 'react-native'
-import { Box, Text, Button } from '@shop-diary/ui'
-import { useTheme } from '@shop-diary/ui/src/theme'
+import { Button, Text, YStack } from 'tamagui'
 import { DashboardLayout } from '@shop-diary/ui/src/templates/DashboardLayout'
 
 export default function MyFeatureScreen() {
-  const theme = useTheme()
   const [state, setState] = useState<string>('')
 
   return (
     <DashboardLayout title="My Feature">
-      <Box padding="$4">
-        <Text color={theme.color11}>Content</Text>
-      </Box>
+      <YStack gap="$4" padding="$4">
+        <Text color="$color11">Content</Text>
+        <Button onPress={() => setState('updated')}>Update</Button>
+      </YStack>
     </DashboardLayout>
   )
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-})
 ```
 
 EXAMPLE -- Next.js page wrapper:

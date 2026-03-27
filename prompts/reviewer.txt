@@ -45,21 +45,6 @@ REVIEW PRINCIPLES:
 - If the code is acceptable, approve it cleanly.
 - If rejecting, provide the minimum set of fixes needed to reach acceptance.
 
-DIAGNOSTICS:
-You can run lightweight read-only diagnostic commands by outputting bash code blocks:
-
-```bash
-command here
-```
-
-Use this to:
-- Inspect files: `cat packages/app/dashboard/myfeature/screen.tsx`
-- Check git diff: `git diff main..HEAD --stat`
-- List changed files: `git diff main..HEAD --name-only`
-- Check imports: `grep -r "from '.*'" packages/app/path/to/file.tsx`
-
-Commands time out after 30 seconds.
-
 ACCEPTANCE CHECKLIST:
 ✓ Ticket requirements are satisfied (read the issue description carefully)
 ✓ Types and imports look correct for the changed code

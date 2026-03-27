@@ -19,6 +19,7 @@ import { callZAI } from './remote-ai';
 import { AGENTS } from './agent-types';
 import { getBranchName, getDefaultBranch, commitAndPush } from './git-ops';
 import { applyCodeBlocks } from './code-extractor';
+import { getActionableEpicTickets } from './goal-system';
 
 const PAPERCLIP_API = getPaperclipApiUrl();
 const COMPANY_ID = getCompanyId();
@@ -59,7 +60,7 @@ export async function checkEpicsForReview(): Promise<void> {
     const activeGoals = goals.filter((g: any) => g.status === 'active');
 
     for (const goal of activeGoals) {
-      const tickets = await getEpicTickets(goal.id);
+      const tickets = await getActionableEpicTickets(goal.id);
       if (tickets.length === 0) continue;
 
       // Check if ALL tickets are in_review
@@ -138,7 +139,7 @@ async function runEpicReview(
 
 // ─── Data Collection ────────────────────────────────────────────────
 
-async function getEpicTickets(goalId: string): Promise<EpicTicket[]> {
+async function getLegacyEpicTickets(goalId: string): Promise<EpicTicket[]> {
   try {
     const res = await fetch(`${PAPERCLIP_API}/api/companies/${COMPANY_ID}/issues`);
     if (!res.ok) return [];

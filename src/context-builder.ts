@@ -296,17 +296,7 @@ export async function buildLocalBuilderContext(
   const baseContext = await buildIssueContext(issueId, currentAgentId);
   if (!baseContext) return null;
 
-  // Add monorepo context (file structure, package.json, source code reference)
-  // This helps the builder understand where files should go and what patterns to follow
-  console.log('[context] Collecting monorepo context for Local Builder...');
   let context = baseContext;
-  try {
-    const monorepoContext = await collectMonorepoContext();
-    context += '\n\n' + monorepoContext;
-    console.log(`[context] Added ${monorepoContext.length} chars of monorepo context`);
-  } catch (err: any) {
-    console.log(`[context] Could not collect monorepo context: ${err.message}`);
-  }
 
   // Get comments to find which files are being discussed
   const comments = await getIssueComments(issueId);
@@ -331,6 +321,8 @@ export async function buildLocalBuilderContext(
 
   // Build file context section
   let fileContext = '\n\n== EXISTING FILES (for reference ONLY - DO NOT re-analyze) ==\n';
+  fileContext += 'Scope is limited to Tech Lead referenced files that already exist in the repo.\n';
+  fileContext += 'Do NOT use broad monorepo context or invent neighboring files unless the issue explicitly requires creating them.\n';
   fileContext += 'QUICK IMPLEMENTATION GUIDE: Look at these files to understand the current structure.\n';
   fileContext += 'Then IMPLEMENT the required changes directly. DO NOT write analysis or summaries.\n';
   fileContext += 'Output code using FILE: path/to/file.ext format.\n\n';
@@ -351,7 +343,8 @@ export async function buildLocalBuilderContext(
   }
 
   if (!hasFiles) {
-    fileContext += '(No existing files - you are creating new files)\n';
+    fileContext += '(No Tech Lead referenced files already exist in the repo.)\n';
+    fileContext += 'If you need to create a new file, only create the exact file paths explicitly requested by the issue or Tech Lead.\n';
   }
 
   // Add RAG-retrieved context if available

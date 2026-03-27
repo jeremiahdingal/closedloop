@@ -44,18 +44,20 @@ export const AGENT_ALIASES: Record<string, string> = {
   'artist (ui/ux)': AGENTS['visual reviewer'],
 };
 
-// Agents allowed to execute bash commands
-export const BASH_AGENTS = new Set([
-  AGENTS.strategist,
-  AGENTS.sentinel,
-  AGENTS.deployer,
-  AGENTS.reviewer,
-]);
+// Bash execution is disabled for bridge-side agents.
+// The local build gate is removed, so agents should not run shell commands here.
+export const BASH_AGENTS = new Set<string>();
 
 // Dangerous command patterns to block
 export const BLOCKED_COMMANDS = [
   /rm\s+-rf\s+\//i,
   /del\s+\/s/i,
+  /\btaskkill\b/i,
+  /\bstop-process\b/i,
+  /\bkillall\b/i,
+  /\bpkill\b/i,
+  /\bkill\b.+\bnode(?:\.exe)?\b/i,
+  /\bget-process\b.+\bnode(?:\.exe)?\b/i,
   /format\s+[a-z]:/i,
   /mkfs/i,
   /dd\s+if=/i,

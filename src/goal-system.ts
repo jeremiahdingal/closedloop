@@ -9,12 +9,336 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspace, getPaperclipApiUrl, getCompanyId } from './config';
 import { AGENTS, goalTicketMap, ticketGoalMap, issueComplexityCache } from './agent-types';
-import { postComment, patchIssue, getIssueDetails, getIssueLabel } from './paperclip-api';
+import { postComment, patchIssue, getIssueDetails, getIssueLabel, wakeAgent } from './paperclip-api';
 import { slugify } from './utils';
 import { Issue } from './types';
 
 const COMPLEXITY_SCORE_THRESHOLD = 7;
 const TICKETS_DIR = '.tickets';
+const GOAL_TICKET_MAP_FILE = '.paperclip-goal-ticket-map.json';
+const GOAL_OVERLAP_STATE_FILE = '.paperclip-goal-overlap-state.json';
+const OVERLAP_BLOCK_MARKER = '[PAPERCLIP_OVERLAP_BLOCK]';
+
+interface GoalOverlapBlockedTicket {
+  canonicalTicketId: string;
+  canonicalIdentifier: string;
+  overlappingFiles: string[];
+  componentTicketIds: string[];
+  blockedAt: string;
+}
+
+interface GoalOverlapState {
+  blockedTickets: Record<string, GoalOverlapBlockedTicket>;
+  canonicalTickets: string[];
+  updatedAt: string;
+}
+
+interface TicketPlanningMetadata {
+  objective: string;
+  dependencies: string;
+  files: string[];
+}
+
+interface OverlapCandidateIssue {
+  id: string;
+  identifier?: string;
+  title: string;
+  description?: string;
+  status?: string;
+  assigneeAgentId?: string | null;
+  createdAt?: string;
+}
+
+const goalOverlapStateMap: Record<string, GoalOverlapState> = {};
+
+function getGoalTicketMapPath(): string {
+  return path.join(getWorkspace(), GOAL_TICKET_MAP_FILE);
+}
+
+function getGoalOverlapStatePath(): string {
+  return path.join(getWorkspace(), GOAL_OVERLAP_STATE_FILE);
+}
+
+function persistGoalTicketMappings(): void {
+  try {
+    const payload = {
+      goalTicketMap,
+      ticketGoalMap,
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(getGoalTicketMapPath(), JSON.stringify(payload, null, 2), 'utf8');
+  } catch (err: any) {
+    console.error(`[goal] Failed to persist goal-ticket mappings: ${err.message}`);
+  }
+}
+
+function persistGoalOverlapStates(): void {
+  try {
+    fs.writeFileSync(
+      getGoalOverlapStatePath(),
+      JSON.stringify({ goalOverlapStateMap, updatedAt: new Date().toISOString() }, null, 2),
+      'utf8'
+    );
+  } catch (err: any) {
+    console.error(`[goal] Failed to persist overlap state: ${err.message}`);
+  }
+}
+
+function loadPersistedGoalTicketMappings(): void {
+  try {
+    const mapPath = getGoalTicketMapPath();
+    if (!fs.existsSync(mapPath)) return;
+
+    const raw = JSON.parse(fs.readFileSync(mapPath, 'utf8')) as {
+      goalTicketMap?: Record<string, string[]>;
+      ticketGoalMap?: Record<string, string>;
+    };
+
+    Object.keys(goalTicketMap).forEach(key => delete goalTicketMap[key]);
+    Object.keys(ticketGoalMap).forEach(key => delete ticketGoalMap[key]);
+
+    for (const [goalId, ticketIds] of Object.entries(raw.goalTicketMap || {})) {
+      goalTicketMap[goalId] = Array.from(new Set(ticketIds.filter(Boolean)));
+    }
+
+    for (const [ticketId, goalId] of Object.entries(raw.ticketGoalMap || {})) {
+      if (ticketId && goalId) {
+        ticketGoalMap[ticketId] = goalId;
+      }
+    }
+  } catch (err: any) {
+    console.error(`[goal] Failed to load persisted goal-ticket mappings: ${err.message}`);
+  }
+}
+
+function loadPersistedGoalOverlapStates(): void {
+  try {
+    const mapPath = getGoalOverlapStatePath();
+    if (!fs.existsSync(mapPath)) return;
+
+    const raw = JSON.parse(fs.readFileSync(mapPath, 'utf8')) as {
+      goalOverlapStateMap?: Record<string, GoalOverlapState>;
+    };
+
+    Object.keys(goalOverlapStateMap).forEach(key => delete goalOverlapStateMap[key]);
+    for (const [goalId, state] of Object.entries(raw.goalOverlapStateMap || {})) {
+      goalOverlapStateMap[goalId] = state;
+    }
+  } catch (err: any) {
+    console.error(`[goal] Failed to load persisted overlap state: ${err.message}`);
+  }
+}
+
+function parseTicketPlanningMetadata(issue: Pick<OverlapCandidateIssue, 'title' | 'description'>): TicketPlanningMetadata {
+  const description = issue.description || '';
+  const objectiveMatch = description.match(/\*\*Objective:\*\*\s*([\s\S]*?)(?=\n\*\*|$)/i);
+  const depsMatch = description.match(/\*\*Dependencies:\*\*\s*([\s\S]*?)(?=\n\*\*|$)/i);
+  const filesMatch = description.match(/\*\*Files:\*\*\s*([\s\S]*?)(?=\n\*\*|$)/i);
+
+  const rawFiles = (filesMatch?.[1] || '')
+    .split(/\r?\n|,/)
+    .map(part => part.replace(/^[-*]\s*/, '').trim())
+    .filter(Boolean);
+
+  return {
+    objective: (objectiveMatch?.[1] || '').trim(),
+    dependencies: (depsMatch?.[1] || '').trim(),
+    files: Array.from(new Set(rawFiles)),
+  };
+}
+
+function scoreFoundationalTicket(issue: OverlapCandidateIssue): number {
+  const meta = parseTicketPlanningMetadata(issue);
+  const text = `${issue.title}\n${meta.objective}\n${meta.dependencies}`.toLowerCase();
+  let score = 0;
+
+  const strongSignals = [
+    /\bnone\b/,
+    /\bfoundational\b/,
+    /\bbase\b/,
+    /\bshared\b/,
+    /\bcore\b/,
+    /\bschema\b/,
+    /\btypes?\b/,
+    /\bapi\b/,
+    /\bservice\b/,
+    /\bstore\b/,
+    /\bhook\b/,
+  ];
+  const weakSignals = [
+    /\bdepends on\b/,
+    /\bafter\b/,
+    /\brequires\b/,
+    /\bui\b/,
+    /\bscreen\b/,
+    /\bcomponent\b/,
+    /\bdialog\b/,
+    /\bpage\b/,
+  ];
+
+  for (const signal of strongSignals) {
+    if (signal.test(text)) score += 3;
+  }
+  for (const signal of weakSignals) {
+    if (signal.test(text)) score -= 2;
+  }
+
+  if (meta.files.length <= 2) score += 1;
+  return score;
+}
+
+function sortByFoundationalPriority(a: OverlapCandidateIssue, b: OverlapCandidateIssue): number {
+  const scoreDiff = scoreFoundationalTicket(b) - scoreFoundationalTicket(a);
+  if (scoreDiff !== 0) return scoreDiff;
+
+  const createdDiff =
+    new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+  if (createdDiff !== 0) return createdDiff;
+
+  return String(a.identifier || a.id).localeCompare(String(b.identifier || b.id));
+}
+
+function buildGoalOverlapState(tickets: OverlapCandidateIssue[]): GoalOverlapState {
+  const ticketById = new Map(tickets.map(ticket => [ticket.id, ticket]));
+  const normalizedFiles = new Map<string, string[]>();
+
+  for (const ticket of tickets) {
+    const files = parseTicketPlanningMetadata(ticket).files;
+    for (const filePath of files) {
+      const owners = normalizedFiles.get(filePath) || [];
+      owners.push(ticket.id);
+      normalizedFiles.set(filePath, owners);
+    }
+  }
+
+  const adjacency = new Map<string, Set<string>>();
+  const overlappingFilesByTicket = new Map<string, Set<string>>();
+  for (const ticket of tickets) {
+    adjacency.set(ticket.id, new Set());
+    overlappingFilesByTicket.set(ticket.id, new Set());
+  }
+
+  for (const [filePath, owners] of normalizedFiles.entries()) {
+    if (owners.length <= 1) continue;
+    for (const owner of owners) {
+      overlappingFilesByTicket.get(owner)?.add(filePath);
+      const neighbors = adjacency.get(owner)!;
+      for (const peer of owners) {
+        if (peer !== owner) neighbors.add(peer);
+      }
+    }
+  }
+
+  const blockedTickets: Record<string, GoalOverlapBlockedTicket> = {};
+  const canonicalTickets = new Set<string>();
+  const visited = new Set<string>();
+
+  for (const ticket of tickets) {
+    if (visited.has(ticket.id)) continue;
+    const stack = [ticket.id];
+    const component: string[] = [];
+
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      component.push(current);
+      for (const neighbor of adjacency.get(current) || []) {
+        if (!visited.has(neighbor)) stack.push(neighbor);
+      }
+    }
+
+    if (component.length <= 1) continue;
+
+    const componentTickets = component
+      .map(id => ticketById.get(id))
+      .filter(Boolean) as OverlapCandidateIssue[];
+    componentTickets.sort(sortByFoundationalPriority);
+    const canonical = componentTickets[0];
+    canonicalTickets.add(canonical.id);
+
+    const overlappingFiles = Array.from(
+      new Set(component.flatMap(id => Array.from(overlappingFilesByTicket.get(id) || [])))
+    ).sort();
+
+    for (const blocked of componentTickets.slice(1)) {
+      blockedTickets[blocked.id] = {
+        canonicalTicketId: canonical.id,
+        canonicalIdentifier: canonical.identifier || canonical.id.slice(0, 8),
+        overlappingFiles,
+        componentTicketIds: component.slice().sort(),
+        blockedAt: new Date().toISOString(),
+      };
+    }
+  }
+
+  return {
+    blockedTickets,
+    canonicalTickets: Array.from(canonicalTickets).sort(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function getOverlapBlockComment(blockedTicketLabel: string, block: GoalOverlapBlockedTicket): string {
+  return (
+    `${OVERLAP_BLOCK_MARKER}\n` +
+    `**Blocked By Goal Overlap**\n\n` +
+    `${blockedTicketLabel} overlaps with sibling work owned by **${block.canonicalIdentifier}**.\n\n` +
+    `Overlapping planned files:\n` +
+    `${block.overlappingFiles.map(filePath => `- \`${filePath}\``).join('\n')}\n\n` +
+    `This ticket is intentionally paused in \`todo\` pending canonical completion or epic reconciliation.`
+  );
+}
+
+export function getGoalOverlapState(goalId: string): GoalOverlapState | undefined {
+  return goalOverlapStateMap[goalId];
+}
+
+export function getOverlapBlockForTicket(ticketId: string): GoalOverlapBlockedTicket | undefined {
+  const goalId = ticketGoalMap[ticketId];
+  if (!goalId) return undefined;
+  return goalOverlapStateMap[goalId]?.blockedTickets?.[ticketId];
+}
+
+export function isTicketBlockedByOverlap(ticketId: string): boolean {
+  return Boolean(getOverlapBlockForTicket(ticketId));
+}
+
+export function getActiveEpicTicketIds(goalId: string): string[] {
+  const siblingIds = goalTicketMap[goalId] || [];
+  return siblingIds.filter(ticketId => !isTicketBlockedByOverlap(ticketId));
+}
+
+export async function enforceGoalOverlapSuppression(goalId: string, providedTickets?: OverlapCandidateIssue[]): Promise<GoalOverlapState> {
+  const rawTickets = (providedTickets || await getEpicTickets(goalId)) as OverlapCandidateIssue[];
+  const tickets = rawTickets.filter(ticket => ticket.id !== goalId && ticket.status !== 'cancelled');
+  const previousState = goalOverlapStateMap[goalId];
+  const state = buildGoalOverlapState(tickets);
+  goalOverlapStateMap[goalId] = state;
+  persistGoalOverlapStates();
+
+  for (const ticket of tickets) {
+    const block = state.blockedTickets[ticket.id];
+    if (!block) continue;
+
+    const label = ticket.identifier || ticket.id.slice(0, 8);
+    const previousBlock = previousState?.blockedTickets?.[ticket.id];
+    const shouldPostComment =
+      !previousBlock ||
+      previousBlock.canonicalTicketId !== block.canonicalTicketId ||
+      previousBlock.overlappingFiles.join('|') !== block.overlappingFiles.join('|');
+    if (shouldPostComment) {
+      await postComment(ticket.id, null, getOverlapBlockComment(label, block));
+    }
+
+    await patchIssue(ticket.id, {
+      status: 'todo',
+      assigneeAgentId: undefined,
+    } as any);
+  }
+
+  return state;
+}
 
 // ─── Complexity scoring ────────────────────────────────────────────
 
@@ -179,6 +503,7 @@ export async function decomposeGoalIntoTickets(
         createdIds.push(ticketId);
         goalTicketMap[goalIssueId].push(ticketId);
         ticketGoalMap[ticketId] = goalIssueId;
+        persistGoalTicketMappings();
         console.log(`[goal] Created ticket ${nn}: ${t.title} -> ${ticketLabel}`);
       } else {
         console.error(`[goal] Failed to create ticket ${t.title}: ${res.status}`);
@@ -205,19 +530,44 @@ export async function decomposeGoalIntoTickets(
  * Get all tickets for a goal (excluding the goal itself and cancelled tickets)
  */
 export async function getEpicTickets(goalId: string): Promise<any[]> {
+  const resolved = new Map<string, any>();
+  const knownIds = goalTicketMap[goalId] || [];
+
+  for (const ticketId of knownIds) {
+    try {
+      const issue = await getIssueDetails(ticketId);
+      if (issue && issue.id !== goalId && issue.status !== 'cancelled') {
+        resolved.set(issue.id, issue);
+      }
+    } catch {}
+  }
+
   try {
     const res = await fetch(`${getPaperclipApiUrl()}/api/companies/${getCompanyId()}/issues`);
-    if (!res.ok) return [];
+    if (res.ok) {
+      const data = await res.json() as any;
+      const issues = Array.isArray(data) ? data : data.issues || data.data || [];
 
-    const data = await res.json() as any;
-    const issues = Array.isArray(data) ? data : data.issues || data.data || [];
+      for (const issue of issues.filter(
+        (i: any) => i.goalId === goalId && i.id !== goalId && i.status !== 'cancelled'
+      )) {
+        resolved.set(issue.id, issue);
+        ticketGoalMap[issue.id] = goalId;
+      }
+    }
+  } catch {}
 
-    return issues.filter(
-      (i: any) => i.goalId === goalId && i.id !== goalId && i.status !== 'cancelled'
-    );
-  } catch {
-    return [];
+  goalTicketMap[goalId] = Array.from(resolved.keys());
+  if (goalTicketMap[goalId].length > 0) {
+    persistGoalTicketMappings();
   }
+
+  return Array.from(resolved.values());
+}
+
+export async function getActionableEpicTickets(goalId: string): Promise<any[]> {
+  const tickets = await getEpicTickets(goalId);
+  return tickets.filter(ticket => !isTicketBlockedByOverlap(ticket.id));
 }
 
 /**
@@ -225,16 +575,15 @@ export async function getEpicTickets(goalId: string): Promise<any[]> {
  * Called on startup to restore in-memory maps
  */
 export async function reloadGoalTicketMappings(): Promise<void> {
+  loadPersistedGoalTicketMappings();
+  loadPersistedGoalOverlapStates();
+
   try {
     const res = await fetch(`${getPaperclipApiUrl()}/api/companies/${getCompanyId()}/issues`);
     if (!res.ok) return;
 
     const data = await res.json() as any;
     const issues = Array.isArray(data) ? data : data.issues || data.data || [];
-
-    // Clear existing maps by removing all keys
-    Object.keys(goalTicketMap).forEach(key => delete goalTicketMap[key]);
-    Object.keys(ticketGoalMap).forEach(key => delete ticketGoalMap[key]);
 
     // Build mappings from issues with goalId
     for (const issue of issues) {
@@ -247,6 +596,8 @@ export async function reloadGoalTicketMappings(): Promise<void> {
         ticketGoalMap[issue.id] = issue.goalId;
       }
     }
+
+    persistGoalTicketMappings();
 
     const goalCount = Object.keys(goalTicketMap).length;
     const ticketCount = Object.keys(ticketGoalMap).length;
@@ -262,7 +613,7 @@ export async function checkGoalCompletion(ticketIssueId: string): Promise<void> 
   const goalId = ticketGoalMap[ticketIssueId];
   if (!goalId) return;
 
-  const siblingIds = goalTicketMap[goalId] || [];
+  const siblingIds = getActiveEpicTicketIds(goalId);
   if (siblingIds.length === 0) return;
 
   let allDone = true;
@@ -275,17 +626,19 @@ export async function checkGoalCompletion(ticketIssueId: string): Promise<void> 
   }
 
   if (allDone) {
-    console.log(`[goal] All ${siblingIds.length} tickets reached in_review - marking goal ${await getIssueLabel(goalId)} as in_review`);
+    const blockedCount = Object.keys(goalOverlapStateMap[goalId]?.blockedTickets || {}).length;
+    console.log(`[goal] All ${siblingIds.length} active tickets reached in_review - marking goal ${await getIssueLabel(goalId)} as in_review`);
     await patchIssue(goalId, { status: 'in_review' } as any);
-    await postComment(goalId, null, `_All ${siblingIds.length} sub-tickets are complete. Goal moved to in_review._`);
+    await postComment(
+      goalId,
+      null,
+      `_All ${siblingIds.length} active sub-tickets are complete.${blockedCount > 0 ? ` ${blockedCount} overlapping duplicate tickets remain blocked for epic reconciliation.` : ''} Goal moved to in_review._`
+    );
 
-    // Immediately run Epic Reviewer as the build authority for ready epics
-    console.log(`[goal] Running Epic Reviewer build authority for ready epics`);
-    try {
-      const { runEpicReviewerAgent } = await import('./epic-reviewer-agent');
-      await runEpicReviewerAgent();
-    } catch (err: any) {
-      console.error(`[goal] Epic Reviewer build authority failed: ${err.message}`);
+    console.log(`[goal] Waking Epic Reviewer agent for ready epics`);
+    const woke = await wakeAgent(AGENTS['epic reviewer'], 'ready_epics_pending', 'automation');
+    if (!woke) {
+      console.error('[goal] Failed to wake Epic Reviewer agent for ready epics');
     }
   }
 }

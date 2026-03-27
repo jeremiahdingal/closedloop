@@ -19,11 +19,11 @@ export async function detectAndDelegate(
   issueId: string,
   agentId: string,
   content: string
-): Promise<void> {
+): Promise<boolean> {
   const allowedTargets = DELEGATION_RULES[agentId];
   if (!allowedTargets) {
     console.log(`[delegation] No delegation rules for agent ${agentId}`);
-    return;
+    return false;
   }
 
   // Strip markdown formatting so **Tech Lead** matches as "tech lead"
@@ -56,7 +56,7 @@ export async function detectAndDelegate(
   if (found.length === 0) {
     console.log(`[delegation] No valid delegation targets found in content`);
     console.log(`[delegation] Content preview (first 800 chars):`, content.substring(0, 800).replace(/\n/g, '\\n'));
-    return;
+    return false;
   }
 
   // Delegate to the first valid target (highest priority in org chart)
@@ -67,7 +67,7 @@ export async function detectAndDelegate(
   const lastDelegation = recentDelegations[dedupKey];
   if (lastDelegation && Date.now() - lastDelegation < DELEGATION_COOLDOWN_MS) {
     console.log(`[delegation] Skipped duplicate delegation ${issueId.slice(0, 8)} -> ${target.name} (cooldown)`);
-    return;
+    return false;
   }
 
   // Reassign the issue via Paperclip API -- this triggers auto-wakeup
@@ -97,12 +97,15 @@ export async function detectAndDelegate(
         }
         // else: flag persists for intermediate hops (e.g. Strategist → Tech Lead)
       }
+      return true;
     } else {
       const text = await res.text();
       console.error(`[delegation] Delegation failed: ${res.status} ${text}`);
+      return false;
     }
   } catch (err: any) {
     console.error(`[delegation] Delegation error:`, err.message);
+    return false;
   }
 }
 

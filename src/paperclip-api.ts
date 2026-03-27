@@ -61,10 +61,18 @@ export async function patchIssue(
   payload: Partial<Issue>
 ): Promise<boolean> {
   try {
+    const normalizedPayload: Record<string, unknown> = { ...payload };
+    if (Object.prototype.hasOwnProperty.call(normalizedPayload, 'assigneeAgentId') && normalizedPayload.assigneeAgentId === undefined) {
+      normalizedPayload.assigneeAgentId = null;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalizedPayload, 'assigneeUserId') && normalizedPayload.assigneeUserId === undefined) {
+      normalizedPayload.assigneeUserId = null;
+    }
+
     const res = await fetch(`${getPaperclipApiUrl()}/api/issues/${issueId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(normalizedPayload),
     });
     return res.ok;
   } catch (err) {
@@ -73,6 +81,11 @@ export async function patchIssue(
 }
 
 export async function findAssignedIssue(agentId: string): Promise<string | null> {
+  const assigned = await findAssignedIssues(agentId);
+  return assigned[0]?.id || null;
+}
+
+export async function findAssignedIssues(agentId: string): Promise<Issue[]> {
   try {
     const res = await fetch(`${getPaperclipApiUrl()}/api/companies/${getCompanyId()}/issues`);
     if (res.ok) {
@@ -92,15 +105,17 @@ export async function findAssignedIssue(agentId: string): Promise<string | null>
           const scoreA = ticketDependencyScore(a.title);
           const scoreB = ticketDependencyScore(b.title);
           if (scoreA !== scoreB) return scoreA - scoreB; // lower score = higher priority
-          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+          // Prefer the least recently updated issue within the same dependency tier
+          // so one "hot" ticket cannot starve older assigned work forever.
+          return new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
         });
-        return assigned[0].id;
+        return assigned;
       }
     }
   } catch (err) {
     // Silent fail
   }
-  return null;
+  return [];
 }
 
 /**
@@ -135,13 +150,24 @@ export async function postComment(
   content: string,
   retries = 3
 ): Promise<void> {
+  let effectiveAgentId = agentId;
+  if (agentId) {
+    const currentIssue = await getIssueDetails(issueId);
+    if (currentIssue && currentIssue.assigneeAgentId !== agentId) {
+      console.log(
+        `[paperclip] Posting stale agent comment as system note for ${await getIssueLabel(issueId)}: assignee is ${currentIssue.assigneeAgentId || 'none'}, not ${agentId}`
+      );
+      effectiveAgentId = null;
+    }
+  }
+
   const body = JSON.stringify({
     body: sanitizeForWin1252(content),
   });
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (agentId && getAgentKeys()[agentId]) {
-    headers['Authorization'] = `Bearer ${getAgentKeys()[agentId]}`;
+  if (effectiveAgentId && getAgentKeys()[effectiveAgentId]) {
+    headers['Authorization'] = `Bearer ${getAgentKeys()[effectiveAgentId]}`;
   }
 
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -165,6 +191,41 @@ export async function postComment(
         await sleep(2000 * attempt);
       }
     }
+  }
+}
+
+export async function wakeAgent(
+  agentId: string,
+  reason: string,
+  source: 'automation' | 'manual' | 'callback' = 'automation'
+): Promise<boolean> {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const agentKey = getAgentKeys()[agentId];
+    if (agentKey && !agentKey.includes('placeholder')) {
+      headers['Authorization'] = `Bearer ${agentKey}`;
+    }
+
+    const res = await fetch(`${getPaperclipApiUrl()}/api/agents/${agentId}/wakeup`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        source,
+        triggerDetail: source === 'manual' ? 'manual' : 'system',
+        reason,
+      }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`[paperclip] Failed to wake agent ${agentId}: ${res.status} ${text}`);
+      return false;
+    }
+
+    return true;
+  } catch (err: any) {
+    console.error(`[paperclip] Error waking agent ${agentId}: ${err.message}`);
+    return false;
   }
 }
 

@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <em>ClosedLoop fixes this with orchestration — making 14B models outperform 70B models<br/>through RAG, build-green enforcement, reflection memory, and <strong>automated cross-epic review</strong>.<br/>Runs on your GPU. No API bills.</em>
+  <em>ClosedLoop fixes this with orchestration — making 14B models outperform 70B models<br/>through RAG, capped local loops, reflection memory, and <strong>automated epic-level build review</strong>.<br/>Runs on your GPU. No API bills.</em>
 </p>
 
 <p align="center">
@@ -78,7 +78,7 @@ sequenceDiagram
     participant RAG as 📊 RAG Index<br/>(AST+KW)
     participant BL as 🔨 Local Builder<br/>(deepcoder:14b)
     participant BRG as 🌉 Bridge<br/>(Build Loop)
-    participant RV as 📝 Reviewer<br/>(glm-4.7-flash)
+    participant RV as 📝 Reviewer<br/>(deepcoder:latest)
     participant DG as 🛡️ Diff Guardian<br/>(qwen3:4b)
     participant VR as 👁️ Visual Reviewer<br/>(qwen3-vl:8b)
     participant PR as 🔀 Git / PR
@@ -180,7 +180,7 @@ Each agent runs a different local model, sized to its job:
 | 🧠 **Strategist** | CTO — analyzes, plans, decomposes | `qwen3.5:9b` | 6.6GB |
 | 📐 **Tech Lead** | Architect — specs, file lists, patterns | `deepcoder:14b` | 9GB |
 | 🔨 **Local Builder** | Engineer — writes actual code | `deepcoder:14b` | 9GB |
-| 📝 **Reviewer** | Quality gate — approve/reject | `glm-4.7-flash` | 19GB |
+| 📝 **Reviewer** | Acceptance validator — approve/reject | `deepcoder:latest` | 9GB |
 | 🛡️ **Diff Guardian** | Policy enforcer — mechanical checklist | `qwen3:4b` | 2.5GB |
 | 👁️ **Visual Reviewer** | UI/UX auditor — screenshot analysis | `qwen3-vl:8b` | 5GB |
 | 🔐 **Sentinel** | DevOps — CI/CD, security scans | `deepseek-r1:8b` | 5GB |
@@ -192,20 +192,20 @@ Each agent runs a different local model, sized to its job:
 
 ## ✨ Key Features
 
-### 🧐 Epic Reviewer Agent (NEW)
-> **Problem:** Per-ticket reviews miss cross-epic inconsistencies — type mismatches between files, missing integration points, duplicate code across tickets.
+### 🧐 Epic Reviewer Agent
+> **Problem:** Per-ticket reviews miss cross-ticket inconsistencies inside an epic — type mismatches between files, missing integration points, overlapping edits, and merge conflicts.
 >
-> **Solution:** When all tickets in an epic are `in_review`, the Epic Reviewer Agent collects ALL diffs from ALL epics into a single prompt. GLM-5 reviews for cross-file consistency, then **actually fixes the code**: checks out each PR branch, writes corrected files, runs `yarn build`, and commits fixes directly to the PR. No comments — just fixes.
+> **Solution:** When all tickets in an epic are `in_review`, Epic Reviewer becomes the only automated build authority. It gets full target-project monorepo context on the first pass, all linked ticket diffs, can apply fixes directly to ticket branches, and can create a reconciliation branch when sibling tickets collide on the same files.
 
 ### 🧠 RAG-Grounded Code Generation
 > **Problem:** LLMs hallucinate file paths and invent APIs that don't exist.
 >
 > **Solution:** Before generating any code, ClosedLoop queries an AST-enhanced index of your codebase. The builder sees the top 10 most relevant files — exports, function signatures, interface shapes — grounding every generation in reality.
 
-### 🔁 Build-Green Loop with Tried-Approaches Memory
-> **Problem:** The builder writes code, the build fails, it tries the same broken approach again in circles.
+### 🔁 Capped Local Loop + Epic Build Authority
+> **Problem:** Builder/reviewer loops can spin when local models hallucinate or keep retrying the same bad fix.
 >
-> **Solution:** Code doesn't leave the builder until `yarn build` passes. Every failed attempt is recorded with its fingerprint and error. On retry, the builder sees what it already tried and must take a different approach. **After 2 failures, sends to Reviewer for assistance. After 4 failures, creates PR for human intervention** — preventing infinite loops.
+> **Solution:** Ticket-level agents no longer own build success. The local bridge loop is capped at 5 passes, Reviewer hands off only to Diff Guardian or back to Local Builder, and Epic Reviewer is the only automated build-and-repair loop. Epic Reviewer is capped at 5 attempts per epic.
 
 ### 📝 Reflection Memory
 > **Problem:** The reviewer rejects code for "wrong import path" on Monday. On Tuesday, the builder makes the same mistake.
@@ -218,9 +218,9 @@ Each agent runs a different local model, sized to its job:
 > **Solution:** Every issue gets a complexity score (0-10). Score < 7 + CRUD signals? Zero-shot scaffold, no LLM needed. Score < 7? Standard local pipeline. Score >= 7? Remote architect specs the work first, then decomposes into sub-tickets.
 
 ### 🛡️ Diff Guardian (Mechanical Policy Gate)
-> **Problem:** The reviewer says "looks good" but the diff has `console.log` spam and deleted exports.
+> **Problem:** The reviewer says "looks good" but the diff has `console.log` spam, deleted exports, or scope violations.
 >
-> **Solution:** Diff Guardian runs an objective checklist: `.ts`/`.tsx` only, no secrets, no debug code, deletion ratio < 70%, all exports preserved, scope matches issue.
+> **Solution:** Diff Guardian is deterministic-only. It runs an objective checklist: `.ts`/`.tsx` only, no secrets, no debug code, deletion ratio < 70%, all exports preserved, scope matches issue.
 
 ### 💬 Communicative Dehallucination
 > **Problem:** The builder assumes wrong things about the codebase and generates code based on those assumptions.
@@ -318,7 +318,7 @@ npm install
 ollama pull qwen3:4b            # 🧭 Routing + Diff Guardian (2.5GB)
 ollama pull qwen3.5:9b          # 🧠 Strategist (6.6GB)
 ollama pull deepcoder:14b       # 📐🔨 Tech Lead + Local Builder (9GB)
-ollama pull glm-4.7-flash       # 📝 Reviewer (19GB)
+ollama pull deepcoder:latest    # 📝 Reviewer (9GB)
 ollama pull qwen3-vl:8b         # 👁️ Visual Reviewer (5GB)
 ollama pull nomic-embed-text    # 📊 RAG embeddings (300MB)
 
@@ -369,7 +369,7 @@ Edit `.paperclip/project.json`:
       "tech lead": "deepcoder:14b",
       "local builder": "deepcoder:14b",
       "local builder burst": "qwen3-coder:30b",
-      "reviewer": "glm-4.7-flash",
+      "reviewer": "deepcoder:latest",
       "diff guardian": "qwen3:4b",
       "visual reviewer": "qwen3-vl:8b",
       "complexity router": "qwen3:4b"
@@ -454,7 +454,7 @@ npx vitest --watch    # Watch mode during development
 
 1. 🏠 **Local-first, cloud-optional** — Everything runs on your machine. Remote APIs are escape hatches, not dependencies.
 2. 📐 **Right-sized models** — A 4B model can route. A 14B model can code. Don't waste VRAM on tasks that don't need it.
-3. ✅ **Build-green invariant** — Code doesn't leave the builder until the build passes. No exceptions.
+3. ✅ **Epic build authority** — Ticket agents can move work forward without local build gating; Epic Reviewer owns automated build validation and repair.
 4. 🧠 **Memory over repetition** — Tried-approaches and reflection memory prevent the same mistake twice.
 5. 🛡️ **Mechanical gates over opinions** — Diff Guardian uses checklists, not subjective review. Objective, repeatable, fast.
 6. 🔄 **Fail gracefully** — Remote rescue is optional. Burst mode is optional. Every feature degrades to the local baseline.

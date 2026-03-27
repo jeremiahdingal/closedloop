@@ -12,14 +12,17 @@ import { collectMonorepoContext } from './context-builder';
 import { getWorkspace, getCompanyId, getPaperclipApiUrl, loadConfig } from './config';
 import { postComment } from './paperclip-api';
 import { callZAI } from './remote-ai';
-import { getEpicTickets } from './goal-system';
+import { getEpicTickets, getActionableEpicTickets } from './goal-system';
 import { getBranchName, getDefaultBranch } from './git-ops';
 import { truncate } from './utils';
 
 const PAPERCLIP_API = getPaperclipApiUrl();
 const COMPANY_ID = getCompanyId();
-const WORKSPACE = getWorkspace();
+const BASE_WORKSPACE = getWorkspace();
+const EPIC_REVIEW_WORKTREE_ROOT = path.join(BASE_WORKSPACE, '.paperclip-epic-review');
 const MAX_EPIC_RETRIES = 5;
+let activeEpicWorkspace = BASE_WORKSPACE;
+let epicReviewerInFlight = false;
 
 interface EpicTicket {
   id: string;
@@ -42,7 +45,8 @@ interface FileFix {
   target: string;
   targetType: 'ticket' | 'reconciliation';
   filePath: string;
-  content: string;
+  operation: 'write' | 'delete';
+  content?: string;
 }
 
 interface ReviewResult {
@@ -72,6 +76,48 @@ interface EpicRetryState {
 
 const epicRetryStates = new Map<string, EpicRetryState>();
 
+function getEpicWorkspace(): string {
+  return activeEpicWorkspace;
+}
+
+function getEpicWorktreePath(): string {
+  return path.join(EPIC_REVIEW_WORKTREE_ROOT, 'active');
+}
+
+function resetEpicWorkspace(): void {
+  activeEpicWorkspace = BASE_WORKSPACE;
+}
+
+function removeEpicWorktree(worktreePath: string): void {
+  try {
+    execSync(`git worktree remove --force "${worktreePath}"`, {
+      cwd: BASE_WORKSPACE,
+      stdio: 'pipe',
+      timeout: 30000,
+    });
+  } catch {}
+
+  try {
+    fs.rmSync(worktreePath, { recursive: true, force: true });
+  } catch {}
+}
+
+function prepareEpicWorktree(): string {
+  const defaultBranch = getDefaultBranch();
+  const worktreePath = getEpicWorktreePath();
+  fs.mkdirSync(EPIC_REVIEW_WORKTREE_ROOT, { recursive: true });
+  removeEpicWorktree(worktreePath);
+
+  execSync(`git worktree add --force "${worktreePath}" ${defaultBranch}`, {
+    cwd: BASE_WORKSPACE,
+    stdio: 'pipe',
+    timeout: 60000,
+  });
+
+  activeEpicWorkspace = worktreePath;
+  return worktreePath;
+}
+
 export function resetEpicReviewerState(): void {
   epicRetryStates.clear();
 }
@@ -89,7 +135,7 @@ async function collectReadyEpics(): Promise<EpicWithTickets[]> {
 
   const epics: EpicWithTickets[] = [];
   for (const goal of activeGoals) {
-    const tickets = await getEpicTickets(goal.id);
+    const tickets = await getActionableEpicTickets(goal.id);
     if (tickets.length === 0) continue;
 
     const allReady = tickets.every(t => t.status === 'in_review');
@@ -103,10 +149,28 @@ async function collectReadyEpics(): Promise<EpicWithTickets[]> {
 
 async function withBranches(tickets: EpicTicket[]): Promise<TicketWithBranch[]> {
   const mapped = await Promise.all(
-    tickets.map(async ticket => ({
-      ...ticket,
-      branchName: await getBranchName(ticket.id),
-    }))
+    tickets.map(async ticket => {
+      let branchName = '';
+      try {
+        branchName = await getBranchName(ticket.id);
+      } catch {}
+
+      if (!branchName) {
+        const identifier = String(ticket.identifier || ticket.id || 'ticket').toLowerCase();
+        const title = String(ticket.title || 'code-changes')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/-+$/, '')
+          .slice(0, 40);
+        branchName = `${identifier}-${title}`.replace(/-+$/, '');
+        console.log(`[epic-reviewer-agent] Recovered missing branch name for ${ticket.identifier || ticket.id}: ${branchName}`);
+      }
+
+      return {
+        ...ticket,
+        branchName,
+      };
+    })
   );
   return mapped;
 }
@@ -115,7 +179,7 @@ async function collectTicketDiff(ticket: TicketWithBranch): Promise<string> {
   try {
     const defaultBranch = getDefaultBranch();
     const diff = execSync(`git diff ${defaultBranch}...${ticket.branchName} -- . ":(exclude)docs/screenshots"`, {
-      cwd: WORKSPACE,
+      cwd: getEpicWorkspace(),
       encoding: 'utf8',
       timeout: 30000,
       maxBuffer: 10 * 1024 * 1024,
@@ -131,7 +195,7 @@ async function collectChangedFiles(ticket: TicketWithBranch): Promise<string[]> 
   try {
     const defaultBranch = getDefaultBranch();
     const changed = execSync(`git diff ${defaultBranch}...${ticket.branchName} --name-only -- . ":(exclude)docs/screenshots"`, {
-      cwd: WORKSPACE,
+      cwd: getEpicWorkspace(),
       encoding: 'utf8',
       timeout: 30000,
       maxBuffer: 5 * 1024 * 1024,
@@ -188,7 +252,7 @@ function getReconciliationBranchName(epic: EpicWithTickets): string {
 function getConflictedFiles(): string[] {
   try {
     return execSync('git diff --name-only --diff-filter=U', {
-      cwd: WORKSPACE,
+      cwd: getEpicWorkspace(),
       encoding: 'utf8',
       timeout: 10000,
     })
@@ -204,7 +268,7 @@ function getConflictedFiles(): string[] {
 function getFilesContainingConflictMarkers(filePaths: string[]): string[] {
   return filePaths.filter(filePath => {
     try {
-      const fullPath = path.join(WORKSPACE, filePath);
+      const fullPath = path.join(getEpicWorkspace(), filePath);
       const content = fs.readFileSync(fullPath, 'utf8');
       return content.includes('<<<<<<<') && content.includes('=======') && content.includes('>>>>>>>');
     } catch {
@@ -218,7 +282,7 @@ function readConflictedFileContents(filePaths: string[]): string {
 
   for (const filePath of filePaths) {
     try {
-      const fullPath = path.join(WORKSPACE, filePath);
+      const fullPath = path.join(getEpicWorkspace(), filePath);
       const content = fs.readFileSync(fullPath, 'utf8');
       sections.push(`### ${filePath}\n\`\`\`\n${truncate(content, 12000)}\n\`\`\``);
     } catch (err: any) {
@@ -231,7 +295,7 @@ function readConflictedFileContents(filePaths: string[]): string {
 
 function tryGit(command: string, timeout = 30000): void {
   execSync(command, {
-    cwd: WORKSPACE,
+    cwd: getEpicWorkspace(),
     stdio: 'pipe',
     timeout,
   });
@@ -346,7 +410,7 @@ export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryS
     const defaultBranch = getDefaultBranch();
     try {
       const branchDiff = execSync(`git diff ${defaultBranch}...${state.reconciliationBranchName} -- . ":(exclude)docs/screenshots"`, {
-        cwd: WORKSPACE,
+        cwd: getEpicWorkspace(),
         encoding: 'utf8',
         timeout: 30000,
         maxBuffer: 10 * 1024 * 1024,
@@ -378,6 +442,21 @@ function buildSystemPrompt(): string {
 
 Review one epic at a time. Find cross-ticket issues, output exact file fixes, and use any prior build errors to repair the branches.
 
+Treat these as high-priority drift symptoms that usually require reconciliation, consolidation, or deletion of duplicate files:
+- The same concept implemented in multiple parallel paths, for example duplicate hooks/components/modals/panels across sibling folders
+- Alternate file names for the same feature, such as both OrderSummary and OrderTotalSummary variants
+- Ticket branches creating broad adjacent files outside the intended scope just to make local review pass
+- Multiple route/API/client wrappers for the same endpoint or mutation
+- Mixing old project conventions with current ones, especially StyleSheet.create or non-Tamagui UI in a Tamagui codebase
+- Stray generated files or package-manager artifacts like package-lock.json, extra dashboard/packages, or unrelated test scaffolding outside the ticket scope
+
+When these symptoms appear:
+- Prefer one canonical implementation path and remove or replace the alternates
+- Favor the path that best matches the current project structure and existing imports
+- Do not preserve duplicate files just because they compile
+- If drift spans multiple ticket branches, use reconciliation output to produce the final integrated files
+- Call out deletions or consolidation explicitly in SUMMARY
+
 Required output:
 - If no code changes are needed, start with VERDICT: APPROVED
 - If changes are needed, start with VERDICT: CHANGES_REQUESTED
@@ -387,18 +466,25 @@ FILE: relative/path/to/file.ext
 \`\`\`typescript
 // complete file content
 \`\`\`
+- For normal ticket-branch deletions, emit:
+TICKET: SHO-XX
+DELETE FILE: relative/path/to/file.ext
 - For reconciliation-branch fixes, emit:
 TARGET: EPIC_RECONCILE
 FILE: relative/path/to/file.ext
 \`\`\`typescript
 // complete file content
 \`\`\`
+- For reconciliation-branch deletions, emit:
+TARGET: EPIC_RECONCILE
+DELETE FILE: relative/path/to/file.ext
 - Finish with:
 SUMMARY:
 brief explanation
 
 Rules:
-- Output full files, not diffs
+- Output full files for writes, not diffs
+- Use DELETE FILE when duplicate or wrong-path files must be removed
 - Only tag files to tickets that exist in this epic
 - Use TARGET: EPIC_RECONCILE only when reconciliation mode is active
 - Prior build errors are high-priority signals
@@ -409,7 +495,9 @@ function parseReviewResult(content: string): ReviewResult {
   const fixes: FileFix[] = [];
   const approved = /VERDICT:\s*APPROVED/i.test(content);
   const ticketFileRegex = /TICKET:\s*(SHO-\d+)\s*\nFILE:\s*([^\n]+)\s*\n```[^\n]*\n([\s\S]*?)\n```/g;
+  const ticketDeleteRegex = /TICKET:\s*(SHO-\d+)\s*\nDELETE FILE:\s*([^\n]+)/g;
   const reconciliationFileRegex = /TARGET:\s*EPIC_RECONCILE\s*\nFILE:\s*([^\n]+)\s*\n```[^\n]*\n([\s\S]*?)\n```/g;
+  const reconciliationDeleteRegex = /TARGET:\s*EPIC_RECONCILE\s*\nDELETE FILE:\s*([^\n]+)/g;
   let match: RegExpExecArray | null;
 
   while ((match = ticketFileRegex.exec(content)) !== null) {
@@ -418,7 +506,18 @@ function parseReviewResult(content: string): ReviewResult {
       target: ticketIdentifier,
       targetType: 'ticket',
       filePath: filePath.trim(),
+      operation: 'write',
       content: fileContent.trim(),
+    });
+  }
+
+  while ((match = ticketDeleteRegex.exec(content)) !== null) {
+    const [, ticketIdentifier, filePath] = match;
+    fixes.push({
+      target: ticketIdentifier,
+      targetType: 'ticket',
+      filePath: filePath.trim(),
+      operation: 'delete',
     });
   }
 
@@ -428,7 +527,18 @@ function parseReviewResult(content: string): ReviewResult {
       target: 'EPIC_RECONCILE',
       targetType: 'reconciliation',
       filePath: filePath.trim(),
+      operation: 'write',
       content: fileContent.trim(),
+    });
+  }
+
+  while ((match = reconciliationDeleteRegex.exec(content)) !== null) {
+    const [, filePath] = match;
+    fixes.push({
+      target: 'EPIC_RECONCILE',
+      targetType: 'reconciliation',
+      filePath: filePath.trim(),
+      operation: 'delete',
     });
   }
 
@@ -458,22 +568,26 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
 
     try {
       execSync(`git checkout ${ticket.branchName}`, {
-        cwd: WORKSPACE,
+        cwd: getEpicWorkspace(),
         stdio: 'pipe',
         timeout: 10000,
       });
 
       for (const fix of ticketFixes) {
-        const fullPath = path.join(WORKSPACE, fix.filePath);
-        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-        fs.writeFileSync(fullPath, fix.content, 'utf8');
-        execSync(`git add "${fix.filePath}"`, { cwd: WORKSPACE, stdio: 'pipe' });
-        applied.push(`${ticket.identifier}: ${fix.filePath}`);
+        const fullPath = path.join(getEpicWorkspace(), fix.filePath);
+        if (fix.operation === 'delete') {
+          fs.rmSync(fullPath, { force: true });
+        } else {
+          fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+          fs.writeFileSync(fullPath, fix.content || '', 'utf8');
+        }
+        execSync(`git add "${fix.filePath}"`, { cwd: getEpicWorkspace(), stdio: 'pipe' });
+        applied.push(`${ticket.identifier}: ${fix.operation === 'delete' ? 'DELETE ' : ''}${fix.filePath}`);
       }
 
       try {
         execSync(`git commit -m "${ticket.identifier}: Epic Reviewer automated fixes"`, {
-          cwd: WORKSPACE,
+          cwd: getEpicWorkspace(),
           stdio: 'pipe',
           timeout: 10000,
         });
@@ -485,7 +599,7 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
       }
 
       execSync(`git push origin ${ticket.branchName}`, {
-        cwd: WORKSPACE,
+        cwd: getEpicWorkspace(),
         stdio: 'pipe',
         timeout: 60000,
       });
@@ -493,12 +607,12 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
       await postComment(
         ticket.id,
         null,
-        `**Epic Reviewer Automated Fixes**\n\nApplied fixes:\n${ticketFixes.map(f => `- \`${f.filePath}\``).join('\n')}`
+        `**Epic Reviewer Automated Fixes**\n\nApplied fixes:\n${ticketFixes.map(f => `- ${f.operation === 'delete' ? 'deleted' : 'updated'} \`${f.filePath}\``).join('\n')}`
       ).catch(() => {});
     } finally {
       try {
         execSync(`git checkout ${defaultBranch}`, {
-          cwd: WORKSPACE,
+          cwd: getEpicWorkspace(),
           stdio: 'pipe',
           timeout: 10000,
         });
@@ -510,22 +624,26 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
   if (reconciliationBranchName && reconciliationFixes.length > 0) {
     try {
       execSync(`git checkout ${reconciliationBranchName}`, {
-        cwd: WORKSPACE,
+        cwd: getEpicWorkspace(),
         stdio: 'pipe',
         timeout: 10000,
       });
 
       for (const fix of reconciliationFixes) {
-        const fullPath = path.join(WORKSPACE, fix.filePath);
-        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-        fs.writeFileSync(fullPath, fix.content, 'utf8');
-        execSync(`git add "${fix.filePath}"`, { cwd: WORKSPACE, stdio: 'pipe' });
-        applied.push(`EPIC_RECONCILE: ${fix.filePath}`);
+        const fullPath = path.join(getEpicWorkspace(), fix.filePath);
+        if (fix.operation === 'delete') {
+          fs.rmSync(fullPath, { force: true });
+        } else {
+          fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+          fs.writeFileSync(fullPath, fix.content || '', 'utf8');
+        }
+        execSync(`git add "${fix.filePath}"`, { cwd: getEpicWorkspace(), stdio: 'pipe' });
+        applied.push(`EPIC_RECONCILE: ${fix.operation === 'delete' ? 'DELETE ' : ''}${fix.filePath}`);
       }
 
       try {
         execSync(`git commit -m "Epic Reviewer reconciliation fixes for ${epic.goal.id}"`, {
-          cwd: WORKSPACE,
+          cwd: getEpicWorkspace(),
           stdio: 'pipe',
           timeout: 10000,
         });
@@ -537,7 +655,7 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
       }
 
       execSync(`git push origin ${reconciliationBranchName} --force`, {
-        cwd: WORKSPACE,
+        cwd: getEpicWorkspace(),
         stdio: 'pipe',
         timeout: 60000,
       });
@@ -545,12 +663,12 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
       await postComment(
         epic.goal.id,
         null,
-        `**Epic Reviewer Reconciliation Fixes**\n\nApplied fixes on \`${reconciliationBranchName}\`:\n${reconciliationFixes.map(f => `- \`${f.filePath}\``).join('\n')}`
+        `**Epic Reviewer Reconciliation Fixes**\n\nApplied fixes on \`${reconciliationBranchName}\`:\n${reconciliationFixes.map(f => `- ${f.operation === 'delete' ? 'deleted' : 'updated'} \`${f.filePath}\``).join('\n')}`
       ).catch(() => {});
     } finally {
       try {
         execSync(`git checkout ${defaultBranch}`, {
-          cwd: WORKSPACE,
+          cwd: getEpicWorkspace(),
           stdio: 'pipe',
           timeout: 10000,
         });
@@ -574,12 +692,12 @@ async function buildEpicBranches(epic: EpicWithTickets): Promise<BuildCheck[]> {
   for (const ticket of tickets) {
     try {
       execSync(`git checkout ${ticket.branchName}`, {
-        cwd: WORKSPACE,
+        cwd: getEpicWorkspace(),
         stdio: 'pipe',
         timeout: 10000,
       });
       execSync(buildCommand, {
-        cwd: WORKSPACE,
+        cwd: getEpicWorkspace(),
         stdio: 'pipe',
         timeout: 180000,
       });
@@ -599,7 +717,7 @@ async function buildEpicBranches(epic: EpicWithTickets): Promise<BuildCheck[]> {
     } finally {
       try {
         execSync(`git checkout ${defaultBranch}`, {
-          cwd: WORKSPACE,
+          cwd: getEpicWorkspace(),
           stdio: 'pipe',
           timeout: 10000,
         });
@@ -616,12 +734,12 @@ async function buildReconciliationBranch(branchName: string): Promise<BuildCheck
 
   try {
     execSync(`git checkout ${branchName}`, {
-      cwd: WORKSPACE,
+      cwd: getEpicWorkspace(),
       stdio: 'pipe',
       timeout: 10000,
     });
     execSync(buildCommand, {
-      cwd: WORKSPACE,
+      cwd: getEpicWorkspace(),
       stdio: 'pipe',
       timeout: 180000,
     });
@@ -641,7 +759,7 @@ async function buildReconciliationBranch(branchName: string): Promise<BuildCheck
   } finally {
     try {
       execSync(`git checkout ${defaultBranch}`, {
-        cwd: WORKSPACE,
+        cwd: getEpicWorkspace(),
         stdio: 'pipe',
         timeout: 10000,
       });
@@ -672,6 +790,22 @@ async function postEpicFailure(epic: EpicWithTickets, state: EpicRetryState): Pr
     (state.lastBuildErrors ? `Latest build errors:\n\`\`\`\n${truncate(state.lastBuildErrors, 5000)}\n\`\`\`\n` : '');
 
   await postComment(epic.goal.id, null, message).catch(() => {});
+  for (const ticket of epic.tickets) {
+    await postComment(ticket.id, null, message).catch(() => {});
+  }
+}
+
+async function postEpicReviewerVisibleOutput(epic: EpicWithTickets, state: EpicRetryState, reviewContent: string): Promise<void> {
+  const message =
+    `**Epic Reviewer Visible Model Output ${state.attemptCount}/${MAX_EPIC_RETRIES}**\n\n` +
+    `This is the model's visible response, not hidden chain-of-thought.\n\n` +
+    `\`\`\`\n${truncate(reviewContent, 12000)}\n\`\`\``;
+
+  try {
+    await postComment(epic.goal.id, null, message);
+    return;
+  } catch {}
+
   for (const ticket of epic.tickets) {
     await postComment(ticket.id, null, message).catch(() => {});
   }
@@ -720,6 +854,7 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
     }
 
     state.injectedFullContext = true;
+    await postEpicReviewerVisibleOutput(epic, state, reviewContent);
     const result = parseReviewResult(reviewContent);
     state.lastSummary = result.summary;
 
@@ -762,16 +897,35 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
  * Main entry point - review ready epics and keep Epic Reviewer as build authority.
  */
 export async function runEpicReviewerAgent(): Promise<void> {
-  console.log('[epic-reviewer-agent] Starting Epic Reviewer build authority');
-
-  const epics = await collectReadyEpics();
-  if (epics.length === 0) {
-    console.log('[epic-reviewer-agent] No epics ready for Epic Reviewer');
+  if (epicReviewerInFlight) {
+    console.log('[epic-reviewer-agent] Epic Reviewer run already in progress - skipping duplicate wake');
     return;
   }
 
-  console.log(`[epic-reviewer-agent] Found ${epics.length} ready epic(s)`);
-  for (const epic of epics) {
-    await processEpic(epic);
+  epicReviewerInFlight = true;
+  console.log('[epic-reviewer-agent] Starting Epic Reviewer build authority');
+  let worktreePath = '';
+
+  try {
+    worktreePath = prepareEpicWorktree();
+    console.log(`[epic-reviewer-agent] Using clean worktree ${worktreePath}`);
+
+    const epics = await collectReadyEpics();
+    if (epics.length === 0) {
+      console.log('[epic-reviewer-agent] No epics ready for Epic Reviewer');
+      return;
+    }
+
+    console.log(`[epic-reviewer-agent] Found ${epics.length} ready epic(s)`);
+    for (const epic of epics) {
+      await processEpic(epic);
+    }
+  } finally {
+    if (worktreePath) {
+      removeEpicWorktree(worktreePath);
+      console.log(`[epic-reviewer-agent] Removed worktree ${worktreePath}`);
+    }
+    resetEpicWorkspace();
+    epicReviewerInFlight = false;
   }
 }

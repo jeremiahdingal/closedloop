@@ -4,9 +4,11 @@ const collectMonorepoContextMock = vi.fn(async () => 'FULL TARGET PROJECT CONTEX
 const postCommentMock = vi.fn(async () => {});
 const callZAIMock = vi.fn();
 const getEpicTicketsMock = vi.fn();
+const getActionableEpicTicketsMock = vi.fn();
 const getBranchNameMock = vi.fn(async (issueId: string) => `branch-${issueId}`);
 const execSyncMock = vi.fn();
 const mkdirSyncMock = vi.fn();
+const rmSyncMock = vi.fn();
 const writeFileSyncMock = vi.fn();
 const readFileSyncMock = vi.fn();
 const fetchMock = vi.fn();
@@ -34,6 +36,7 @@ vi.mock('./remote-ai', () => ({
 
 vi.mock('./goal-system', () => ({
   getEpicTickets: getEpicTicketsMock,
+  getActionableEpicTickets: getActionableEpicTicketsMock,
 }));
 
 vi.mock('./git-ops', () => ({
@@ -47,6 +50,7 @@ vi.mock('child_process', () => ({
 
 vi.mock('fs', () => ({
   mkdirSync: mkdirSyncMock,
+  rmSync: rmSyncMock,
   writeFileSync: writeFileSyncMock,
   readFileSync: readFileSyncMock,
 }));
@@ -58,9 +62,11 @@ describe('epic-reviewer-agent', () => {
     postCommentMock.mockClear();
     callZAIMock.mockReset();
     getEpicTicketsMock.mockReset();
+    getActionableEpicTicketsMock.mockReset();
     getBranchNameMock.mockClear();
     execSyncMock.mockReset();
     mkdirSyncMock.mockReset();
+    rmSyncMock.mockReset();
     writeFileSyncMock.mockReset();
     readFileSyncMock.mockReset();
     fetchMock.mockReset();
@@ -119,7 +125,7 @@ describe('epic-reviewer-agent', () => {
       ok: true,
       json: async () => [{ id: 'goal-1', title: 'Epic', description: 'Desc', status: 'active' }],
     });
-    getEpicTicketsMock.mockResolvedValue([
+    getActionableEpicTicketsMock.mockResolvedValue([
       { id: 'ticket-1', identifier: 'SHO-1', title: 'First ticket', status: 'in_review', goalId: 'goal-1' },
     ]);
     callZAIMock.mockResolvedValue(
@@ -155,7 +161,13 @@ describe('epic-reviewer-agent', () => {
     expect(callZAIMock).toHaveBeenCalledTimes(2);
     expect(collectMonorepoContextMock).toHaveBeenCalledTimes(1);
     expect(
+      execSyncMock.mock.calls.some(call => String((call as any[])[0]).includes('git worktree add --force'))
+    ).toBe(true);
+    expect(
       postCommentMock.mock.calls.some(call => String((call as any[])[2]).includes('Build authority result: green.'))
+    ).toBe(true);
+    expect(
+      postCommentMock.mock.calls.some(call => String((call as any[])[2]).includes('Epic Reviewer Visible Model Output'))
     ).toBe(true);
   });
 
@@ -167,7 +179,7 @@ describe('epic-reviewer-agent', () => {
       ok: true,
       json: async () => [{ id: 'goal-2', title: 'Epic Two', description: '', status: 'active' }],
     });
-    getEpicTicketsMock.mockResolvedValue([
+    getActionableEpicTicketsMock.mockResolvedValue([
       { id: 'ticket-2', identifier: 'SHO-2', title: 'Second ticket', status: 'in_review', goalId: 'goal-2' },
     ]);
     callZAIMock.mockResolvedValue('VERDICT: APPROVED\nSUMMARY:\nNo code changes needed');
@@ -203,7 +215,7 @@ describe('epic-reviewer-agent', () => {
       ok: true,
       json: async () => [{ id: 'goal-3', title: 'Epic Three', description: 'Desc', status: 'active' }],
     });
-    getEpicTicketsMock.mockResolvedValue([
+    getActionableEpicTicketsMock.mockResolvedValue([
       { id: 'ticket-3', identifier: 'SHO-3', title: 'Third ticket', status: 'in_review', goalId: 'goal-3' },
       { id: 'ticket-4', identifier: 'SHO-4', title: 'Fourth ticket', status: 'in_review', goalId: 'goal-3' },
     ]);
@@ -259,6 +271,107 @@ describe('epic-reviewer-agent', () => {
     ).toBe(true);
     expect(
       postCommentMock.mock.calls.some(call => String((call as any[])[2]).includes('Epic Reconciliation Branch Created'))
+    ).toBe(true);
+  });
+
+  it('treats blocked duplicate tickets as non-blocking for epic readiness', async () => {
+    const { runEpicReviewerAgent, resetEpicReviewerState } = await import('./epic-reviewer-agent');
+    resetEpicReviewerState();
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => [{ id: 'goal-4', title: 'Epic Four', description: 'Desc', status: 'active' }],
+    });
+    getActionableEpicTicketsMock.mockResolvedValue([
+      { id: 'ticket-5', identifier: 'SHO-5', title: 'Canonical ticket', status: 'in_review', goalId: 'goal-4' },
+    ]);
+    callZAIMock.mockResolvedValue('VERDICT: APPROVED\nSUMMARY:\nGreen');
+
+    execSyncMock.mockImplementation((command: string) => {
+      if (command.includes('git diff')) {
+        return 'diff --git a/src/canonical.ts b/src/canonical.ts\n+export const canonical = true;';
+      }
+      if (command === 'yarn build') {
+        return '';
+      }
+      return '';
+    });
+
+    await runEpicReviewerAgent();
+
+    expect(callZAIMock).toHaveBeenCalledTimes(1);
+    expect(
+      postCommentMock.mock.calls.some(call => String((call as any[])[2]).includes('Build authority result: green.'))
+    ).toBe(true);
+  });
+
+  it('skips duplicate Epic Reviewer wakes while a run is already active', async () => {
+    const { runEpicReviewerAgent, resetEpicReviewerState } = await import('./epic-reviewer-agent');
+    resetEpicReviewerState();
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => [{ id: 'goal-5', title: 'Epic Five', description: 'Desc', status: 'active' }],
+    });
+    getActionableEpicTicketsMock.mockResolvedValue([
+      { id: 'ticket-6', identifier: 'SHO-6', title: 'Sixth ticket', status: 'in_review', goalId: 'goal-5' },
+    ]);
+    callZAIMock.mockImplementation(
+      async () =>
+        await new Promise<string>((resolve) => {
+          setTimeout(() => resolve('VERDICT: APPROVED\nSUMMARY:\nGreen'), 25);
+        })
+    );
+    execSyncMock.mockImplementation((command: string) => {
+      if (command.includes('git diff')) return 'diff --git a/src/file.ts b/src/file.ts\n+ok';
+      if (command === 'yarn build') return '';
+      return '';
+    });
+
+    const firstRun = runEpicReviewerAgent();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const secondRun = runEpicReviewerAgent();
+    await Promise.all([firstRun, secondRun]);
+
+    expect(callZAIMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('can delete duplicate files from ticket branches when Epic Reviewer requests it', async () => {
+    const { runEpicReviewerAgent, resetEpicReviewerState } = await import('./epic-reviewer-agent');
+    resetEpicReviewerState();
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => [{ id: 'goal-6', title: 'Epic Six', description: 'Desc', status: 'active' }],
+    });
+    getActionableEpicTicketsMock.mockResolvedValue([
+      { id: 'ticket-7', identifier: 'SHO-7', title: 'Seventh ticket', status: 'in_review', goalId: 'goal-6' },
+    ]);
+    callZAIMock.mockResolvedValue(
+      'VERDICT: CHANGES_REQUESTED\n' +
+      'TICKET: SHO-7\n' +
+      'DELETE FILE: src/duplicate.tsx\n' +
+      'TICKET: SHO-7\n' +
+      'FILE: src/canonical.tsx\n```tsx\nexport const Canonical = () => null;\n```\n' +
+      'SUMMARY:\nRemoved duplicate file and kept canonical implementation'
+    );
+
+    execSyncMock.mockImplementation((command: string) => {
+      if (command.includes('git diff')) return 'diff --git a/src/canonical.tsx b/src/canonical.tsx\n+ok';
+      if (command === 'yarn build') return '';
+      return '';
+    });
+
+    await runEpicReviewerAgent();
+
+    expect(
+      rmSyncMock.mock.calls.some(call => String((call as any[])[0]).includes('src\\duplicate.tsx'))
+    ).toBe(true);
+    expect(
+      execSyncMock.mock.calls.some(call => String((call as any[])[0]).includes('git add "src/duplicate.tsx"'))
+    ).toBe(true);
+    expect(
+      postCommentMock.mock.calls.some(call => String((call as any[])[2]).includes('deleted `src/duplicate.tsx`'))
     ).toBe(true);
   });
 });

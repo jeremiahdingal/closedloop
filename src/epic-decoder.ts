@@ -21,7 +21,7 @@ import { getWorkspace, getCompanyId, getPaperclipApiUrl } from './config';
 import { getIssueLabel, postComment, patchIssue } from './paperclip-api';
 import { callZAI } from './remote-ai';
 import { AGENTS } from './agent-types';
-import { decomposeGoalIntoTickets } from './goal-system';
+import { decomposeGoalIntoTickets, getEpicTickets, enforceGoalOverlapSuppression, getOverlapBlockForTicket } from './goal-system';
 
 const PAPERCLIP_API = getPaperclipApiUrl();
 const COMPANY_ID = getCompanyId();
@@ -40,6 +40,7 @@ interface GoalRecord {
 
 // File-based lock to prevent duplicate decomposition across bridge restarts
 const DECOMPOSED_LOCK_FILE = path.join(WORKSPACE, '.epics-decomposed.json');
+const epicDecodeInFlight = new Set<string>();
 
 function isEpicDecomposed(goalId: string): boolean {
   try {
@@ -73,6 +74,12 @@ function markEpicDecomposed(goalId: string): void {
  * Called by proxy-server.ts when a high-complexity goal is detected.
  */
 export async function decodeEpic(goalId: string): Promise<boolean> {
+  if (epicDecodeInFlight.has(goalId)) {
+    console.log(`[epic-decoder] Epic ${goalId.slice(0, 8)} is already decoding - skipping duplicate trigger`);
+    return false;
+  }
+
+  epicDecodeInFlight.add(goalId);
   try {
     const goal = await getGoal(goalId);
     if (!goal) return false;
@@ -99,6 +106,8 @@ export async function decodeEpic(goalId: string): Promise<boolean> {
   } catch (err: any) {
     console.error(`[epic-decoder] Decode failed: ${err.message}`);
     return false;
+  } finally {
+    epicDecodeInFlight.delete(goalId);
   }
 }
 
@@ -143,11 +152,17 @@ async function runEpicDecode(goal: any): Promise<void> {
       // the normal scaffold/classification path.
       const tickets = await getEpicTickets(goal.id);
       if (tickets.length > 0) {
+        await enforceGoalOverlapSuppression(goal.id, tickets);
         for (const ticket of tickets) {
+          if (getOverlapBlockForTicket(ticket.id)) {
+            console.log(`[epic-decoder] Ticket ${ticket.identifier} blocked by overlap; leaving unassigned`);
+            continue;
+          }
           await patchIssue(ticket.id, { assigneeAgentId: AGENTS['complexity router'] });
           console.log(`[epic-decoder] Ticket ${ticket.identifier} assigned to Complexity Router`);
         }
-        console.log(`[epic-decoder] All ${tickets.length} tickets assigned to Complexity Router for classification`);
+        const blockedCount = tickets.filter(ticket => getOverlapBlockForTicket(ticket.id)).length;
+        console.log(`[epic-decoder] Routed ${tickets.length - blockedCount} tickets to Complexity Router (${blockedCount} blocked by overlap)`);
       }
     } catch (err: any) {
       console.error(`[epic-decoder] Failed to create tickets: ${err.message}`);
@@ -218,22 +233,6 @@ Create one ticket per feature. Be specific about file paths. Do NOT write implem
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
-
-async function getEpicTickets(goalId: string): Promise<any[]> {
-  try {
-    const res = await fetch(`${PAPERCLIP_API}/api/companies/${COMPANY_ID}/issues`);
-    if (!res.ok) return [];
-
-    const data = await res.json() as any;
-    const issues = Array.isArray(data) ? data : data.issues || data.data || [];
-
-    return issues.filter(
-      (i: any) => i.goalId === goalId && i.status !== 'cancelled'
-    );
-  } catch {
-    return [];
-  }
-}
 
 async function getGoal(goalId: string): Promise<GoalRecord | null> {
   try {

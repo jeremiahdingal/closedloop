@@ -70,7 +70,7 @@
     "apiRoutes": "api/src/services/{domain}/{domain}.routes.ts - itty-router",
     "validation": "api/src/services/{domain}/{domain}.schema.ts - Zod",
     "components": "React Native (View, Text, Pressable) - NO HTML",
-    "styling": "StyleSheet.create() + useTheme() hook"
+    "styling": "Tamagui primitives/tokens with the existing theme system"
   },
   
   "paperclip": {
@@ -112,11 +112,11 @@
     "ollamaPort": 11434,
     "models": {
       "complexity router": "qwen3:4b",
-      "strategist": "deepseek-r1:14b",
+      "strategist": "qwen3.5:9b",
       "tech lead": "deepcoder:latest",
       "local builder": "qwen3-coder:30b",
       "local builder burst": "remote",
-      "reviewer": "deepseek-r1:14b",
+      "reviewer": "deepcoder:latest",
       "diff guardian": "qwen3:4b",
       "visual reviewer": "qwen3-vl:8b",
       "sentinel": "deepseek-r1:8b",

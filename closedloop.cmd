@@ -223,10 +223,29 @@ goto :eof
 :LOGS
 cls
 echo.
-echo  [*] ClosedLoop logs (Ctrl+C to stop)
+echo  [*] ClosedLoop logs (press Q to return)
 echo  ============================================
 echo.
-powershell -Command "Get-Content 'C:\Users\dinga\Projects\paperclip\closedloop-out.log' -Wait -Tail 50"
+powershell -NoLogo -NoProfile -Command ^
+  "$path='C:\Users\dinga\Projects\paperclip\closedloop-out.log';" ^
+  "if (-not (Test-Path $path)) { New-Item -ItemType File -Path $path -Force | Out-Null };" ^
+  "Write-Host 'Press Q to return to the menu.' -ForegroundColor Yellow;" ^
+  "$fs=[System.IO.File]::Open($path,[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,[System.IO.FileShare]::ReadWrite);" ^
+  "$sr=New-Object System.IO.StreamReader($fs);" ^
+  "$content=$sr.ReadToEnd();" ^
+  "$lines=$content -split \"`r?`n\";" ^
+  "$start=[Math]::Max(0,$lines.Length-50);" ^
+  "for($i=$start;$i -lt $lines.Length;$i++){ if($lines[$i] -ne ''){ Write-Host $lines[$i] } };" ^
+  "$fs.Seek(0,[System.IO.SeekOrigin]::End) | Out-Null;" ^
+  "while($true){" ^
+  "  while(-not $sr.EndOfStream){ Write-Host $sr.ReadLine() }" ^
+  "  Start-Sleep -Milliseconds 400;" ^
+  "  if([Console]::KeyAvailable){" ^
+  "    $key=[Console]::ReadKey($true);" ^
+  "    if($key.Key -eq 'Q'){ break }" ^
+  "  }" ^
+  "}" ^
+  "$sr.Close(); $fs.Close();"
 goto MENU
 
 :WAKE

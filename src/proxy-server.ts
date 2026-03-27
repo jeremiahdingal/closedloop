@@ -8,9 +8,9 @@
 
 import * as http from 'http';
 import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentModel, getAgentKeys } from './config';
-import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue, getIssueLabel } from './paperclip-api';
+import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue, findAssignedIssues, getIssueLabel, wakeAgent } from './paperclip-api';
 import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses, issueBuilderBurstMode, issueImportFailures } from './agent-types';
-import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion, getEpicTickets } from './goal-system';
+import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion, getEpicTickets, enforceGoalOverlapSuppression, getOverlapBlockForTicket } from './goal-system';
 import { callRemoteArchitect, callZAI } from './remote-ai';
 import { extractIssueId, extractAgentId, sleep } from './utils';
 import { applyCodeBlocks } from './code-extractor';
@@ -44,6 +44,7 @@ const DELEGATION_COOLDOWN_MS = 90 * 1000; // 90s — Paperclip deduplicates via 
 const issueLoopCounts = new Map<string, { count: number; lastReset: number; lastAgent: string }>();
 const issueBuildFailures = new Map<string, { count: number; lastReset: number }>();
 const MAX_LOOP_PASSES = 5; // Auto-create PR after 5 passes for human intervention
+const MAX_BUILDER_PASSES = 5; // Hard-stop Local Builder drift after 5 write passes
 const MAX_BUILD_FAILURES = 4;
 const LOOP_RESET_WINDOW_MS = 60 * 60 * 1000; // Reset count after 1 hour of no activity
 
@@ -129,16 +130,91 @@ function resetLoopCounter(issueId: string): void {
   issueLoopCounts.delete(issueId);
 }
 
+async function wakeAgentForNextAssignedIssue(agentId: string, completedIssueId?: string): Promise<void> {
+  if (!agentId || BLOCKED_AGENTS.has(agentId)) return;
+
+  const currentIssue = completedIssueId ? await getIssueDetails(completedIssueId) : null;
+  if (currentIssue && currentIssue.assigneeAgentId === agentId) {
+    return;
+  }
+
+  const remainingIssues = await findAssignedIssues(agentId);
+  const nextIssue = remainingIssues.find((issue) => issue.id !== completedIssueId);
+  if (!nextIssue) return;
+
+  const recentRunKey = `${agentId}:${nextIssue.id}`;
+  const lastRun = recentAgentRuns.get(recentRunKey);
+  if (lastRun && Date.now() - lastRun < DELEGATION_COOLDOWN_MS) {
+    return;
+  }
+
+  const agentName = AGENT_NAMES[agentId] || 'unknown';
+  const apiKey = getAgentKeys()[agentId];
+
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    const wakeRes = await fetch(`${PAPERCLIP_API}/api/agents/${agentId}/wakeup`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        source: 'automation',
+        triggerDetail: 'system',
+        reason: 'next_assigned_issue_pending',
+      }),
+    });
+
+    if (!wakeRes.ok) {
+      const errText = await wakeRes.text();
+      console.log(`[closedloop] Follow-up wakeup failed for ${agentName}: ${wakeRes.status} ${errText.slice(0, 200)}`);
+      return;
+    }
+
+    recentAgentRuns.set(recentRunKey, Date.now());
+    console.log(`[closedloop] Follow-up wakeup sent to ${agentName} for ${nextIssue.identifier || nextIssue.id.slice(0, 8)}`);
+  } catch (err: any) {
+    console.log(`[closedloop] Failed follow-up wakeup for ${agentName}: ${err.message}`);
+  }
+}
+
+async function stopOnBuilderPassCap(issueId: string, passCount: number): Promise<void> {
+  await postComment(
+    issueId,
+    null,
+    `⚠️ **Auto-PR Created: Local Builder Pass Cap Reached**\n\n` +
+    `This ticket reached ${passCount} Local Builder passes, which is above the safe drift threshold.\n\n` +
+    `**Why it was stopped early:**\n` +
+    `- Too many repeated local rewrites without convergence\n` +
+    `- Risk of duplicate implementations and architecture drift\n` +
+    `- Escalating now so a human or Epic Reviewer can reconcile the branch safely\n`
+  );
+
+  try {
+    await createPullRequest(issueId);
+    resetLoopCounter(issueId);
+    resetBuildFailureCounter(issueId);
+    await patchIssue(issueId, { status: 'in_review', assigneeAgentId: undefined });
+    await checkGoalCompletion(issueId);
+    console.log(`[closedloop] PR created after Local Builder pass cap (${passCount}/${MAX_BUILDER_PASSES})`);
+  } catch (prErr: any) {
+    console.error(`[closedloop] Failed to create PR after Local Builder pass cap:`, prErr.message);
+    await postComment(issueId, null, `_Local Builder pass cap reached but PR creation failed: ${prErr.message}_`);
+  }
+}
+
 export function createProxy(): http.Server {
   const server = http.createServer(async (req, res) => {
     // Endpoint: POST /api/trigger-epic-review
     if (req.method === 'POST' && req.url === '/api/trigger-epic-review') {
       console.log(`[closedloop] Manual epic review trigger requested`);
       try {
-        const { checkEpicsForReview } = await import('./epic-reviewer');
-        await checkEpicsForReview();
+        const woke = await wakeAgent(AGENTS['epic reviewer'], 'manual_epic_review_trigger', 'manual');
+        if (!woke) {
+          throw new Error('Failed to wake Epic Reviewer agent');
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', message: 'Epic review triggered' }));
+        res.end(JSON.stringify({ status: 'ok', message: 'Epic Reviewer agent woken' }));
       } catch (err: any) {
         console.error(`[closedloop] Epic review trigger failed: ${err.message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -249,6 +325,25 @@ export function createProxy(): http.Server {
     // NOTE: in_review issues should still be processed by Reviewer/Diff Guardian
     if (issueId) {
       const issueState = await getIssueDetails(issueId);
+      if (issueState && (issueState as any).goalId && issueState.id !== (issueState as any).goalId) {
+        await enforceGoalOverlapSuppression((issueState as any).goalId);
+        const overlapBlock = getOverlapBlockForTicket(issueId);
+        if (overlapBlock) {
+          const issueLabel = await getIssueLabel(issueId);
+          await patchIssue(issueId, { status: 'todo', assigneeAgentId: undefined } as any);
+          console.log(`[closedloop] Skipping ${agentName} for ${issueLabel} - blocked by overlap with ${overlapBlock.canonicalIdentifier}`);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              message: {
+                role: 'assistant',
+                content: `_Issue ${issueLabel} is blocked by overlap with ${overlapBlock.canonicalIdentifier}; waiting for canonical completion or epic reconciliation._`,
+              },
+            })
+          );
+          return;
+        }
+      }
       if (issueState && (issueState.status === 'done' || issueState.status === 'cancelled')) {
         console.log(`[closedloop] Skipping ${agentName} — issue ${issueId.slice(0, 8)} is ${issueState.status}`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -266,6 +361,24 @@ export function createProxy(): http.Server {
         res.end(
           JSON.stringify({
             message: { role: 'assistant', content: `_Issue is in_review, waiting for reviewer._` },
+          })
+        );
+        return;
+      }
+
+      // Reviewer/Diff Guardian can process in_review issues only while they remain the assignee.
+      // This prevents stale queued wakeups from repeatedly reprocessing an issue after PR creation.
+      if (
+        issueState &&
+        issueState.status === 'in_review' &&
+        (agentId === AGENTS.reviewer || agentId === AGENTS['diff guardian']) &&
+        issueState.assigneeAgentId !== agentId
+      ) {
+        console.log(`[closedloop] Skipping stale ${agentName} wakeup for ${issueId.slice(0, 8)} — assignee is no longer ${agentName}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            message: { role: 'assistant', content: `_Stale ${agentName} wakeup skipped; issue is already in_review and assigned elsewhere._` },
           })
         );
         return;
@@ -510,11 +623,25 @@ export function createProxy(): http.Server {
                     }
                   });
                   // Skip normal delegation since we're handling it
-                } else {
-                  await detectAndDelegate(issueId, agentId, content);
+                } else if (agentId !== AGENTS['complexity router']) {
+                  const delegated = await detectAndDelegate(issueId, agentId, content);
+                  if (!delegated && agentId === AGENTS.strategist && issueId) {
+                    const stratIssue = await getIssueDetails(issueId);
+                    if (stratIssue && !isGoalIssue(stratIssue)) {
+                      await patchIssue(issueId, { assigneeAgentId: AGENTS['tech lead'] });
+                      console.log(`[closedloop] Strategist fallback -> Tech Lead for ${stratIssue.identifier || issueId.slice(0, 8)}`);
+                    }
+                  }
                 }
-              } else {
-                await detectAndDelegate(issueId, agentId, content);
+              } else if (agentId !== AGENTS['complexity router']) {
+                const delegated = await detectAndDelegate(issueId, agentId, content);
+                if (!delegated && agentId === AGENTS.strategist && issueId) {
+                  const stratIssue = await getIssueDetails(issueId);
+                  if (stratIssue && !isGoalIssue(stratIssue)) {
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS['tech lead'] });
+                    console.log(`[closedloop] Strategist fallback -> Tech Lead for ${stratIssue.identifier || issueId.slice(0, 8)}`);
+                  }
+                }
               }
             }
 
@@ -554,6 +681,13 @@ export function createProxy(): http.Server {
 
             // Local Builder: extract code blocks, write files, commit (no PR yet)
             if (agentId === AGENTS['local builder']) {
+              const existingPasses = issueBuilderPasses[issueId] || 0;
+              if (existingPasses >= MAX_BUILDER_PASSES) {
+                console.log(`[closedloop] Local Builder pass cap already reached for ${await getIssueLabel(issueId)} (${existingPasses}/${MAX_BUILDER_PASSES})`);
+                await stopOnBuilderPassCap(issueId, existingPasses);
+                return;
+              }
+
               if (issueProcessingLock[issueId]) {
                 console.log(`[closedloop] Skipping duplicate Local Builder run for ${await getIssueLabel(issueId)} (already processing)`);
               } else {
@@ -579,6 +713,10 @@ export function createProxy(): http.Server {
                     issueBuilderPasses[issueId]++;
                     const pass = issueBuilderPasses[issueId];
                     console.log(`[closedloop] Local Builder wrote ${writtenFiles.length} files (pass ${pass})`);
+
+                    if (pass >= MAX_BUILDER_PASSES) {
+                      console.log(`[closedloop] Local Builder pass cap reached for ${await getIssueLabel(issueId)} (${pass}/${MAX_BUILDER_PASSES})`);
+                    }
 
                     // Pre-flight import validation (catch hallucinated packages before build)
                     try {
@@ -808,6 +946,11 @@ export function createProxy(): http.Server {
                         }
                       } catch (testErr: any) {
                         console.log(`[closedloop] Test generation skipped: ${testErr.message}`);
+                      }
+
+                      if (pass >= MAX_BUILDER_PASSES) {
+                        await stopOnBuilderPassCap(issueId, pass);
+                        return;
                       }
 
                       // Check current loop status before sending to Reviewer
@@ -1050,6 +1193,10 @@ export function createProxy(): http.Server {
           }
         } catch {
           await postComment(issueId, agentId, '_Agent run completed. Response could not be parsed._');
+        } finally {
+          if (agentId) {
+            await wakeAgentForNextAssignedIssue(agentId, issueId);
+          }
         }
       }
     } catch (err: any) {

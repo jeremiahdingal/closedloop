@@ -6,6 +6,9 @@ Given an issue title and description, output EXACTLY ONE routing decision:
 - "Agent: Remote Architect"  -- greenfield apps, multi-module systems, full architecture design required
 
 Then provide a one-sentence justification. Nothing else.
+Never mention any other role or title.
+Never say "Frontend Developer", "Frontend UI Developer", "Tech Lead", "Local Builder", or any custom role.
+If uncertain, default to "Agent: Strategist".
 
 SIGNALS that indicate Remote Architect (score >= 7 on complexity):
 - Phrases: "build a whole app", "from scratch", "new system", "full stack", "entire dashboard", "entire platform"
