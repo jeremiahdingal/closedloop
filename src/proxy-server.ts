@@ -272,26 +272,18 @@ export function createProxy(): http.Server {
       }
     }
 
-    // Hook 1: Goal guard — prevent Local Builder from directly handling Goal/Epic issues
-    // High-complexity goals (score >= 7) → Epic Decoder (GLM-5)
-    // Lower-complexity goals → Strategist (local)
+    // Hook 1: Goal guard — goals should only enter through Epic Decoder.
     if (issueId && agentId === AGENTS['local builder']) {
       const builderIssue = await getIssueDetails(issueId);
       if (builderIssue && isGoalIssue(builderIssue)) {
-        // Score complexity to decide routing
         const complexity = scoreComplexity(builderIssue.title, builderIssue.description || '');
-        
-        if (complexity.score >= 7) {
-          // High complexity → Epic Decoder (GLM-5)
-          console.log(`[closedloop] Goal guard: ${issueId.slice(0, 8)} complexity ${complexity.score}/10 → Epic Decoder`);
-          await postComment(issueId, null, `_High-complexity goal detected (score: ${complexity.score}/10) — sending to Epic Decoder (GLM-5) for ticket decomposition._`);
-          await patchIssue(issueId, { assigneeAgentId: AGENTS['epic decoder'] });
-        } else {
-          // Lower complexity → Strategist (local decomposition)
-          console.log(`[closedloop] Goal guard: ${issueId.slice(0, 8)} complexity ${complexity.score}/10 → Strategist`);
-          await postComment(issueId, null, `_Goal detected (score: ${complexity.score}/10) — sending to Strategist for decomposition._`);
-          await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
-        }
+        console.log(`[closedloop] Goal guard: ${issueId.slice(0, 8)} complexity ${complexity.score}/10 -> Epic Decoder`);
+        await postComment(
+          issueId,
+          null,
+          `_Goal detected (score: ${complexity.score}/10) -> sending to Epic Decoder for ticket decomposition._`
+        );
+        await patchIssue(issueId, { assigneeAgentId: AGENTS['epic decoder'] });
         
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ message: { role: 'assistant', content: '_Redirected Goal issue for decomposition._' } }));
@@ -526,23 +518,18 @@ export function createProxy(): http.Server {
               }
             }
 
-            // Hook 3: Complexity Router post-response — score issue and route
+            // Hook 3: Complexity Router post-response — score normal issues and route.
             if (agentId === AGENTS['complexity router'] && issueId) {
               const routerIssue = await getIssueDetails(issueId);
               if (routerIssue) {
-                // Check if it's a Goal/Epic FIRST - Goals skip scoring
                 if (isGoalIssue(routerIssue)) {
-                  // Goals: Check if already decomposed, if yes route to Strategist, if no assign to Epic Decoder agent
-                  const existingTickets = await getEpicTickets(routerIssue.id);
-                  if (existingTickets.length > 0) {
-                    console.log(`[closedloop] Goal ${issueId.slice(0, 8)} already decomposed (${existingTickets.length} tickets) → Strategist`);
-                    await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
-                  } else {
-                    console.log(`[closedloop] Goal ${issueId.slice(0, 8)} not decomposed → assigning to Epic Decoder agent`);
-                    await patchIssue(issueId, { assigneeAgentId: AGENTS['epic decoder'] });
-                  }
+                  console.log(`[closedloop] Complexity Router received goal ${issueId.slice(0, 8)} -> ignoring unexpected goal assignment`);
+                  await postComment(
+                    issueId,
+                    null,
+                    `_Complexity Router received a goal unexpectedly and did not process it. Goals must enter through Epic Decoder, not Complexity Router._`
+                  );
                 } else {
-                  // Not a Goal - score complexity and route normally
                   const complexity = scoreComplexity(routerIssue.title, routerIssue.description || '');
                   console.log(`[closedloop] Complexity Router scored ${issueId.slice(0, 8)}: ${complexity.score}/10 [${complexity.signals.join(', ')}]`);
                   if (complexity.score >= 7) {
@@ -557,12 +544,11 @@ export function createProxy(): http.Server {
               }
             }
 
-            // Hook 4: Strategist Goal decomposition — parse ## Ticket: blocks
+            // Hook 4: Strategist should not decompose goals; Epic Decoder owns goal decomposition.
             if (agentId === AGENTS.strategist && issueId) {
               const stratIssue = await getIssueDetails(issueId);
               if (stratIssue && isGoalIssue(stratIssue) && content.includes('## Ticket:')) {
-                console.log(`[closedloop] Strategist produced ticket decomposition for Goal ${issueId.slice(0, 8)}`);
-                await decomposeGoalIntoTickets(issueId, content);
+                console.log(`[closedloop] Ignoring Strategist goal decomposition output for ${issueId.slice(0, 8)} because Epic Decoder owns goal decomposition`);
               }
             }
 

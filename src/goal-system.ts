@@ -167,6 +167,8 @@ export async function decomposeGoalIntoTickets(
           title: ticketTitle,
           description: ticketDesc,
           status: 'todo',
+          goalId: goalIssueId,
+          assigneeAgentId: AGENTS.strategist,
         }),
       });
 

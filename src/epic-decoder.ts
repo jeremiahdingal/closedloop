@@ -1,8 +1,10 @@
 /**
  * Epic Decoder — Remote LLM decomposition of epics into tickets.
  *
- * Triggered when a high-complexity goal (score >= 7) is assigned.
- * Uses remote glm-5 to break down broad epics into narrow, buildable tickets.
+ * Triggered when a high-complexity goal is assigned or when the active-goal
+ * heartbeat finds an undecomposed epic.
+ * Uses the shared remote z.ai GLM-5 adapter to break down broad epics into
+ * narrow, buildable tickets.
  *
  * Output format:
  *   ## Ticket: <title>
@@ -16,7 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspace, getCompanyId, getPaperclipApiUrl } from './config';
-import { getIssueDetails, postComment, patchIssue } from './paperclip-api';
+import { postComment, patchIssue } from './paperclip-api';
 import { callZAI } from './remote-ai';
 import { AGENTS } from './agent-types';
 import { decomposeGoalIntoTickets } from './goal-system';
@@ -24,6 +26,17 @@ import { decomposeGoalIntoTickets } from './goal-system';
 const PAPERCLIP_API = getPaperclipApiUrl();
 const COMPANY_ID = getCompanyId();
 const WORKSPACE = getWorkspace();
+
+interface GoalRecord {
+  id: string;
+  companyId: string;
+  title: string;
+  description: string | null;
+  level: string;
+  status: string;
+  parentId: string | null;
+  ownerAgentId: string | null;
+}
 
 // File-based lock to prevent duplicate decomposition across bridge restarts
 const DECOMPOSED_LOCK_FILE = path.join(WORKSPACE, '.epics-decomposed.json');
@@ -61,7 +74,7 @@ function markEpicDecomposed(goalId: string): void {
  */
 export async function decodeEpic(goalId: string): Promise<boolean> {
   try {
-    const goal = await getIssueDetails(goalId);
+    const goal = await getGoal(goalId);
     if (!goal) return false;
 
     // Check file-based lock FIRST (prevents duplicates across bridge restarts)
@@ -125,14 +138,15 @@ async function runEpicDecode(goal: any): Promise<void> {
       await decomposeGoalIntoTickets(goal.id, decodeContent);
       await postComment(goal.id, null, `✅ Epic Decoder (GLM-5) decomposed epic into tickets. Child issues created.`);
 
-      // Assign ALL tickets to Strategist for planning and delegation
+      // Assign ALL tickets to Complexity Router so each decoded ticket enters
+      // the normal scaffold/classification path.
       const tickets = await getEpicTickets(goal.id);
       if (tickets.length > 0) {
         for (const ticket of tickets) {
-          await patchIssue(ticket.id, { assigneeAgentId: AGENTS.strategist });
-          console.log(`[epic-decoder] Ticket ${ticket.identifier} assigned to Strategist`);
+          await patchIssue(ticket.id, { assigneeAgentId: AGENTS['complexity router'] });
+          console.log(`[epic-decoder] Ticket ${ticket.identifier} assigned to Complexity Router`);
         }
-        console.log(`[epic-decoder] All ${tickets.length} tickets assigned to Strategist for planning`);
+        console.log(`[epic-decoder] All ${tickets.length} tickets assigned to Complexity Router for classification`);
       }
     } catch (err: any) {
       console.error(`[epic-decoder] Failed to create tickets: ${err.message}`);
@@ -217,5 +231,51 @@ async function getEpicTickets(goalId: string): Promise<any[]> {
     );
   } catch {
     return [];
+  }
+}
+
+async function getGoal(goalId: string): Promise<GoalRecord | null> {
+  try {
+    const directRes = await fetch(`${PAPERCLIP_API}/api/goals/${goalId}`);
+    if (directRes.ok) {
+      return await directRes.json() as GoalRecord;
+    }
+  } catch {}
+
+  try {
+    const res = await fetch(`${PAPERCLIP_API}/api/companies/${COMPANY_ID}/goals`);
+    if (!res.ok) return null;
+
+    const data = await res.json() as any;
+    const goals = Array.isArray(data) ? data : data.value || data.goals || data.data || [];
+    return goals.find((goal: GoalRecord) => goal.id === goalId) || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function checkActiveGoalsForDecode(): Promise<void> {
+  try {
+    const res = await fetch(`${PAPERCLIP_API}/api/companies/${COMPANY_ID}/goals`);
+    if (!res.ok) return;
+
+    const data = await res.json() as any;
+    const goals = Array.isArray(data) ? data : data.value || data.goals || data.data || [];
+    const activeGoals = goals.filter((goal: GoalRecord) => goal.status === 'active');
+
+    for (const goal of activeGoals) {
+      if (isEpicDecomposed(goal.id)) continue;
+
+      const existingTickets = await getEpicTickets(goal.id);
+      if (existingTickets.length > 0) {
+        markEpicDecomposed(goal.id);
+        continue;
+      }
+
+      console.log(`[epic-decoder] Active-goal heartbeat starting ${goal.title} (${goal.id.slice(0, 8)})`);
+      await decodeEpic(goal.id);
+    }
+  } catch (err: any) {
+    console.error(`[epic-decoder] Active-goal heartbeat failed: ${err.message}`);
   }
 }

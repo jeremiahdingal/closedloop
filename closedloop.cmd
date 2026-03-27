@@ -67,18 +67,6 @@ set PPC_PID=
 
 :: 3. ClosedLoop
 echo  [3/3] Starting ClosedLoop...
-:: Load secrets from .env if it exists
-if exist "%~dp0.env" (
-    for /f "usebackq delims=" %%A in ("%~dp0.env") do (
-        if not "%%A"=="" if not "%%A:~0,1%"=="#" (
-            for /f "tokens=1,* delims==" %%B in ("%%A") do (
-                set "%%B=%%C"
-            )
-        )
-    )
-)
-if not defined LLM_MODEL set LLM_MODEL=deepcoder:14b
-if not defined LLM_MODEL_BURST set LLM_MODEL_BURST=qwen3-coder:30b
 set PROXY_PID=
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3201 "') do set PROXY_PID=%%a
 if defined PROXY_PID (
@@ -87,10 +75,7 @@ if defined PROXY_PID (
     :: Kill any stale node processes on 3201 first
     for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3201 "') do taskkill /F /PID %%a >nul 2>&1
     timeout /t 1 /nobreak >nul
-    :: Start ClosedLoop with environment variables properly set
-    powershell -Command "$env:Z_AI_API_KEY='%Z_AI_API_KEY%'; $env:LLM_MODEL='%LLM_MODEL%'; $env:LLM_MODEL_BURST='%LLM_MODEL_BURST%'; Start-Process -FilePath 'node' -ArgumentList 'dist/index.js' -WorkingDirectory 'C:\Users\dinga\Projects\paperclip' -WindowStyle Hidden -RedirectStandardOutput 'closedloop-out.log' -RedirectStandardError 'closedloop-err.log'"
-    timeout /t 3 /nobreak >nul
-    echo        Started on :3201.
+    call :START_CLOSEDLOOP_PROCESS
 )
 set PROXY_PID=
 
@@ -153,9 +138,8 @@ echo  ClosedLoop stopped.
 timeout /t 2 /nobreak >nul
 
 :: Start ClosedLoop
-powershell -Command "Start-Process -FilePath 'node' -ArgumentList 'dist/index.js' -WorkingDirectory 'C:\Users\dinga\Projects\paperclip' -WindowStyle Hidden -RedirectStandardOutput 'closedloop-out.log' -RedirectStandardError 'closedloop-err.log'"
-timeout /t 2 /nobreak >nul
-echo  ClosedLoop restarted on :3201.
+call :START_CLOSEDLOOP_PROCESS
+echo  ClosedLoop restart attempted.
 
 :: Verify all
 echo.
@@ -322,8 +306,7 @@ if defined PROXY_PID (
 
 :: Start ClosedLoop
 echo  Starting ClosedLoop...
-start "ClosedLoop" /MIN cmd /c npm start ^>C:\Users\dinga\Projects\paperclip\closedloop-out.log 2^>^&1
-timeout /t 3 /nobreak >nul
+call :START_CLOSEDLOOP_PROCESS
 
 :: Verify it started
 set PROXY_PID=
@@ -340,6 +323,32 @@ echo  [OK] ClosedLoop started.
 echo.
 pause
 goto MENU
+
+:START_CLOSEDLOOP_PROCESS
+:: Load secrets from .env if it exists
+if exist "%~dp0.env" (
+    for /f "usebackq delims=" %%A in ("%~dp0.env") do (
+        if not "%%A"=="" if not "%%A:~0,1%"=="#" (
+            for /f "tokens=1,* delims==" %%B in ("%%A") do (
+                set "%%B=%%C"
+            )
+        )
+    )
+)
+if not defined LLM_MODEL set LLM_MODEL=deepcoder:14b
+if not defined LLM_MODEL_BURST set LLM_MODEL_BURST=qwen3-coder:30b
+
+start "ClosedLoop" /MIN cmd /c "cd /d C:\Users\dinga\Projects\paperclip && npm start > closedloop-out.log 2> closedloop-err.log"
+timeout /t 5 /nobreak >nul
+
+set PROXY_PID=
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr ":3201 "') do set PROXY_PID=%%a
+if defined PROXY_PID (
+    echo        Started on :3201 ^(PID %PROXY_PID%^).
+) else (
+    echo        ClosedLoop did not come up on :3201 yet. Check closedloop-err.log.
+)
+goto :eof
 
 :TRIGGER_CHECKER
 cls

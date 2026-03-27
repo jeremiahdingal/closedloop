@@ -9,8 +9,7 @@ import { createProxy, checkAssignedIssues, initializeRAG } from './proxy-server'
 import { ragIndexer } from './rag-indexer';
 import { getConfig, getPaperclipApiUrl, getCompanyId, getAgentKeys } from './config';
 import { AGENTS } from './agent-types';
-// DISABLED: Old epic-decomposer (local LLM) - replaced by epic-decoder (GLM-5)
-// import { checkGoalsForDecomposition } from './epic-decomposer';
+import { checkActiveGoalsForDecode } from './epic-decoder';
 import { reloadGoalTicketMappings } from './goal-system';
 
 // Load configuration
@@ -60,19 +59,20 @@ setInterval(() => {
   checkAssignedIssues().catch(() => {});
 }, 60000);
 
-// DISABLED: Old epic-decomposer (local LLM) - replaced by epic-decoder (GLM-5)
-// Run epic decomposer every 2 minutes
-// setInterval(() => {
-//   checkGoalsForDecomposition().catch(() => {});
-// }, 120000);
+// Run Epic Decoder heartbeat every 60 seconds so active goals can start the flow.
+setInterval(() => {
+  checkActiveGoalsForDecode().catch(() => {});
+}, 60000);
 
-// On startup: reload goal/ticket mappings, reset errored agents, then start processing
+// On startup: reload goal/ticket mappings, reset errored agents, start active-goal
+// decomposition, then run the final Epic Reviewer pass for any ready epics.
 setTimeout(async () => {
   await reloadGoalTicketMappings();
   await resetErroredAgents();
+  await checkActiveGoalsForDecode();
   await checkAssignedIssues();
   
-  // Run Epic Reviewer Agent on startup as the build authority for ready epics
+  // Epic Reviewer is the final build authority, not the decomposition entrypoint.
   try {
     const { runEpicReviewerAgent } = await import('./epic-reviewer-agent');
     await runEpicReviewerAgent();
@@ -81,11 +81,6 @@ setTimeout(async () => {
     console.log(`[closedloop] Epic Reviewer build authority failed: ${err.message}`);
   }
 }, 5000);
-
-// DISABLED: Old epic-decomposer startup check
-// setTimeout(() => {
-//   checkGoalsForDecomposition().catch(() => {});
-// }, 10000);
 
 // DISABLED: Old periodic epic review - now handled by Epic Reviewer agent
 // setInterval(() => {
