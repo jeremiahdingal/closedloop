@@ -398,6 +398,18 @@ export async function buildLocalBuilderContext(
   fileContext += 'Output each file using: FILE: path/to/file.ext\\n```lang\\ncode\\n```\n';
   fileContext += 'Write ALL required files in ONE response.\n';
 
+  // Duplicate prevention for epic tickets
+  fileContext += '\n== DUPLICATE PREVENTION ==\n';
+  fileContext += 'BEFORE creating any new file, check if a file with the same purpose already exists in the repo.\n';
+  fileContext += 'Do NOT create the same hook, component, route, or type in multiple locations.\n';
+  fileContext += 'Canonical locations for this project:\n';
+  fileContext += '- API hooks: packages/app/apiHooks/ (flat, NOT nested in subdirectories)\n';
+  fileContext += '- Backend routes: api/src/routes/\n';
+  fileContext += '- Shared types/schemas: packages/app/types/\n';
+  fileContext += '- Use fetcherWithToken for API calls, NOT raw apiClient or fetch\n';
+  fileContext += 'If an existing file already implements what you need, MODIFY it instead of creating a new one.\n';
+  fileContext += 'Creating duplicate implementations in parallel paths (e.g. hooks/ AND apiHooks/) is a critical error.\n';
+
   context += fileContext;
   return context;
 }

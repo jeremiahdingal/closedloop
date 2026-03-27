@@ -87,7 +87,7 @@ describe('epic-reviewer-agent', () => {
       return '';
     });
 
-    const firstPrompt = await buildReviewPrompt(epic as any, {
+    const firstResult = await buildReviewPrompt(epic as any, {
       attemptCount: 1,
       injectedFullContext: false,
       lastSummary: '',
@@ -99,7 +99,7 @@ describe('epic-reviewer-agent', () => {
       reconciliationActive: false,
     });
 
-    const secondPrompt = await buildReviewPrompt(epic as any, {
+    const secondResult = await buildReviewPrompt(epic as any, {
       attemptCount: 2,
       injectedFullContext: true,
       lastSummary: 'Prior review',
@@ -111,9 +111,9 @@ describe('epic-reviewer-agent', () => {
       reconciliationActive: false,
     });
 
-    expect(firstPrompt).toContain('FULL TARGET PROJECT CONTEXT');
-    expect(secondPrompt).not.toContain('FULL TARGET PROJECT CONTEXT');
-    expect(secondPrompt).toContain('Carry Forward Context');
+    expect(firstResult.prompt).toContain('FULL TARGET PROJECT CONTEXT');
+    expect(secondResult.prompt).not.toContain('FULL TARGET PROJECT CONTEXT');
+    expect(secondResult.prompt).toContain('Carry Forward Context');
     expect(collectMonorepoContextMock).toHaveBeenCalledTimes(1);
   });
 
@@ -130,6 +130,7 @@ describe('epic-reviewer-agent', () => {
     ]);
     callZAIMock.mockResolvedValue(
       'VERDICT: CHANGES_REQUESTED\n' +
+      'GOAL_SATISFIED: YES\n' +
       'TICKET: SHO-1\n' +
       'FILE: src/fix.ts\n```ts\nexport const fixed = true;\n```\n' +
       'SUMMARY:\nApplied a fix'
@@ -182,7 +183,7 @@ describe('epic-reviewer-agent', () => {
     getActionableEpicTicketsMock.mockResolvedValue([
       { id: 'ticket-2', identifier: 'SHO-2', title: 'Second ticket', status: 'in_review', goalId: 'goal-2' },
     ]);
-    callZAIMock.mockResolvedValue('VERDICT: APPROVED\nSUMMARY:\nNo code changes needed');
+    callZAIMock.mockResolvedValue('VERDICT: APPROVED\nGOAL_SATISFIED: YES\nSUMMARY:\nNo code changes needed');
 
     execSyncMock.mockImplementation((command: string) => {
       if (command.includes('git diff')) {
@@ -221,9 +222,10 @@ describe('epic-reviewer-agent', () => {
     ]);
 
     callZAIMock
-      .mockResolvedValueOnce('VERDICT: APPROVED\nSUMMARY:\nNeed integration reconciliation')
+      .mockResolvedValueOnce('VERDICT: APPROVED\nGOAL_SATISFIED: YES\nSUMMARY:\nNeed integration reconciliation')
       .mockResolvedValueOnce(
         'VERDICT: CHANGES_REQUESTED\n' +
+        'GOAL_SATISFIED: YES\n' +
         'TARGET: EPIC_RECONCILE\n' +
         'FILE: src/shared.ts\n```ts\nexport const reconciled = true;\n```\n' +
         'SUMMARY:\nResolved epic conflicts'
@@ -285,7 +287,7 @@ describe('epic-reviewer-agent', () => {
     getActionableEpicTicketsMock.mockResolvedValue([
       { id: 'ticket-5', identifier: 'SHO-5', title: 'Canonical ticket', status: 'in_review', goalId: 'goal-4' },
     ]);
-    callZAIMock.mockResolvedValue('VERDICT: APPROVED\nSUMMARY:\nGreen');
+    callZAIMock.mockResolvedValue('VERDICT: APPROVED\nGOAL_SATISFIED: YES\nSUMMARY:\nGreen');
 
     execSyncMock.mockImplementation((command: string) => {
       if (command.includes('git diff')) {
@@ -319,7 +321,7 @@ describe('epic-reviewer-agent', () => {
     callZAIMock.mockImplementation(
       async () =>
         await new Promise<string>((resolve) => {
-          setTimeout(() => resolve('VERDICT: APPROVED\nSUMMARY:\nGreen'), 25);
+          setTimeout(() => resolve('VERDICT: APPROVED\nGOAL_SATISFIED: YES\nSUMMARY:\nGreen'), 25);
         })
     );
     execSyncMock.mockImplementation((command: string) => {
@@ -349,6 +351,7 @@ describe('epic-reviewer-agent', () => {
     ]);
     callZAIMock.mockResolvedValue(
       'VERDICT: CHANGES_REQUESTED\n' +
+      'GOAL_SATISFIED: YES\n' +
       'TICKET: SHO-7\n' +
       'DELETE FILE: src/duplicate.tsx\n' +
       'TICKET: SHO-7\n' +

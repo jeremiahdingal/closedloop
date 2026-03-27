@@ -3,7 +3,8 @@
     "allow": [
       "Bash(git submodule *)",
       "Bash(netstat *)",
-      "Bash(findstr *)"
+      "Bash(findstr *)",
+      "Bash(git worktree *)"
     ]
   },
   "$version": 3

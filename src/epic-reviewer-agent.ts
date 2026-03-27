@@ -28,6 +28,7 @@ interface EpicTicket {
   id: string;
   identifier: string;
   title: string;
+  description?: string;
   status: string;
   goalId: string;
 }
@@ -51,6 +52,7 @@ interface FileFix {
 
 interface ReviewResult {
   approved: boolean;
+  goalSatisfied: boolean;
   fixes: FileFix[];
   summary: string;
 }
@@ -360,8 +362,9 @@ async function ensureReconciliationBranch(epic: EpicWithTickets, state: EpicRetr
   }
 }
 
-export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryState): Promise<string> {
+export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryState): Promise<{ prompt: string; hasDuplicateWarning: boolean }> {
   let prompt = '';
+  let hasDuplicateWarning = false;
 
   if (!state.injectedFullContext) {
     console.log(`[epic-reviewer-agent] Collecting full monorepo context for ${epic.goal.title}`);
@@ -393,10 +396,44 @@ export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryS
   prompt += '## Tickets\n';
   for (const ticket of ticketInfos) {
     prompt += `- ${ticket.identifier}: ${ticket.title} (${ticket.branchName})\n`;
+    if (ticket.description) {
+      prompt += `  Description: ${truncate(ticket.description, 500)}\n`;
+    }
   }
   if (state.overlapSummary) {
     prompt += `\n## Overlap Detection\n${state.overlapSummary}\n`;
   }
+
+  // Duplicate-basename detection: find same-named files in different directories
+  const filesByBasename = new Map<string, { filePath: string; ticket: string }[]>();
+  for (const ticket of ticketInfos) {
+    const changedFiles = await collectChangedFiles(ticket);
+    for (const filePath of changedFiles) {
+      const basename = path.basename(filePath);
+      const entries = filesByBasename.get(basename) || [];
+      entries.push({ filePath, ticket: ticket.identifier });
+      filesByBasename.set(basename, entries);
+    }
+  }
+  const duplicateGroups = Array.from(filesByBasename.entries())
+    .filter(([, entries]) => {
+      const uniquePaths = new Set(entries.map(e => e.filePath));
+      return uniquePaths.size > 1;
+    });
+  if (duplicateGroups.length > 0) {
+    hasDuplicateWarning = true;
+    prompt += '\n## Duplicate File Warning\n';
+    prompt += 'The following filenames appear in multiple locations — you MUST pick one canonical path and DELETE FILE the rest:\n';
+    for (const [basename, entries] of duplicateGroups) {
+      const uniqueEntries = Array.from(new Map(entries.map(e => [e.filePath, e])).values());
+      prompt += `- ${basename}:\n`;
+      for (const entry of uniqueEntries) {
+        prompt += `  - ${entry.filePath} (${entry.ticket})\n`;
+      }
+    }
+    prompt += '\n';
+  }
+
   prompt += '\n## Ticket Diffs\n\n';
 
   for (const ticket of ticketInfos) {
@@ -434,61 +471,87 @@ export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryS
     }
   }
 
-  return prompt;
+  return { prompt, hasDuplicateWarning };
 }
 
 function buildSystemPrompt(): string {
   return `You are the Epic Reviewer, the only automated build-and-repair authority for this system.
 
-Review one epic at a time. Find cross-ticket issues, output exact file fixes, and use any prior build errors to repair the branches.
+You review one epic at a time using a three-phase approach:
 
-Treat these as high-priority drift symptoms that usually require reconciliation, consolidation, or deletion of duplicate files:
-- The same concept implemented in multiple parallel paths, for example duplicate hooks/components/modals/panels across sibling folders
-- Alternate file names for the same feature, such as both OrderSummary and OrderTotalSummary variants
-- Ticket branches creating broad adjacent files outside the intended scope just to make local review pass
+## Phase 1 — Epic-Level Understanding
+Before looking at individual ticket diffs, understand what this epic delivers as a single coherent feature.
+- What API endpoints, hooks, components, and types does the epic need?
+- What is the MINIMAL set of files required to deliver it?
+- Map out the ideal file structure first, then compare against what tickets actually produced.
+
+## Phase 2 — Per-Ticket Audit
+Review each ticket's diff against the ideal structure from Phase 1.
+- Identify files that are duplicates, misplaced, or use wrong conventions.
+- For every N duplicate implementations of the same concept, you MUST emit N-1 DELETE FILE operations and 1 FILE write for the canonical version.
+- A review that identifies drift or duplicates but produces 0 DELETE FILE operations is INCOMPLETE. You must not approve until duplicates are resolved.
+
+Drift symptoms that require consolidation or deletion:
+- The same concept implemented in multiple parallel paths (duplicate hooks/components/modals/panels across sibling folders)
+- Alternate file names for the same feature (e.g. OrderSummary vs OrderTotalSummary)
+- Ticket branches creating broad adjacent files outside intended scope
 - Multiple route/API/client wrappers for the same endpoint or mutation
-- Mixing old project conventions with current ones, especially StyleSheet.create or non-Tamagui UI in a Tamagui codebase
-- Stray generated files or package-manager artifacts like package-lock.json, extra dashboard/packages, or unrelated test scaffolding outside the ticket scope
+- Mixing old conventions with current ones (e.g. StyleSheet.create in a Tamagui codebase)
+- Stray generated files or package-manager artifacts outside ticket scope
 
-When these symptoms appear:
-- Prefer one canonical implementation path and remove or replace the alternates
-- Favor the path that best matches the current project structure and existing imports
-- Do not preserve duplicate files just because they compile
-- If drift spans multiple ticket branches, use reconciliation output to produce the final integrated files
-- Call out deletions or consolidation explicitly in SUMMARY
+Canonical location heuristics for this project:
+- API hooks: packages/app/apiHooks/ (flat, not nested in subdirectories)
+- Backend routes: api/src/routes/
+- Shared types/schemas: packages/app/types/
+- UI components: packages/app/ organized by feature area
+- Use fetcherWithToken for API calls, not raw apiClient imports
 
-Required output:
-- If no code changes are needed, start with VERDICT: APPROVED
-- If changes are needed, start with VERDICT: CHANGES_REQUESTED
-- For normal ticket-branch fixes, emit:
+## Phase 3 — Goal Satisfaction
+Does the combined output of all tickets actually satisfy the epic's goal and each ticket's acceptance criteria?
+- Check the epic description and each ticket's description for stated objectives.
+- Verify the delivered code meets those objectives.
+- If the goal is NOT satisfied, explain what is missing or wrong.
+
+## Required Output Format
+
+Start with:
+VERDICT: APPROVED or VERDICT: CHANGES_REQUESTED
+GOAL_SATISFIED: YES or GOAL_SATISFIED: NO (with brief reason if NO)
+
+For normal ticket-branch fixes, emit:
 TICKET: SHO-XX
 FILE: relative/path/to/file.ext
 \`\`\`typescript
 // complete file content
 \`\`\`
-- For normal ticket-branch deletions, emit:
+
+For normal ticket-branch deletions, emit:
 TICKET: SHO-XX
 DELETE FILE: relative/path/to/file.ext
-- For reconciliation-branch fixes, emit:
+
+For reconciliation-branch fixes, emit:
 TARGET: EPIC_RECONCILE
 FILE: relative/path/to/file.ext
 \`\`\`typescript
 // complete file content
 \`\`\`
-- For reconciliation-branch deletions, emit:
+
+For reconciliation-branch deletions, emit:
 TARGET: EPIC_RECONCILE
 DELETE FILE: relative/path/to/file.ext
-- Finish with:
+
+Finish with:
 SUMMARY:
-brief explanation
+brief explanation of what was done, including all deletions and consolidations
 
-Rules:
+## Rules
 - Output full files for writes, not diffs
 - Use DELETE FILE when duplicate or wrong-path files must be removed
 - Only tag files to tickets that exist in this epic
 - Use TARGET: EPIC_RECONCILE only when reconciliation mode is active
 - Prior build errors are high-priority signals
-- If a previous attempt failed to build, focus on getting the next attempt green`;
+- If a previous attempt failed to build, focus on getting the next attempt green
+- If the Duplicate File Warning section is present, you MUST address every group with DELETE FILE operations`;
 }
 
 function parseReviewResult(content: string): ReviewResult {
@@ -542,9 +605,11 @@ function parseReviewResult(content: string): ReviewResult {
     });
   }
 
+  const goalSatisfied = /GOAL_SATISFIED:\s*YES/i.test(content);
+
   const summaryMatch = content.match(/SUMMARY:\s*([\s\S]+)/i);
   const summary = summaryMatch ? summaryMatch[1].trim() : truncate(content, 1000);
-  return { approved, fixes, summary };
+  return { approved, goalSatisfied, fixes, summary };
 }
 
 async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<string[]> {
@@ -842,7 +907,7 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
     if (state.attemptCount >= 2 && state.overlappingFiles.length > 0) {
       await ensureReconciliationBranch(epic, state);
     }
-    const prompt = await buildReviewPrompt(epic, state);
+    const { prompt, hasDuplicateWarning } = await buildReviewPrompt(epic, state);
     console.log(`[epic-reviewer-agent] Reviewing epic "${epic.goal.title}" attempt ${state.attemptCount}/${MAX_EPIC_RETRIES}`);
 
     let reviewContent: string;
@@ -872,20 +937,43 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
       .map(result => `${result.ticketIdentifier} (${result.branchName})\n${result.output || 'Unknown build failure'}`)
       .join('\n\n');
 
+    // Deletion audit: check if duplicates were flagged but model didn't delete any
+    const deleteCount = result.fixes.filter(f => f.operation === 'delete').length;
+    const duplicatesResolved = !hasDuplicateWarning || deleteCount > 0;
+    const goalMet = result.goalSatisfied;
+    const buildGreen = failures.length === 0;
+
     epicRetryStates.set(epic.goal.id, { ...state });
 
-    if (failures.length === 0) {
+    // Only exit when: builds pass AND duplicates resolved AND goal satisfied
+    if (buildGreen && duplicatesResolved && goalMet) {
       await postEpicSuccess(epic, result.summary);
       return;
+    }
+
+    // Build carry-forward context for next attempt
+    const issues: string[] = [];
+    if (!buildGreen) {
+      issues.push(`Build remained red.`);
+    }
+    if (!duplicatesResolved) {
+      issues.push(`Duplicate files were detected but no DELETE FILE operations were emitted. Next attempt MUST delete duplicate files.`);
+      state.lastSummary = (state.lastSummary || '') +
+        '\n\n⚠ DELETION AUDIT: Duplicate files were detected but no DELETE FILE operations were emitted. Next attempt MUST address duplicate files with explicit deletions.';
+    }
+    if (!goalMet) {
+      issues.push(`Goal is not yet satisfied. Next attempt must address gaps in epic delivery.`);
+      state.lastSummary = (state.lastSummary || '') +
+        '\n\n⚠ GOAL NOT SATISFIED: The epic goal is not yet met. Next attempt must address gaps.';
     }
 
     await postComment(
       epic.goal.id,
       null,
       `**Epic Reviewer Attempt ${state.attemptCount}/${MAX_EPIC_RETRIES}**\n\n` +
-      `Build remained red after review.\n\n` +
+      `${issues.join('\n')}\n\n` +
       `Summary:\n${result.summary}\n\n` +
-      `Build failures:\n\`\`\`\n${truncate(state.lastBuildErrors, 5000)}\n\`\`\``
+      (state.lastBuildErrors ? `Build failures:\n\`\`\`\n${truncate(state.lastBuildErrors, 5000)}\n\`\`\`` : '')
     ).catch(() => {});
   }
 
