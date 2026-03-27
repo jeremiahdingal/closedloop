@@ -148,6 +148,39 @@ export interface RAGSearchResult {
   distance?: number;
 }
 
+// === Parallel Worktree Exploration ===
+
+export interface WorktreeInfo {
+  path: string;
+  branch: string;
+  label: string;
+  issueId: string;
+}
+
+export interface ApproachHint {
+  label: string;         // e.g. 'A', 'B', 'C'
+  description: string;   // Strategy description for the builder
+}
+
+export interface ApproachResult {
+  label: string;
+  worktree: WorktreeInfo;
+  buildSuccess: boolean;
+  buildOutput: string;
+  filesWritten: string[];
+  fileContents: Record<string, string>;
+  diffStats: string;     // git diff --stat output
+}
+
+export interface ExplorationState {
+  issueId: string;
+  approaches: ApproachHint[];
+  results: ApproachResult[];
+  status: 'pending' | 'running' | 'comparing' | 'merged' | 'failed';
+  selectedApproach?: string;  // Winning label
+  createdAt: number;
+}
+
 export interface ArtistFlow {
   name: string;
   startRoute: string;

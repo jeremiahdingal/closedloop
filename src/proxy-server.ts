@@ -20,6 +20,13 @@ import { executeBashBlocks } from './bash-executor';
 import { detectAndDelegate } from './delegation';
 import { runArtistStage } from './artist-recorder';
 import { runDiffGuardian } from './diff-guardian';
+import {
+  runExploration,
+  handleReviewerSelection,
+  isExploring,
+  getExplorationState,
+  parseApproachHints,
+} from './exploration-orchestrator';
 import { ragIndexer } from './rag-indexer';
 import { OllamaRequest, OllamaResponse } from './types';
 
@@ -229,7 +236,31 @@ export function createProxy(): http.Server {
 
             // Detect delegation and reassign via API (triggers auto-wakeup)
             if (agentId) {
-              await detectAndDelegate(issueId, agentId, content);
+              // Hook: Tech Lead [EXPLORE] triggers parallel worktree exploration
+              if (agentId === AGENTS['tech lead'] && content.includes('[EXPLORE]')) {
+                const approaches = parseApproachHints(content);
+                if (approaches) {
+                  console.log(`[closedloop] Tech Lead requested exploration with ${approaches.length} approaches`);
+                  setImmediate(async () => {
+                    const result = await runExploration(issueId, approaches);
+                    if (result.status === 'merged') {
+                      // Auto-selected or single passing approach — continue to Reviewer
+                      await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                    } else if (result.status === 'comparing') {
+                      // Multiple passing approaches — Reviewer needs to compare
+                      await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                    } else if (result.status === 'failed') {
+                      // All failed — send back to Tech Lead
+                      await patchIssue(issueId, { assigneeAgentId: AGENTS['tech lead'] });
+                    }
+                  });
+                  // Skip normal delegation since we're handling it
+                } else {
+                  await detectAndDelegate(issueId, agentId, content);
+                }
+              } else {
+                await detectAndDelegate(issueId, agentId, content);
+              }
             }
 
             // Hook 3: Complexity Router post-response — score issue and route
@@ -241,6 +272,8 @@ export function createProxy(): http.Server {
                 if (complexity.score >= 7) {
                   // Complex issue — call Remote Architect then hand to Strategist
                   await callRemoteArchitect(issueId, routerIssue);
+                  // Mark for parallel exploration when it reaches the builder
+                  console.log(`[closedloop] Issue ${issueId.slice(0, 8)} marked for parallel exploration (score: ${complexity.score})`);
                 }
                 // Always route to Strategist after scoring
                 await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
@@ -378,8 +411,26 @@ export function createProxy(): http.Server {
               }
             }
 
+            // Reviewer: handle exploration comparison if issue is in exploration mode
+            if (agentId === AGENTS.reviewer && isExploring(issueId)) {
+              const { handled, merged } = await handleReviewerSelection(issueId, content);
+              if (handled) {
+                if (merged) {
+                  // Winner merged — continue normal flow to Reviewer for final review
+                  console.log(`[closedloop] Exploration winner merged — sending to Reviewer for final review`);
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
+                } else {
+                  // Rejected or unparseable — send back to Tech Lead
+                  const state = getExplorationState(issueId);
+                  if (!state || state.status === 'failed') {
+                    await patchIssue(issueId, { assigneeAgentId: AGENTS['tech lead'] });
+                  }
+                }
+              }
+            }
+
             // Reviewer: validate changes and approve/reject before PR creation
-            if (agentId === AGENTS.reviewer) {
+            if (agentId === AGENTS.reviewer && !isExploring(issueId)) {
               const reviewApproved =
                 content.toLowerCase().includes('approved') ||
                 content.toLowerCase().includes('looks good') ||

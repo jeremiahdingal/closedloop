@@ -172,7 +172,8 @@ export function validateCriticalFileChanges(
  * Extract code blocks with file paths from LLM output and write them to disk.
  * Returns array of written file paths (relative to workspace).
  */
-export function applyCodeBlocks(content: string): CodeExtractionResult {
+export function applyCodeBlocks(content: string, workspace?: string): CodeExtractionResult {
+  const ws = workspace || WORKSPACE;
   const written: string[] = [];
   const fileContents: Record<string, string> = {};
 
@@ -205,8 +206,8 @@ export function applyCodeBlocks(content: string): CodeExtractionResult {
         continue;
       }
 
-      const fullPath = path.join(WORKSPACE, filePath);
-      if (!path.resolve(fullPath).startsWith(path.resolve(WORKSPACE))) {
+      const fullPath = path.join(ws, filePath);
+      if (!path.resolve(fullPath).startsWith(path.resolve(ws))) {
         console.log(`[extract] Path escapes workspace: ${filePath}`);
         continue;
       }
