@@ -23,11 +23,15 @@ vi.mock('./config', () => ({
   getWorkspace: () => 'C:\\target-project',
   getCompanyId: () => 'company-1',
   getPaperclipApiUrl: () => 'http://paperclip.test',
+  getEpicReviewerRequireOpenPrs: () => false,
   loadConfig: () => ({ commands: { build: 'yarn build' } }),
 }));
 
+const getIssueCommentsMock = vi.fn(async (_issueId: string) => [] as any[]);
+
 vi.mock('./paperclip-api', () => ({
   postComment: postCommentMock,
+  getIssueComments: getIssueCommentsMock,
 }));
 
 vi.mock('./remote-ai', () => ({
@@ -70,6 +74,7 @@ describe('epic-reviewer-agent', () => {
     writeFileSyncMock.mockReset();
     readFileSyncMock.mockReset();
     fetchMock.mockReset();
+    getIssueCommentsMock.mockClear();
   });
 
   it('injects full target-project monorepo context only on the first attempt prompt', async () => {
@@ -336,6 +341,39 @@ describe('epic-reviewer-agent', () => {
     await Promise.all([firstRun, secondRun]);
 
     expect(callZAIMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fetches comments for each ticket when building the review prompt', async () => {
+    const { buildReviewPrompt } = await import('./epic-reviewer-agent');
+
+    const epic = {
+      goal: { id: 'goal-drift', title: 'Drift Epic', description: 'Test' },
+      tickets: [
+        { id: 'ticket-drift', identifier: 'SHO-10', title: 'Drift ticket', status: 'in_review', goalId: 'goal-drift' },
+        { id: 'ticket-clean', identifier: 'SHO-11', title: 'Clean ticket', status: 'in_review', goalId: 'goal-drift' },
+      ],
+    };
+
+    execSyncMock.mockImplementation((command: string) => {
+      if (command.includes('git diff')) return 'diff --git a/file.ts b/file.ts\n+change';
+      return '';
+    });
+
+    await buildReviewPrompt(epic as any, {
+      attemptCount: 1,
+      injectedFullContext: false,
+      lastSummary: '',
+      lastBuildErrors: '',
+      lastAppliedFixes: [],
+      overlappingFiles: [],
+      overlapSummary: '',
+      reconciliationBranchName: '',
+      reconciliationActive: false,
+    });
+
+    // Verify comments are fetched per ticket (drift detection wiring)
+    expect(getIssueCommentsMock).toHaveBeenCalledWith('ticket-drift');
+    expect(getIssueCommentsMock).toHaveBeenCalledWith('ticket-clean');
   });
 
   it('can delete duplicate files from ticket branches when Epic Reviewer requests it', async () => {

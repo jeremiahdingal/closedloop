@@ -9,6 +9,7 @@ import { execSync, spawn } from 'child_process';
 import { getWorkspace, getArtistConfig } from './config';
 import { getIssueDetails, getIssueComments, postComment, patchIssue } from './paperclip-api';
 import { AGENTS } from './agent-types';
+import { getBranchName } from './git-ops';
 import { ensureDir, writeJson, appendNdjson, listPngFilesRecursive, normalizeRoute, safeJsonParse, slugify, truncate } from './utils';
 import { ArtistFlow, ArtistStep, ArtistReport, ArtistStepResult } from './types';
 
@@ -860,16 +861,6 @@ export async function runArtistRecorder(issueId: string): Promise<any> {
 
     return { ...runData, report };
   }
-}
-
-async function getBranchName(issueId: string): Promise<string> {
-  let issue;
-  try {
-    issue = await getIssueDetails(issueId);
-  } catch {}
-  const identifier = issue?.identifier || issueId.slice(0, 8);
-  const title = issue?.title || 'Code changes';
-  return `${identifier}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`.replace(/-+$/, '');
 }
 
 export async function runArtistStage(issueId: string): Promise<void> {

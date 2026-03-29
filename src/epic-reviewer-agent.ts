@@ -9,11 +9,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { collectMonorepoContext } from './context-builder';
-import { getWorkspace, getCompanyId, getPaperclipApiUrl, loadConfig } from './config';
-import { postComment } from './paperclip-api';
-import { callZAI } from './remote-ai';
+import {
+  getWorkspace,
+  getCompanyId,
+  getPaperclipApiUrl,
+  getEpicReviewerRequireOpenPrs,
+  loadConfig,
+} from './config';
+import { postComment, getIssueComments } from './paperclip-api';
+import { callRemoteLLM } from './remote-ai';
 import { getEpicTickets, getActionableEpicTickets } from './goal-system';
-import { getBranchName, getDefaultBranch } from './git-ops';
+import { formatBranchName, getBranchName, getDefaultBranch } from './git-ops';
 import { truncate } from './utils';
 
 const PAPERCLIP_API = getPaperclipApiUrl();
@@ -21,6 +27,7 @@ const COMPANY_ID = getCompanyId();
 const BASE_WORKSPACE = getWorkspace();
 const EPIC_REVIEW_WORKTREE_ROOT = path.join(BASE_WORKSPACE, '.paperclip-epic-review');
 const MAX_EPIC_RETRIES = 5;
+const GH_CLI = process.env.GH_CLI || 'C:\\Program Files\\GitHub CLI\\gh';
 let activeEpicWorkspace = BASE_WORKSPACE;
 let epicReviewerInFlight = false;
 
@@ -40,6 +47,11 @@ interface EpicWithTickets {
 
 interface TicketWithBranch extends EpicTicket {
   branchName: string;
+}
+
+interface PullRequestHead {
+  number: number;
+  headRefName: string;
 }
 
 interface FileFix {
@@ -77,6 +89,16 @@ interface EpicRetryState {
 }
 
 const epicRetryStates = new Map<string, EpicRetryState>();
+
+async function postTicketsComment(tickets: EpicTicket[], message: string): Promise<void> {
+  for (const ticket of tickets) {
+    await postComment(ticket.id, null, message).catch(() => {});
+  }
+}
+
+async function postEpicComment(epic: EpicWithTickets, message: string): Promise<void> {
+  await postTicketsComment(epic.tickets, message);
+}
 
 function getEpicWorkspace(): string {
   return activeEpicWorkspace;
@@ -128,6 +150,104 @@ export function getEpicReviewerState(goalId: string): EpicRetryState | undefined
   return epicRetryStates.get(goalId);
 }
 
+function normalizeBranchName(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/^origin\//, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+$/, '');
+}
+
+function getTicketBranchPrefix(identifier: string): string {
+  return String(identifier || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+$/, '');
+}
+
+function listOpenPullRequestHeads(): PullRequestHead[] {
+  try {
+    const raw = execSync(
+      `"${GH_CLI}" pr list --state open --json number,headRefName`,
+      {
+        cwd: BASE_WORKSPACE,
+        stdio: 'pipe',
+        timeout: 25000,
+      }
+    ).toString();
+    const data = JSON.parse(raw) as PullRequestHead[];
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+function hasOpenPrForBranch(branchName: string, ticketIdentifier: string): boolean {
+  const expected = normalizeBranchName(branchName);
+  const ticketPrefix = getTicketBranchPrefix(ticketIdentifier);
+
+  const openPrs = listOpenPullRequestHeads();
+  if (openPrs.length === 0) return false;
+
+  for (const pr of openPrs) {
+    const head = normalizeBranchName(pr.headRefName);
+    if (!head.startsWith(`${ticketPrefix}-`) && head !== ticketPrefix) {
+      continue;
+    }
+    if (head === expected || head.startsWith(expected) || expected.startsWith(head)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function listBranchCandidatesForTicket(identifier: string): string[] {
+  const ticketPrefix = getTicketBranchPrefix(identifier);
+  if (!ticketPrefix) return [];
+
+  try {
+    const raw = execSync('git branch -a --format="%(refname:short)"', {
+      cwd: getEpicWorkspace(),
+      stdio: 'pipe',
+      timeout: 15000,
+      encoding: 'utf8',
+    }).toString();
+
+    const seen = new Set<string>();
+    const matches: string[] = [];
+    for (const line of raw.split('\n')) {
+      const clean = line.trim().replace(/^origin\//, '');
+      if (!clean || seen.has(clean)) continue;
+      seen.add(clean);
+      const normalized = normalizeBranchName(clean);
+      if (normalized.startsWith(`${ticketPrefix}-`) || normalized === ticketPrefix) {
+        matches.push(clean);
+      }
+    }
+    return matches;
+  } catch {
+    return [];
+  }
+}
+
+function pickBestBranchForTicket(expectedBranch: string, identifier: string): string {
+  const candidates = listBranchCandidatesForTicket(identifier);
+  if (candidates.length === 0) return expectedBranch;
+
+  const expected = normalizeBranchName(expectedBranch);
+  const exact = candidates.find(c => normalizeBranchName(c) === expected);
+  if (exact) return exact;
+
+  const forward = candidates.find(c => normalizeBranchName(c).startsWith(expected));
+  if (forward) return forward;
+
+  const backward = candidates.find(c => expected.startsWith(normalizeBranchName(c)));
+  if (backward) return backward;
+
+  return candidates[0];
+}
+
 async function collectReadyEpics(): Promise<EpicWithTickets[]> {
   const goalsRes = await fetch(`${PAPERCLIP_API}/api/companies/${COMPANY_ID}/goals`);
   if (!goalsRes.ok) return [];
@@ -136,12 +256,43 @@ async function collectReadyEpics(): Promise<EpicWithTickets[]> {
   const activeGoals = goals.filter(g => g.status === 'active' || g.status === 'in_review');
 
   const epics: EpicWithTickets[] = [];
+  const requireOpenPrs = getEpicReviewerRequireOpenPrs();
   for (const goal of activeGoals) {
-    const tickets = await getActionableEpicTickets(goal.id);
+    const allTickets = await getActionableEpicTickets(goal.id);
+    if (allTickets.length === 0) continue;
+
+    const notInReview = allTickets.filter(t => t.status !== 'in_review');
+    if (notInReview.length > 0) {
+      await postTicketsComment(
+        allTickets as any,
+        `**Epic Reviewer Gate: Waiting for PR-First Progression**\n\nEpic review is blocked until every ticket is \`in_review\`.\n\nNot ready:\n${notInReview.map(t => `- ${t.identifier} (${t.status})`).join('\n')}`
+      );
+      continue;
+    }
+
+    const tickets = allTickets.filter(t => t.status === 'in_review');
     if (tickets.length === 0) continue;
 
-    const allReady = tickets.every(t => t.status === 'in_review');
-    if (!allReady) continue;
+    if (requireOpenPrs) {
+      const ticketBranches = await withBranches(tickets as any);
+      const missingPrBranches: string[] = [];
+      for (const ticket of ticketBranches) {
+        const hasPr = hasOpenPrForBranch(ticket.branchName, ticket.identifier);
+        if (!hasPr) {
+          missingPrBranches.push(`${ticket.identifier} (${ticket.branchName})`);
+        }
+      }
+      if (missingPrBranches.length > 0) {
+        await postTicketsComment(
+          tickets as any,
+          `**Epic Reviewer Gate: Waiting for PRs**\n\nEpic review is blocked until every ticket has an open PR.\n\nMissing:\n${missingPrBranches.map(b => `- ${b}`).join('\n')}`
+        );
+        console.log(
+          `[epic-reviewer-agent] Skipping ${goal.title} - waiting for open PRs: ${missingPrBranches.join(', ')}`
+        );
+        continue;
+      }
+    }
 
     epics.push({ goal, tickets });
   }
@@ -158,15 +309,13 @@ async function withBranches(tickets: EpicTicket[]): Promise<TicketWithBranch[]> 
       } catch {}
 
       if (!branchName) {
-        const identifier = String(ticket.identifier || ticket.id || 'ticket').toLowerCase();
-        const title = String(ticket.title || 'code-changes')
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/-+$/, '')
-          .slice(0, 40);
-        branchName = `${identifier}-${title}`.replace(/-+$/, '');
+        const identifier = String(ticket.identifier || ticket.id || 'ticket');
+        const title = String(ticket.title || 'code-changes');
+        branchName = formatBranchName(identifier, title);
         console.log(`[epic-reviewer-agent] Recovered missing branch name for ${ticket.identifier || ticket.id}: ${branchName}`);
       }
+
+      branchName = pickBestBranchForTicket(branchName, ticket.identifier || ticket.id);
 
       return {
         ...ticket,
@@ -179,8 +328,14 @@ async function withBranches(tickets: EpicTicket[]): Promise<TicketWithBranch[]> 
 
 async function collectTicketDiff(ticket: TicketWithBranch): Promise<string> {
   try {
-    const defaultBranch = getDefaultBranch();
-    const diff = execSync(`git diff ${defaultBranch}...${ticket.branchName} -- . ":(exclude)docs/screenshots"`, {
+    const defaultBranch = resolveRevisionName(getDefaultBranch()) || getDefaultBranch();
+    const ticketBranch = resolveRevisionName(ticket.branchName);
+    if (!ticketBranch) {
+      console.log(`[epic-reviewer-agent] Could not resolve branch for ${ticket.identifier}: ${ticket.branchName}`);
+      return '';
+    }
+
+    const diff = execSync(`git diff ${defaultBranch}...${ticketBranch} -- . ":(exclude)docs/screenshots"`, {
       cwd: getEpicWorkspace(),
       encoding: 'utf8',
       timeout: 30000,
@@ -195,8 +350,14 @@ async function collectTicketDiff(ticket: TicketWithBranch): Promise<string> {
 
 async function collectChangedFiles(ticket: TicketWithBranch): Promise<string[]> {
   try {
-    const defaultBranch = getDefaultBranch();
-    const changed = execSync(`git diff ${defaultBranch}...${ticket.branchName} --name-only -- . ":(exclude)docs/screenshots"`, {
+    const defaultBranch = resolveRevisionName(getDefaultBranch()) || getDefaultBranch();
+    const ticketBranch = resolveRevisionName(ticket.branchName);
+    if (!ticketBranch) {
+      console.log(`[epic-reviewer-agent] Could not resolve changed-files branch for ${ticket.identifier}: ${ticket.branchName}`);
+      return [];
+    }
+
+    const changed = execSync(`git diff ${defaultBranch}...${ticketBranch} --name-only -- . ":(exclude)docs/screenshots"`, {
       cwd: getEpicWorkspace(),
       encoding: 'utf8',
       timeout: 30000,
@@ -303,6 +464,31 @@ function tryGit(command: string, timeout = 30000): void {
   });
 }
 
+function resolveRevisionName(revision: string): string | null {
+  const candidates = [revision, `origin/${revision}`];
+  for (const candidate of candidates) {
+    try {
+      execSync(`git rev-parse --verify ${candidate}`, {
+        cwd: getEpicWorkspace(),
+        stdio: 'pipe',
+        timeout: 10000,
+      });
+      return candidate;
+    } catch {}
+  }
+  return null;
+}
+
+function checkoutDetachedRevision(revision: string): string {
+  const resolved = resolveRevisionName(revision) || revision;
+  execSync(`git checkout --detach ${resolved}`, {
+    cwd: getEpicWorkspace(),
+    stdio: 'pipe',
+    timeout: 10000,
+  });
+  return resolved;
+}
+
 async function ensureReconciliationBranch(epic: EpicWithTickets, state: EpicRetryState): Promise<string> {
   if (state.reconciliationBranchName) {
     return state.reconciliationBranchName;
@@ -348,11 +534,10 @@ async function ensureReconciliationBranch(epic: EpicWithTickets, state: EpicRetr
     state.reconciliationActive = true;
 
     const summary = state.overlapSummary || state.overlappingFiles.map(filePath => `- ${filePath}`).join('\n');
-    await postComment(
-      epic.goal.id,
-      null,
+    await postEpicComment(
+      epic,
       `**Epic Reconciliation Branch Created**\n\nBranch: \`${branchName}\`\n\nOverlapping files detected:\n${summary || '- overlap detected'}`
-    ).catch(() => {});
+    );
 
     return branchName;
   } finally {
@@ -402,6 +587,29 @@ export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryS
   }
   if (state.overlapSummary) {
     prompt += `\n## Overlap Detection\n${state.overlapSummary}\n`;
+  }
+
+  // Drift ticket detection: scan comments for [DRIFT] tags emitted by Diff Guardian / Local Builder
+  const driftTickets: { identifier: string; reasons: string[] }[] = [];
+  for (const ticket of ticketInfos) {
+    const comments = await getIssueComments(ticket.id);
+    const driftReasons = comments
+      .filter(c => typeof c.body === 'string' && c.body.includes('[DRIFT]'))
+      .map(c => {
+        const match = /\[DRIFT(?::([^\]]+))?\]/.exec(c.body as string);
+        return match?.[1] ?? 'architecture drift detected';
+      });
+    if (driftReasons.length > 0) {
+      driftTickets.push({ identifier: ticket.identifier, reasons: driftReasons });
+    }
+  }
+  if (driftTickets.length > 0) {
+    prompt += '\n## Drift-Flagged Tickets\n';
+    prompt += 'These tickets were automatically flagged for duplicate/parallel-file drift. You MUST emit DELETE FILE operations for every duplicate — a review with 0 deletions for a drift ticket is incomplete.\n';
+    for (const dt of driftTickets) {
+      prompt += `- ${dt.identifier}: ${dt.reasons.join('; ')}\n`;
+    }
+    prompt += '\n';
   }
 
   // Duplicate-basename detection: find same-named files in different directories
@@ -479,11 +687,24 @@ function buildSystemPrompt(): string {
 
 You review one epic at a time using a three-phase approach:
 
-## Phase 1 — Epic-Level Understanding
-Before looking at individual ticket diffs, understand what this epic delivers as a single coherent feature.
-- What API endpoints, hooks, components, and types does the epic need?
-- What is the MINIMAL set of files required to deliver it?
-- Map out the ideal file structure first, then compare against what tickets actually produced.
+## Phase 1 — Epic-Level Understanding (Holistic First)
+Before looking at any individual ticket diff, treat all tickets as a single unified delivery. The epic is ONE feature — not a collection of independent branches.
+
+Ask yourself:
+- What is the end-to-end user flow this epic enables? (e.g. "cashier completes a sale and sees the total")
+- What API endpoints, hooks, components, and types does that flow need — end to end?
+- What is the MINIMAL canonical set of files to deliver it correctly?
+- Which tickets are responsible for which slice of that canonical set?
+
+Map out the ideal file structure BEFORE reading any diff. Then, when you read each diff, you are comparing actual delivery against that pre-defined ideal — not evaluating each ticket in isolation.
+
+Signs that tickets were NOT coordinated as a single feature:
+- Multiple tickets each created their own version of the same hook, component, or API client
+- Ticket branches diverged in naming (e.g. one uses OrderSummary, another OrderTotalSummary for the same concept)
+- A ticket created files well outside its expected scope, encroaching on another ticket's domain
+- The combined output has more files than the minimal canonical set requires
+
+These are signs of drift — and each one requires consolidation decisions in Phase 2.
 
 ## Phase 2 — Per-Ticket Audit
 Review each ticket's diff against the ideal structure from Phase 1.
@@ -554,7 +775,8 @@ brief explanation of what was done, including all deletions and consolidations
 - If the Duplicate File Warning section is present, you MUST address every group with DELETE FILE operations`;
 }
 
-function parseReviewResult(content: string): ReviewResult {
+function parseReviewResult(rawContent: string): ReviewResult {
+  const content = rawContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const fixes: FileFix[] = [];
   const approved = /VERDICT:\s*APPROVED/i.test(content);
   const ticketFileRegex = /TICKET:\s*(SHO-\d+)\s*\nFILE:\s*([^\n]+)\s*\n```[^\n]*\n([\s\S]*?)\n```/g;
@@ -632,11 +854,7 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
     if (!ticketFixes || ticketFixes.length === 0) continue;
 
     try {
-      execSync(`git checkout ${ticket.branchName}`, {
-        cwd: getEpicWorkspace(),
-        stdio: 'pipe',
-        timeout: 10000,
-      });
+      checkoutDetachedRevision(ticket.branchName);
 
       for (const fix of ticketFixes) {
         const fullPath = path.join(getEpicWorkspace(), fix.filePath);
@@ -663,7 +881,7 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
         }
       }
 
-      execSync(`git push origin ${ticket.branchName}`, {
+      execSync(`git push origin HEAD:${ticket.branchName}`, {
         cwd: getEpicWorkspace(),
         stdio: 'pipe',
         timeout: 60000,
@@ -725,11 +943,10 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
         timeout: 60000,
       });
 
-      await postComment(
-        epic.goal.id,
-        null,
+      await postEpicComment(
+        epic,
         `**Epic Reviewer Reconciliation Fixes**\n\nApplied fixes on \`${reconciliationBranchName}\`:\n${reconciliationFixes.map(f => `- ${f.operation === 'delete' ? 'deleted' : 'updated'} \`${f.filePath}\``).join('\n')}`
-      ).catch(() => {});
+      );
     } finally {
       try {
         execSync(`git checkout ${defaultBranch}`, {
@@ -756,11 +973,7 @@ async function buildEpicBranches(epic: EpicWithTickets): Promise<BuildCheck[]> {
 
   for (const ticket of tickets) {
     try {
-      execSync(`git checkout ${ticket.branchName}`, {
-        cwd: getEpicWorkspace(),
-        stdio: 'pipe',
-        timeout: 10000,
-      });
+      checkoutDetachedRevision(ticket.branchName);
       execSync(buildCommand, {
         cwd: getEpicWorkspace(),
         stdio: 'pipe',
@@ -833,18 +1046,10 @@ async function buildReconciliationBranch(branchName: string): Promise<BuildCheck
 }
 
 async function postEpicSuccess(epic: EpicWithTickets, summary: string): Promise<void> {
-  for (const ticket of epic.tickets) {
-    await postComment(
-      ticket.id,
-      null,
-      `**Epic Review: APPROVED**\n\nEpic Reviewer validated the epic and all build checks passed.\n\n${summary}`
-    ).catch(() => {});
-  }
-  await postComment(
-    epic.goal.id,
-    null,
+  await postEpicComment(
+    epic,
     `**Epic Reviewer Complete**\n\nBuild authority result: green.\n\n${summary}`
-  ).catch(() => {});
+  );
 }
 
 async function postEpicFailure(epic: EpicWithTickets, state: EpicRetryState): Promise<void> {
@@ -854,10 +1059,7 @@ async function postEpicFailure(epic: EpicWithTickets, state: EpicRetryState): Pr
     (state.lastSummary ? `Latest summary:\n${state.lastSummary}\n\n` : '') +
     (state.lastBuildErrors ? `Latest build errors:\n\`\`\`\n${truncate(state.lastBuildErrors, 5000)}\n\`\`\`\n` : '');
 
-  await postComment(epic.goal.id, null, message).catch(() => {});
-  for (const ticket of epic.tickets) {
-    await postComment(ticket.id, null, message).catch(() => {});
-  }
+  await postEpicComment(epic, message);
 }
 
 async function postEpicReviewerVisibleOutput(epic: EpicWithTickets, state: EpicRetryState, reviewContent: string): Promise<void> {
@@ -866,14 +1068,7 @@ async function postEpicReviewerVisibleOutput(epic: EpicWithTickets, state: EpicR
     `This is the model's visible response, not hidden chain-of-thought.\n\n` +
     `\`\`\`\n${truncate(reviewContent, 12000)}\n\`\`\``;
 
-  try {
-    await postComment(epic.goal.id, null, message);
-    return;
-  } catch {}
-
-  for (const ticket of epic.tickets) {
-    await postComment(ticket.id, null, message).catch(() => {});
-  }
+  await postEpicComment(epic, message);
 }
 
 async function processEpic(epic: EpicWithTickets): Promise<void> {
@@ -894,11 +1089,10 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
     state.overlappingFiles = overlap.overlappingFiles;
     state.overlapSummary = overlap.overlapSummary;
     if (state.overlappingFiles.length > 0) {
-      await postComment(
-        epic.goal.id,
-        null,
+      await postEpicComment(
+        epic,
         `**Epic Reviewer Overlap Detection**\n\nMultiple ticket branches modify the same files:\n${state.overlapSummary}\n\nEpic Reviewer will switch to reconciliation mode on a follow-up pass if build authority stays red.`
-      ).catch(() => {});
+      );
     }
   }
 
@@ -912,7 +1106,7 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
 
     let reviewContent: string;
     try {
-      reviewContent = await callZAI(prompt, buildSystemPrompt());
+      reviewContent = await callRemoteLLM(prompt, buildSystemPrompt());
     } catch (err: any) {
       console.error(`[epic-reviewer-agent] GLM-5 call failed for ${epic.goal.title}: ${err.message}`);
       break;
@@ -937,9 +1131,11 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
       .map(result => `${result.ticketIdentifier} (${result.branchName})\n${result.output || 'Unknown build failure'}`)
       .join('\n\n');
 
-    // Deletion audit: check if duplicates were flagged but model didn't delete any
+    // Deletion audit: check if duplicates were flagged but model didn't delete any.
+    // hasDuplicateWarning covers basename collisions; driftFlagged covers [DRIFT]-tagged tickets.
     const deleteCount = result.fixes.filter(f => f.operation === 'delete').length;
-    const duplicatesResolved = !hasDuplicateWarning || deleteCount > 0;
+    const driftFlagged = /## Drift-Flagged Tickets/.test(prompt);
+    const duplicatesResolved = (!hasDuplicateWarning && !driftFlagged) || deleteCount > 0;
     const goalMet = result.goalSatisfied;
     const buildGreen = failures.length === 0;
 
@@ -967,14 +1163,13 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
         '\n\n⚠ GOAL NOT SATISFIED: The epic goal is not yet met. Next attempt must address gaps.';
     }
 
-    await postComment(
-      epic.goal.id,
-      null,
+    await postEpicComment(
+      epic,
       `**Epic Reviewer Attempt ${state.attemptCount}/${MAX_EPIC_RETRIES}**\n\n` +
       `${issues.join('\n')}\n\n` +
       `Summary:\n${result.summary}\n\n` +
       (state.lastBuildErrors ? `Build failures:\n\`\`\`\n${truncate(state.lastBuildErrors, 5000)}\n\`\`\`` : '')
-    ).catch(() => {});
+    );
   }
 
   epicRetryStates.set(epic.goal.id, { ...state });

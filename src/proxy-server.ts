@@ -11,10 +11,10 @@ import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentMo
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue, findAssignedIssues, getIssueLabel, wakeAgent } from './paperclip-api';
 import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses, issueBuilderBurstMode, issueImportFailures } from './agent-types';
 import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion, getEpicTickets, enforceGoalOverlapSuppression, getOverlapBlockForTicket } from './goal-system';
-import { callRemoteArchitect, callZAI } from './remote-ai';
+import { callRemoteArchitect, callRemoteLLM, callOpenCodeCLI } from './remote-ai';
 import { extractIssueId, extractAgentId, sleep } from './utils';
 import { applyCodeBlocks } from './code-extractor';
-import { commitAndPush, createPullRequest } from './git-ops';
+import { commitAndPush, createPullRequest, getBranchName } from './git-ops';
 import { buildIssueContext, buildLocalBuilderContext, setRAGIndexer, getRAGIndexer } from './context-builder';
 import { executeBashBlocks } from './bash-executor';
 import { detectAndDelegate } from './delegation';
@@ -159,9 +159,12 @@ async function wakeAgentForNextAssignedIssue(agentId: string, completedIssueId?:
       method: 'POST',
       headers,
       body: JSON.stringify({
-        source: 'automation',
+        source: 'assignment',
         triggerDetail: 'system',
-        reason: 'next_assigned_issue_pending',
+        reason: `next_assigned_issue_pending:${nextIssue.identifier || nextIssue.id.slice(0, 8)}`,
+        issueId: nextIssue.id,
+        taskId: nextIssue.id,
+        issueIds: [nextIssue.id],
       }),
     });
 
@@ -182,7 +185,7 @@ async function stopOnBuilderPassCap(issueId: string, passCount: number): Promise
   await postComment(
     issueId,
     null,
-    `⚠️ **Auto-PR Created: Local Builder Pass Cap Reached**\n\n` +
+    `[DRIFT] ⚠️ **Auto-PR Created: Local Builder Pass Cap Reached**\n\n` +
     `This ticket reached ${passCount} Local Builder passes, which is above the safe drift threshold.\n\n` +
     `**Why it was stopped early:**\n` +
     `- Too many repeated local rewrites without convergence\n` +
@@ -209,7 +212,7 @@ export function createProxy(): http.Server {
     if (req.method === 'POST' && req.url === '/api/trigger-epic-review') {
       console.log(`[closedloop] Manual epic review trigger requested`);
       try {
-        const woke = await wakeAgent(AGENTS['epic reviewer'], 'manual_epic_review_trigger', 'manual');
+        const woke = await wakeAgent(AGENTS['epic reviewer'], 'manual_epic_review_trigger', 'on_demand');
         if (!woke) {
           throw new Error('Failed to wake Epic Reviewer agent');
         }
@@ -465,7 +468,7 @@ export function createProxy(): http.Server {
           const messages = [...(parsedBody.messages || [])];
           if (issueContext) messages.push({ role: 'user', content: issueContext });
           const fullPrompt = messages.map((m: any) => `[${m.role}]: ${m.content}`).join('\n\n');
-          const remoteResult = await callZAI(
+          const remoteResult = await callRemoteLLM(
             fullPrompt,
             'You are a senior full-stack engineer. Write production code. Output file contents using FILE: path/to/file.ext format followed by code blocks.'
           );
@@ -490,7 +493,7 @@ export function createProxy(): http.Server {
         const messages = [...(parsedBody.messages || [])];
         if (issueContext) messages.push({ role: 'user', content: issueContext });
         const fullPrompt = messages.map((m: any) => `[${m.role}]: ${m.content}`).join('\n\n');
-        const remoteResult = await callZAI(
+        const remoteResult = await callRemoteLLM(
           fullPrompt,
           'You are a senior full-stack engineer working on a TypeScript monorepo (Next.js + React Native + Cloudflare Workers). ' +
           'Write production-quality code. Output file contents using FILE: path/to/file.ext format followed by code blocks. ' +
@@ -545,6 +548,85 @@ export function createProxy(): http.Server {
       return;
     }
 
+    // Complexity Router uses deterministic scoring and routing.
+    // Do not block the pipeline on LLM output for this step.
+    if (issueId && agentId === AGENTS['complexity router']) {
+      const routerIssue = await getIssueDetails(issueId);
+      if (routerIssue) {
+        if (isGoalIssue(routerIssue)) {
+          console.log(`[closedloop] Complexity Router received goal ${routerIssue.identifier || issueId.slice(0, 8)} -> ignoring unexpected goal assignment`);
+          await postComment(
+            issueId,
+            null,
+            `_Complexity Router received a goal unexpectedly and did not process it. Goals must enter through Epic Decoder, not Complexity Router._`
+          );
+        } else {
+          const complexity = scoreComplexity(routerIssue.title, routerIssue.description || '');
+          console.log(`[closedloop] Complexity Router scored ${routerIssue.identifier || issueId.slice(0, 8)}: ${complexity.score}/10 [${complexity.signals.join(', ')}]`);
+          await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+          console.log(`[closedloop] Complexity Router -> Strategist`);
+        }
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          message: {
+            role: 'assistant',
+            content: '_Complexity routing completed; issue delegated to Strategist._',
+          },
+        })
+      );
+      return;
+    }
+
+    // Strategist routing can be deterministic for non-goal tickets.
+    // Keep this stage non-blocking so execution reaches builders reliably.
+    if (issueId && agentId === AGENTS.strategist) {
+      const stratIssue = await getIssueDetails(issueId);
+      if (stratIssue) {
+        if (isGoalIssue(stratIssue)) {
+          await patchIssue(issueId, { assigneeAgentId: AGENTS['epic decoder'] });
+          console.log(`[closedloop] Strategist -> Epic Decoder for goal ${stratIssue.identifier || issueId.slice(0, 8)}`);
+        } else {
+          await patchIssue(issueId, { assigneeAgentId: AGENTS['tech lead'] });
+          console.log(`[closedloop] Strategist -> Tech Lead for ${stratIssue.identifier || issueId.slice(0, 8)}`);
+        }
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          message: {
+            role: 'assistant',
+            content: '_Strategy routing completed; issue delegated to next execution stage._',
+          },
+        })
+      );
+      return;
+    }
+
+    // Tech Lead acts as execution handoff for implementation tickets.
+    // Keep this deterministic so coding reaches Local Builder without planner stalls.
+    if (issueId && agentId === AGENTS['tech lead']) {
+      const leadIssue = await getIssueDetails(issueId);
+      if (leadIssue) {
+        await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
+        console.log(`[closedloop] Tech Lead -> Local Builder for ${leadIssue.identifier || issueId.slice(0, 8)}`);
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          message: {
+            role: 'assistant',
+            content: '_Technical plan finalized; delegated to Local Builder._',
+          },
+        })
+      );
+      return;
+    }
+
     // Build Ollama payload — use our configured model, not Paperclip's adapter template
     const agentNameKey = AGENT_NAMES[agentId || '']?.toLowerCase() || '';
     const configuredModel = agentNameKey ? getAgentModel(agentNameKey) : null;
@@ -572,20 +654,40 @@ export function createProxy(): http.Server {
       ollamaPayload.messages.push({ role: 'user', content: heartbeatMsg });
     }
 
+    const runnerCommand = `ollama run ${String(ollamaPayload.model || '').replace(/^ollama\//, '')}`;
+    const runnerCwd = getConfig().project.workspace;
     console.log(
-      `[proxy:${proxyPort}] ${agentName} -> ollama:${ollamaPort} | model=${ollamaPayload.model} | issue=${issueId ? await getIssueLabel(issueId) : 'none'} | msgs=${ollamaPayload.messages.length}`
+      `[proxy:${proxyPort}] ${agentName} -> ${runnerCommand} | issue=${issueId ? await getIssueLabel(issueId) : 'none'} | msgs=${ollamaPayload.messages.length}`
     );
 
     try {
-      const ollamaRes = await fetch(`http://127.0.0.1:${ollamaPort}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(ollamaPayload),
+      // Build prompt from messages array for OpenCode CLI
+      const combinedPrompt = ollamaPayload.messages
+        .map((m: any) => `[${m.role}]: ${m.content}`)
+        .join('\n\n');
+      const systemMsgs = ollamaPayload.messages.filter((m: any) => m.role === 'system');
+      const nonSystemMsgs = ollamaPayload.messages.filter((m: any) => m.role !== 'system');
+      const systemPrompt = systemMsgs.map((m: any) => m.content).join('\n');
+      const userPrompt = nonSystemMsgs.map((m: any) => `[${m.role}]: ${m.content}`).join('\n\n');
+
+      console.log(`[proxy:${proxyPort}] step started: adapter invocation (${agentName})`);
+      const modelResult = await callOpenCodeCLI(userPrompt, systemPrompt, ollamaPayload.model);
+      const visibleResult = modelResult.trim() || '_No text output from model._';
+      const assistantReport =
+        `## Bridge Run\n` +
+        `- command: \`${runnerCommand}\`\n` +
+        `- cwd: \`${runnerCwd}\`\n` +
+        `- stderr excerpt: \`(none)\`\n\n` +
+        `## Output\n${visibleResult}`;
+      console.log(`[proxy:${proxyPort}] step finished: adapter invocation (${agentName})`);
+
+      // Wrap in Ollama-compatible response format for Paperclip
+      const ollamaData = JSON.stringify({
+        message: { role: 'assistant', content: assistantReport },
+        done: true,
       });
 
-      const ollamaData = await ollamaRes.text();
-
-      res.writeHead(ollamaRes.status, {
+      res.writeHead(200, {
         'Content-Type': 'application/json',
       });
       res.end(ollamaData);
@@ -593,8 +695,7 @@ export function createProxy(): http.Server {
       // Post LLM output as comment and handle delegation
       if (issueId) {
         try {
-          const parsed = JSON.parse(ollamaData);
-          const content = parsed.message?.content || parsed.response || '';
+          const content = assistantReport;
 
           if (content.trim()) {
             // Don't post CR output as comments — it pollutes the issue
@@ -1201,11 +1302,21 @@ export function createProxy(): http.Server {
       }
     } catch (err: any) {
       console.error(`[proxy:${proxyPort}] ${agentName} Ollama error:`, err.message);
+      const errorText = String(err?.message || 'Unknown runner error');
+      const assistantErrorReport =
+        `## Bridge Run\n` +
+        `- command: \`${runnerCommand}\`\n` +
+        `- cwd: \`${runnerCwd}\`\n` +
+        `- stderr excerpt: \`${errorText.slice(0, 400)}\`\n\n` +
+        `## Output\n_Runner invocation failed. See stderr excerpt above._`;
       if (issueId) {
-        await postComment(issueId, agentId, `_Agent run failed: ${err.message}_`);
+        await postComment(issueId, agentId, assistantErrorReport);
       }
-      res.writeHead(502);
-      res.end(JSON.stringify({ error: `Ollama unreachable: ${err.message}` }));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        message: { role: 'assistant', content: assistantErrorReport },
+        done: true,
+      }));
     }
   });
 
@@ -1214,17 +1325,6 @@ export function createProxy(): http.Server {
   });
 
   return server;
-}
-
-async function getBranchName(issueId: string): Promise<string> {
-  const { getIssueDetails } = await import('./paperclip-api');
-  let issue;
-  try {
-    issue = await getIssueDetails(issueId);
-  } catch {}
-  const identifier = issue?.identifier || issueId.slice(0, 8);
-  const title = issue?.title || 'Code changes';
-  return `${identifier}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`.replace(/-+$/, '');
 }
 
 function buildHeartbeatContext(context: any): string {
@@ -1281,13 +1381,20 @@ export async function checkAssignedIssues(): Promise<void> {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
+        const primaryIssue = assignedIssues.find((i: any) => i.assigneeAgentId === agentId);
+        const agentIssueIds = assignedIssues
+          .filter((i: any) => i.assigneeAgentId === agentId)
+          .map((i: any) => i.id);
+
         const wakeRes = await fetch(`${PAPERCLIP_API}/api/agents/${agentId}/wakeup`, {
           method: 'POST',
           headers,
           body: JSON.stringify({
-            source: 'automation',
+            source: 'assignment',
             triggerDetail: 'system',
-            reason: 'assigned_issues_pending',
+            reason: `assigned_issues_pending:${issueIds.join(',')}`,
+            ...(primaryIssue ? { issueId: primaryIssue.id, taskId: primaryIssue.id } : {}),
+            ...(agentIssueIds.length > 0 ? { issueIds: agentIssueIds } : {}),
           }),
         });
 

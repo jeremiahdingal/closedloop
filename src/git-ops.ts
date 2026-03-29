@@ -16,6 +16,7 @@ const SCREENSHOT_BASE = path.join(__dirname, '..', '.screenshots');
 
 /** Detect default branch name (main vs master) */
 export function getDefaultBranch(): string {
+  if (process.env.PAPERCLIP_BASE_BRANCH) return process.env.PAPERCLIP_BASE_BRANCH;
   try {
     const result = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
       cwd: WORKSPACE, stdio: 'pipe', timeout: 5000,
@@ -31,15 +32,25 @@ export function getDefaultBranch(): string {
   }
 }
 
+export function formatBranchName(identifier: string, title: string, maxTitleLength = 40): string {
+  const safeIdentifier = String(identifier || 'issue').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-+$/, '');
+  const safeTitle = String(title || 'code-changes')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+$/, '')
+    .slice(0, maxTitleLength);
+  return `${safeIdentifier}-${safeTitle}`.replace(/-+$/, '');
+}
+
 export async function getBranchName(issueId: string): Promise<string> {
   let issue;
   try {
     issue = await getIssueDetails(issueId);
   } catch {}
 
-  const identifier = (issue?.identifier || issueId.slice(0, 8)).toLowerCase();
+  const identifier = issue?.identifier || issueId.slice(0, 8);
   const title = issue?.title || 'Code changes';
-  return `${identifier}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`.replace(/-+$/, '');
+  return formatBranchName(identifier, title);
 }
 
 export interface CommitResult {
