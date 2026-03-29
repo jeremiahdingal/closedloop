@@ -14,9 +14,60 @@ const WORKSPACE = getWorkspace();
 const GH_CLI = 'C:\\Program Files\\GitHub CLI\\gh';
 const SCREENSHOT_BASE = path.join(__dirname, '..', '.screenshots');
 
+function revisionExists(revision: string): boolean {
+  try {
+    execSync(`git rev-parse --verify ${revision}`, {
+      cwd: WORKSPACE,
+      stdio: 'pipe',
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveBaseRevision(preferredBranch: string): string {
+  const candidates = [
+    preferredBranch,
+    `origin/${preferredBranch}`,
+    'main',
+    'origin/main',
+    'master',
+    'origin/master',
+  ];
+  for (const candidate of candidates) {
+    if (revisionExists(candidate)) return candidate;
+  }
+  return preferredBranch;
+}
+
+function cleanAutomationArtifacts(opts: { cwd: string; stdio: 'pipe'; timeout: number }): void {
+  const generatedDirs = [
+    '.paperclip',
+    '.reflections',
+    '.tickets',
+    '.zai',
+    '.grok',
+    'output',
+  ];
+
+  for (const dir of generatedDirs) {
+    try {
+      execSync(`git clean -fd -- "${dir}"`, opts);
+    } catch {}
+  }
+}
+
 /** Detect default branch name (main vs master) */
 export function getDefaultBranch(): string {
-  if (process.env.PAPERCLIP_BASE_BRANCH) return process.env.PAPERCLIP_BASE_BRANCH;
+  const envBase = process.env.PAPERCLIP_BASE_BRANCH?.trim();
+  if (envBase) {
+    if (revisionExists(envBase) || revisionExists(`origin/${envBase}`)) {
+      return envBase;
+    }
+    console.warn(`[git] PAPERCLIP_BASE_BRANCH="${envBase}" not found; falling back to detected default branch`);
+  }
   try {
     const result = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
       cwd: WORKSPACE, stdio: 'pipe', timeout: 5000,
@@ -70,6 +121,7 @@ export async function commitAndPush(
 
   const branchName = await getBranchName(issueId);
   const defaultBranch = getDefaultBranch();
+  const baseRevision = resolveBaseRevision(defaultBranch);
   let issue;
   try {
     issue = await getIssueDetails(issueId);
@@ -80,14 +132,20 @@ export async function commitAndPush(
   const opts = { cwd: WORKSPACE, stdio: 'pipe' as const, timeout: 30000 };
 
   try {
+    cleanAutomationArtifacts(opts);
+
     try {
       execSync('git checkout -- .', opts);
     } catch {}
 
     try {
-      execSync(`git checkout -b ${branchName} ${defaultBranch}`, opts);
-    } catch {
-      execSync(`git checkout ${branchName}`, opts);
+      execSync(`git checkout -b ${branchName} ${baseRevision}`, opts);
+    } catch (createErr: any) {
+      try {
+        execSync(`git checkout ${branchName}`, opts);
+      } catch {
+        throw createErr;
+      }
     }
 
     for (const f of files) {
@@ -154,6 +212,7 @@ export async function commitAndPush(
 export async function createPullRequest(issueId: string): Promise<void> {
   const branchName = await getBranchName(issueId);
   const defaultBranch = getDefaultBranch();
+  const diffBaseRevision = resolveBaseRevision(defaultBranch);
   let issue;
   try {
     issue = await getIssueDetails(issueId);
@@ -165,6 +224,8 @@ export async function createPullRequest(issueId: string): Promise<void> {
   const opts = { cwd: WORKSPACE, stdio: 'pipe' as const, timeout: 30000 };
 
   try {
+    cleanAutomationArtifacts(opts);
+
     let existingPr = '';
     try {
       const prState = execSync(
@@ -228,7 +289,7 @@ export async function createPullRequest(issueId: string): Promise<void> {
     prBody += '## Changes\n(see commits on branch)\n\n';
 
     try {
-      const diffStat = execSync(`git diff --stat ${defaultBranch}..${branchName}`, {
+      const diffStat = execSync(`git diff --stat ${diffBaseRevision}..${branchName}`, {
         ...opts,
         timeout: 30000,
       })
