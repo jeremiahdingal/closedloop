@@ -186,15 +186,3 @@ export function formatDriftReport(issues: DriftIssue[]): string {
   
   return report;
 }
-
-export async function writeDriftContext(): Promise<void> {
-  const issues = await detectDriftIssues();
-  const report = formatDriftReport(issues);
-  
-  if (report) {
-    // Write to workspace root so agent sees it
-    const driftFile = path.join(WORKSPACE, 'DRIFT_ISSUES.md');
-    fs.writeFileSync(driftFile, report);
-    console.log(`[drift-detector] Wrote drift report: ${issues.length} issues`);
-  }
-}

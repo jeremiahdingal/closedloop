@@ -29,6 +29,7 @@ import { commitAndPush, createPullRequest, getBranchName } from './git-ops';
 import { buildIssueContext, buildLocalBuilderContext, setRAGIndexer, getRAGIndexer } from './context-builder';
 import { executeBashBlocks } from './bash-executor';
 import { writeIssueContext } from './pre-execution';
+import { detectDriftIssues, formatDriftReport } from './drift-detector';
 import { detectAndDelegate } from './delegation';
 import { runArtistStage } from './artist-recorder';
 import { runDiffGuardian } from './diff-guardian';
@@ -265,7 +266,15 @@ async function wakeAgentForNextAssignedIssue(agentId: string, completedIssueId?:
         `Process the assigned issue above. Read the workspace files directly.`,
         `Do not ask for pasted content — use the filesystem.`,
       ].join('\n');
-      fs.writeFileSync(path.join(workspace, 'INSTRUCTIONS.md'), instructionsContent, 'utf8');
+      
+      // Detect and inject drift warnings
+      const driftIssues = await detectDriftIssues();
+      let driftWarning = '';
+      if (driftIssues.length > 0) {
+        driftWarning = `\n\n## ⚠️ EXISTING DRIFT ISSUES\n\n` + formatDriftReport(driftIssues) + 
+          `\nDO NOT create files that add to these drift issues.`;
+      }
+      fs.writeFileSync(path.join(workspace, 'INSTRUCTIONS.md'), instructionsContent + driftWarning, 'utf8');
     } catch {}
 
     const wakeRes = await fetch(`${PAPERCLIP_API}/api/agents/${agentId}/wakeup`, {
@@ -1532,8 +1541,17 @@ export async function checkAssignedIssues(): Promise<void> {
 
           try {
             const workspace = getWorkspace();
-            fs.writeFileSync(path.join(workspace, 'INSTRUCTIONS.md'), instructionsContent, 'utf8');
-            console.log(`[closedloop] Wrote INSTRUCTIONS.md for ${agentName} (${allAgentIssues.length} issues)`);
+            
+            // Detect and inject drift warnings
+            const driftIssues = await detectDriftIssues();
+            let driftWarning = '';
+            if (driftIssues.length > 0) {
+              driftWarning = `\n\n## ⚠️ EXISTING DRIFT ISSUES\n\n` + formatDriftReport(driftIssues) + 
+                `\nDO NOT create files that add to these drift issues.`;
+            }
+            
+            fs.writeFileSync(path.join(workspace, 'INSTRUCTIONS.md'), instructionsContent + driftWarning, 'utf8');
+            console.log(`[closedloop] Wrote INSTRUCTIONS.md for ${agentName} (${allAgentIssues.length} issues)${driftIssues.length > 0 ? `, ${driftIssues.length} drift issues` : ''}`);
           } catch (err: any) {
             console.log(`[closedloop] Failed to write INSTRUCTIONS.md: ${err.message}`);
           }
