@@ -1,31 +1,45 @@
 # Native Adapter Migration Handoff
 
 ## Objective
-Migrate selected agents off the current HTTP bridge path and onto Paperclip native local adapters where direct repo access gives a real upside.
+Continue the native-adapter migration without using any local Paperclip fork copy.
 
 This handoff is intentionally split into two phases:
 1. `Epic Reviewer` first
 2. Expand the native local pattern to the next repo-aware agents that benefit from workspace reads
 
 Do not redesign the whole orchestration system in one pass.
+Do not use `packages/paperclip-fork`; that directory has been deleted from this workspace.
 
 ---
 
-## Progress So Far
-The migration is no longer just a proposal. These items are already in place:
-1. `Epic Reviewer` is on `codex_local`.
-2. The upstream orchestration agents are being moved to `opencode_local`.
-3. Wakeup payloads now carry issue/task linkage in both `payload` and `contextSnapshot`.
-4. Wake contexts now get enriched with issue title, description, latest comment, and work product summaries.
-5. OpenCode runs now emit a non-empty fallback summary when they finish without final text.
-6. Reviewer timer/retry runs are gated so they only happen with reviewable `in_review` issue context.
-7. `Coder Remote` no longer points at an unavailable OpenCode model.
-8. Build and adapter sync tests pass after the migration updates.
+## Verified Current State
+These items are present in the main repo right now:
+1. `Epic Reviewer` sync logic targets `codex_local` in [src/adapter-config.ts](C:/Users/dinga/Projects/closedloop/src/adapter-config.ts).
+2. Upstream orchestration sync logic targets `opencode_local` for:
+   - `Complexity Router`
+   - `Strategist`
+   - `Tech Lead`
+   - `Local Builder`
+   - `Coder Remote`
+   - `Visual Reviewer`
+   - `Sentinel`
+   - `Deployer`
+   - `Epic Decoder`
+3. Repo-aware sync logic targets `opencode_local` for:
+   - `Scaffold Architect`
+   - `Reviewer`
+   - `Diff Guardian`
+4. The wake helper in [src/paperclip-api.ts](C:/Users/dinga/Projects/closedloop/src/paperclip-api.ts) does send `issueId` and `issueIds` inside both `payload` and `contextSnapshot`.
+5. `sanitizeForWin1252()` already exists in [src/paperclip-api.ts](C:/Users/dinga/Projects/closedloop/src/paperclip-api.ts) and normalizes arrows and other non-WIN1252 characters for comment posting.
 
-What still needs attention:
-1. Live UI verification for the migrated upstream agents.
-2. Watching the next few real runs for blank-output or context-loss regressions.
-3. Deciding whether any of the remaining HTTP holdouts should also move to native local execution.
+What is not verified in the main repo path:
+1. No main-repo file currently proves that server-side wake context enrichment landed in the non-fork runtime.
+2. No main-repo file currently proves that OpenCode fallback summaries landed in the non-fork runtime.
+3. No end-to-end autonomous epic flow is verified from the current non-fork path.
+
+Workspace note:
+1. `packages/paperclip-fork` was deleted and shows as a deleted path in git status.
+2. The remaining untracked local artifacts are `.playwright-cli/`, `.playwright/`, `output/`, and `pnpm-lock.yaml`.
 
 ---
 
@@ -59,6 +73,7 @@ Do not do any of the following in this migration:
 3. Do not delete all prompt context blindly.
 4. Do not reintroduce adapter auto-rewrite loops for migrated agents.
 5. Do not change models unless required for the native adapter path.
+6. Do not recreate or use `packages/paperclip-fork`.
 
 ---
 
@@ -69,9 +84,9 @@ Do not do any of the following in this migration:
 Move `Epic Reviewer` from `http` to a Paperclip native local adapter so it can inspect the repo directly and stop depending on giant monorepo/context injection.
 
 Status:
-1. Done: `Epic Reviewer` is on `codex_local`.
-2. Done: its prompt is trimmed to a compact review contract.
-3. Remaining: verify live Paperclip runs still look healthy and useful.
+1. Done in repo config/sync logic: `Epic Reviewer` is targeted to `codex_local`.
+2. Done in repo config/sync logic: its prompt is trimmed to a compact review contract.
+3. Remaining: verify the live Paperclip environment actually reflects that config and produces useful runs.
 
 Prefer:
 1. native Codex CLI adapter if that is the Paperclip-supported local adapter you want
@@ -161,11 +176,11 @@ Apply the same native local repo-aware pattern to the next agents where direct w
 This phase is explicitly based on the `opencode_local` workspace-read verification we already completed.
 
 Status:
-1. In progress: upstream orchestration agents are being moved to `opencode_local`.
-2. Done: the adapter sync now targets the upstream orchestration set.
-3. Remaining: validate the live runs and trim any prompt/context pieces that are no longer needed.
+1. In progress in repo config/sync logic: upstream orchestration agents are targeted to `opencode_local`.
+2. Done in repo config/sync logic: the adapter sync now targets the upstream orchestration set.
+3. Remaining: validate the live runs against the actual Paperclip environment and trim any prompt/context pieces that are no longer needed.
 
-## Recommended Phase 2 Order
+## Recommended Phase 2 Verification Order
 1. `Complexity Router`
 2. `Strategist`
 3. `Tech Lead`
@@ -176,7 +191,7 @@ Status:
 8. `Deployer`
 9. `Epic Decoder`
 
-Keep `Scaffold Architect`, `Reviewer`, and `Diff Guardian` on the native local path as already migrated agents.
+Keep `Scaffold Architect`, `Reviewer`, and `Diff Guardian` on the native local path as already targeted repo-aware agents.
 
 ## Why These Agents
 1. They are inspection-heavy or repo-aware by nature.
@@ -204,10 +219,10 @@ Keep `Scaffold Architect`, `Reviewer`, and `Diff Guardian` on the native local p
    - verify agent IDs and any model/config assumptions used by migration scripts or code
 
 ## Concrete Tasks
-1. For `Scaffold Architect`, remove any unnecessary injected repo dump and keep only concise task instructions.
-2. For `Reviewer`, do the same and preserve structured approval semantics.
-3. For `Diff Guardian`, preserve fail-closed drift behavior while trimming prompt inflation.
-4. Remove each migrated agent from bridge-side adapter enforcement.
+1. Verify live adapter state for each migrated agent through the real Paperclip API/UI, not through any deleted fork path.
+2. Confirm `Scaffold Architect`, `Reviewer`, and `Diff Guardian` actually run with useful workspace-aware output.
+3. Confirm `Complexity Router` and `Tech Lead` can start without immediately stalling the flow.
+4. Remove any remaining unnecessary injected repo dump and keep only concise task instructions.
 5. Verify that each migrated agent shows workspace reads in the Paperclip UI.
 
 ## Prompt Design Rule for Phase 2
@@ -267,16 +282,15 @@ The Paperclip run page for a migrated agent should show:
 `Epic Reviewer` migrated to native local adapter with trimmed prompt stuffing and validated Paperclip UI runs.
 
 ## Deliverable B
-`Scaffold Architect`, then `Reviewer`, then `Diff Guardian` migrated to the same pattern with trimmed prompt stuffing and no bridge reliance.
+The repo-aware and upstream orchestration agents validated on the real Paperclip runtime with trimmed prompt stuffing and no reliance on `packages/paperclip-fork`.
 
 ---
 
 ## Final Checklist
-1. Epic Reviewer migrated and validated
+1. Epic Reviewer targeted to `codex_local` and validated in the real environment
 2. Epic Reviewer no longer forced to HTTP
 3. Epic Reviewer prompt materially trimmed
-4. Upstream orchestration agents migrated to native local OpenCode
+4. Upstream orchestration agents targeted to native local OpenCode and validated in the real environment
 5. Wake payloads/context snapshots carry real issue linkage
-6. OpenCode fallback summaries are visible when runs emit no text
-7. Reviewer timer/retry logic only wakes on reviewable `in_review` context
-8. Paperclip UI visibly shows native local workspace reads for migrated agents
+6. Paperclip UI visibly shows native local workspace reads for migrated agents
+7. Any runtime-specific fixes are made in the real Paperclip path, not in a deleted fork copy
