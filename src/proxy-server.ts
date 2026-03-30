@@ -20,7 +20,7 @@ import {
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue, findAssignedIssues, getIssueLabel, wakeAgent } from './paperclip-api';
 import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses, issueBuilderBurstMode, issueImportFailures } from './agent-types';
 import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion, getEpicTickets, enforceGoalOverlapSuppression, getOverlapBlockForTicket } from './goal-system';
-import { callRemoteArchitect, callRemoteLLM, callOpenCodeCLI } from './remote-ai';
+import { callRemoteArchitect, callRemoteLLM, callModelCLI } from './remote-ai';
 import { extractIssueId, extractAgentId, sleep } from './utils';
 import { applyCodeBlocks } from './code-extractor';
 import { commitAndPush, createPullRequest, getBranchName } from './git-ops';
@@ -748,7 +748,7 @@ export function createProxy(): http.Server {
     );
 
     try {
-      // Build prompt from messages array for OpenCode CLI
+      // Build prompt from messages array for model CLI
       const combinedPrompt = ollamaPayload.messages
         .map((m: any) => `[${m.role}]: ${m.content}`)
         .join('\n\n');
@@ -758,7 +758,7 @@ export function createProxy(): http.Server {
       const userPrompt = nonSystemMsgs.map((m: any) => `[${m.role}]: ${m.content}`).join('\n\n');
 
       console.log(`[proxy:${proxyPort}] step started: adapter invocation (${agentName})`);
-      const modelResult = await callOpenCodeCLI(userPrompt, systemPrompt, ollamaPayload.model);
+      const modelResult = await callModelCLI(userPrompt, systemPrompt, ollamaPayload.model);
       const visibleResult = modelResult.trim() || '_No text output from model._';
       const assistantReport =
         `## Bridge Run\n` +

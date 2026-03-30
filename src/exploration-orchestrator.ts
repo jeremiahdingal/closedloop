@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { getWorkspace, getOllamaPorts, getAgentModel } from './config';
-import { callOpenCodeCLI } from './remote-ai';
+import { callModelCLI } from './remote-ai';
 import { getIssueDetails, postComment, getIssueComments } from './paperclip-api';
 import { AGENTS } from './agent-types';
 import { applyCodeBlocks } from './code-extractor';
@@ -129,8 +129,8 @@ async function runBuilderInWorktree(
     console.log(`[explore] Running approach ${approach.label} in ${worktree.path}`);
     console.log(`[explore] Model: ${model}, prompt length: ${prompt.length}`);
 
-    // Call Ollama via OpenCode CLI
-    const content = await callOpenCodeCLI(prompt, '', model);
+    // Call model CLI (Ollama)
+    const content = await callModelCLI(prompt, '', model);
 
     if (!content.trim()) {
       result.buildOutput = 'Builder produced no output';

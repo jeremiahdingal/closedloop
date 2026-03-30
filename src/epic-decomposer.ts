@@ -13,7 +13,7 @@
 
 import { getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentModel, loadConfig } from './config';
 import { AGENTS } from './agent-types';
-import { callOpenCodeCLI } from './remote-ai';
+import { callModelCLI } from './remote-ai';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -92,7 +92,7 @@ async function decomposeEpic(epic: Goal): Promise<void> {
   try {
     const timeoutSec = loadConfig().ollama.timeouts?.strategist || 900;
 
-    const content = await callOpenCodeCLI(userPrompt, systemPrompt, model, timeoutSec * 1000);
+    const content = await callModelCLI(userPrompt, systemPrompt, model, timeoutSec * 1000);
     console.log(`[epic-decomposer] LLM response: ${content.length} chars`);
 
     // Parse sub-tickets from response

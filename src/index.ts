@@ -9,7 +9,7 @@ import { createProxy, checkAssignedIssues, initializeRAG } from './proxy-server'
 import { getConfig } from './config';
 import { checkActiveGoalsForDecode } from './epic-decoder';
 import { reloadGoalTicketMappings } from './goal-system';
-import { ensureOpencodeRunVisibilityConfig, ensureOrchestrationHttpAdapters } from './opencode-agent-config';
+import { ensureEpicReviewerNativeAdapter, ensureOrchestrationHttpAdapters } from './adapter-config';
 import { monitorStuckRuns, normalizeOrchestrationRecovery } from './run-guardrails';
 
 // Load configuration
@@ -45,11 +45,17 @@ setInterval(() => {
   ensureOrchestrationHttpAdapters().catch(() => {});
 }, 5 * 60 * 1000);
 
+// Keep Epic Reviewer on the native local adapter so it can inspect the workspace
+// directly and keep the run UI visible without the bridge path.
+setInterval(() => {
+  ensureEpicReviewerNativeAdapter().catch(() => {});
+}, 5 * 60 * 1000);
+
 // On startup: reload goal/ticket mappings, reset errored agents, then start
 // active-goal decomposition and assigned-issue checking.
 setTimeout(async () => {
+  await ensureEpicReviewerNativeAdapter();
   await ensureOrchestrationHttpAdapters();
-  await ensureOpencodeRunVisibilityConfig();
   await normalizeOrchestrationRecovery();
   await reloadGoalTicketMappings();
   await checkActiveGoalsForDecode();

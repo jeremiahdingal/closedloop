@@ -280,17 +280,7 @@ export function getAgentModel(agentName: string): string | undefined {
   return loadConfig().ollama.models[agentName];
 }
 
-export function getRunnerBackend(): 'ollama_cli' | 'opencode_cli' | 'hybrid' {
-  const fromEnv = (process.env.CLOSEDLOOP_RUNNER_BACKEND || '').trim().toLowerCase();
-  if (fromEnv === 'opencode_cli' || fromEnv === 'hybrid' || fromEnv === 'ollama_cli') {
-    return fromEnv as 'ollama_cli' | 'opencode_cli' | 'hybrid';
-  }
-
-  const fromConfig = loadConfig().ollama.runnerBackend;
-  if (fromConfig === 'opencode_cli' || fromConfig === 'hybrid' || fromConfig === 'ollama_cli') {
-    return fromConfig;
-  }
-
+export function getRunnerBackend(): 'ollama_cli' {
   return 'ollama_cli';
 }
 

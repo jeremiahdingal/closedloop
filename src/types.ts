@@ -106,7 +106,7 @@ export interface ProjectConfig {
     ollamaPort: number;
     models: Record<string, string>;
     timeouts: Record<string, number>;
-    runnerBackend?: 'ollama_cli' | 'opencode_cli' | 'hybrid';
+    runnerBackend?: 'ollama_cli';
     runnerTimeoutMs?: number;
     stuckRunThresholdMs?: number;
     stuckRunMaxRetries?: number;

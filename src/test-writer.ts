@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspace, getOllamaPorts, getAgentModel } from './config';
-import { callOpenCodeCLI } from './remote-ai';
+import { callModelCLI } from './remote-ai';
 
 export interface TestWriterResult {
   filesWritten: string[];
@@ -95,7 +95,7 @@ RULES:
   const userPrompt = `Generate a Vitest test for this file at ${filePath}:\n\n\`\`\`typescript\n${sourceCode}\n\`\`\``;
 
   try {
-    let content = await callOpenCodeCLI(userPrompt, systemPrompt, model, 120000);
+    let content = await callModelCLI(userPrompt, systemPrompt, model, 120000);
 
     // Extract code block if wrapped in markdown
     const codeBlockMatch = content.match(/```(?:typescript|ts)?\n([\s\S]*?)```/);

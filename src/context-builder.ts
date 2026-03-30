@@ -312,13 +312,25 @@ export async function buildLocalBuilderContext(
   if (!baseContext) return null;
 
   let context = baseContext;
+  const issue = await getIssueDetails(issueId);
 
   // Get comments to find which files are being discussed
   const comments = await getIssueComments(issueId);
   const filesToRead = new Set<string>();
+  const filePathRegex = /[`']?([\w./\\-]+\.(tsx?|json))[`']?/g;
+
+  // Seed file context from issue description (e.g. "Files: path/to/file.tsx")
+  if (issue?.description) {
+    const issueMatches = issue.description.matchAll(filePathRegex);
+    for (const match of issueMatches) {
+      const filePath = match[1];
+      if (filePath.match(/\.(tsx?|json)$/)) {
+        filesToRead.add(filePath);
+      }
+    }
+  }
 
   // Extract file paths from Tech Lead's task assignment (most recent relevant comment)
-  const filePathRegex = /[`']?([\w./\\-]+\.(tsx?|json))[`']?/g;
   for (const comment of comments.slice(0, 5)) {
     if (comment.authorAgentId === AGENTS['tech lead']) {
       const matches = comment.body.matchAll(filePathRegex);
@@ -410,6 +422,7 @@ export async function buildLocalBuilderContext(
   fileContext += '\n\n== IMPLEMENTATION INSTRUCTION ==\n';
   fileContext += 'DO NOT write analysis, summaries, or "let me check" messages.\n';
   fileContext += 'DO NOT describe what you will do - JUST DO IT.\n';
+  fileContext += 'DO NOT ask the user for file contents; use the provided file context and repository conventions.\n';
   fileContext += 'Output each file using: FILE: path/to/file.ext\\n```lang\\ncode\\n```\n';
   fileContext += 'Write ALL required files in ONE response.\n';
 

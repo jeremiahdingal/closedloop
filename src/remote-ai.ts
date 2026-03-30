@@ -12,7 +12,6 @@ import { execSync } from 'child_process';
 import {
   getWorkspace,
   getRemoteConfig,
-  getRunnerBackend,
   getRunnerTimeoutMs,
 } from './config';
 import { postComment } from './paperclip-api';
@@ -138,11 +137,9 @@ export async function callCodexCLI(prompt: string, systemPrompt: string): Promis
   }
 }
 
-// ─── OpenCode CLI adapter ─────────────────────────────────────────
-// Uses `opencode run` to invoke Ollama models via the OpenCode CLI.
-// This replaces direct Ollama HTTP calls so logs integrate with Paperclip.
-// Serialized via queue: Ollama can only serve one model at a time on
-// consumer hardware, so concurrent calls deadlock.
+// ─── Ollama CLI adapter ─────────────────────────────────────────
+// Uses `ollama run` with serialized execution because consumer hardware
+// generally supports one active heavyweight model generation at a time.
 
 import { spawn } from 'child_process';
 
@@ -154,29 +151,6 @@ interface QueuedModelJob {
 
 const modelQueue: QueuedModelJob[] = [];
 let ollamaRunning = false;
-
-function resolveOpenCodeExecutable(): string {
-  if (process.env.OPENCODE_BIN && fs.existsSync(process.env.OPENCODE_BIN)) {
-    return process.env.OPENCODE_BIN;
-  }
-
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || '';
-    const userProfile = process.env.USERPROFILE || '';
-    const candidates = [
-      path.join(appData, 'npm', 'opencode.cmd'),
-      path.join(userProfile, 'AppData', 'Roaming', 'npm', 'opencode.cmd'),
-      path.join(appData, 'npm', 'opencode.exe'),
-    ];
-    for (const candidate of candidates) {
-      if (candidate && fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  return 'opencode';
-}
 
 async function drainOllamaQueue(): Promise<void> {
   if (ollamaRunning) return;
@@ -191,114 +165,6 @@ async function drainOllamaQueue(): Promise<void> {
     }
   }
   ollamaRunning = false;
-}
-
-function runOpenCodeCli(
-  prompt: string,
-  systemPrompt: string,
-  model: string = 'qwen3:8b',
-  timeoutMs: number = getRunnerTimeoutMs()
-): Promise<string> {
-  const combinedPrompt = systemPrompt
-    ? `${systemPrompt}\n\n---\n\n${prompt}`
-    : prompt;
-
-  // Normalize model: strip ollama/ prefix if caller already included it
-  const ollamaModel = model.replace(/^ollama\//, '');
-
-  const run = (): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const opencodeBin = resolveOpenCodeExecutable();
-      console.log(`[runner:opencode] cmd="${opencodeBin} run -m ollama/${ollamaModel} --format json" cwd="${getWorkspace()}"`);
-      const child = spawn(
-        opencodeBin,
-        ['run', '-m', `ollama/${ollamaModel}`, '--format', 'json'],
-        {
-          cwd: getWorkspace(),
-          shell: process.platform === 'win32',
-        }
-      );
-
-      let stdout = '';
-      let stderr = '';
-      let settled = false;
-      const done = (err?: Error, value?: string): void => {
-        if (settled) return;
-        settled = true;
-        if (timer) clearTimeout(timer);
-        if (err) {
-          reject(err);
-        } else {
-          resolve(value || '');
-        }
-      };
-
-      const timer = setTimeout(() => {
-        try {
-          child.kill('SIGTERM');
-        } catch {}
-        done(new Error(`OpenCode CLI timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-
-      child.stdout.on('data', (chunk: Buffer | string) => {
-        stdout += chunk.toString();
-      });
-
-      child.stderr.on('data', (chunk: Buffer | string) => {
-        stderr += chunk.toString();
-      });
-
-      child.on('error', (err) => {
-        done(
-          new Error(
-            `OpenCode CLI failed (ollama/${ollamaModel}): ${err.message}${stderr ? `\nstderr: ${stderr}` : ''}${stdout ? `\nstdout: ${stdout}` : ''}`
-          )
-        );
-      });
-
-      child.on('close', (code) => {
-        if (code !== 0) {
-          done(
-            new Error(
-              `OpenCode CLI failed (ollama/${ollamaModel}): exit ${code}${stderr ? `\nstderr: ${stderr}` : ''}${stdout ? `\nstdout: ${stdout}` : ''}`
-            )
-          );
-          return;
-        }
-
-        const lines = stdout.toString().split('\n').filter(Boolean);
-        const textParts: string[] = [];
-        for (const line of lines) {
-          try {
-            const event = JSON.parse(line);
-            if (event.type === 'text' && event.part?.text) {
-              textParts.push(event.part.text);
-            }
-          } catch {}
-        }
-
-        const result = textParts.join('');
-        if (!result.trim()) {
-          console.log(`[runner:opencode] No text output from ollama/${ollamaModel}; returning fallback`);
-          done(undefined, '_No text output from model._');
-          return;
-        }
-        console.log(`[runner:opencode] Completed ollama/${ollamaModel} (${result.length} chars)`);
-        done(undefined, result);
-      });
-
-      // Feed prompt via stdin
-      if (child.stdin) {
-        child.stdin.write(combinedPrompt);
-        child.stdin.end();
-      }
-    });
-
-  return new Promise<string>((resolve, reject) => {
-    modelQueue.push({ run, resolve, reject });
-    console.log(`[runner:opencode] Queued ollama/${ollamaModel} (queue depth: ${modelQueue.length})`);
-    drainOllamaQueue();
-  });
 }
 
 function runOllamaCli(
@@ -401,32 +267,7 @@ export async function callModelCLI(
   model: string = 'qwen3:8b',
   timeoutMs: number = getRunnerTimeoutMs()
 ): Promise<string> {
-  const backend = getRunnerBackend();
-
-  if (backend === 'opencode_cli') {
-    return runOpenCodeCli(prompt, systemPrompt, model, timeoutMs);
-  }
-
-  if (backend === 'hybrid') {
-    try {
-      return await runOllamaCli(prompt, systemPrompt, model, timeoutMs);
-    } catch (err: any) {
-      console.log(`[runner:hybrid] Ollama failed, falling back to OpenCode: ${err.message}`);
-      return runOpenCodeCli(prompt, systemPrompt, model, timeoutMs);
-    }
-  }
-
   return runOllamaCli(prompt, systemPrompt, model, timeoutMs);
-}
-
-// Backward-compatible wrapper for existing call sites.
-export function callOpenCodeCLI(
-  prompt: string,
-  systemPrompt: string,
-  model: string = 'qwen3:8b',
-  timeoutMs: number = getRunnerTimeoutMs()
-): Promise<string> {
-  return callModelCLI(prompt, systemPrompt, model, timeoutMs);
 }
 
 // ─── Unified dispatcher ────────────────────────────────────────────
