@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspace, getPaperclipApiUrl, getCompanyId } from './config';
 import { getIssueDetails } from './paperclip-api';
+import { detectDriftIssues, formatDriftReport } from './drift-detector';
 
 const WORKSPACE = getWorkspace();
 const PAPERCLIP_API = getPaperclipApiUrl();
@@ -59,12 +60,21 @@ export async function writeIssueContext(issueId: string): Promise<void> {
       'Use existing auth patterns',
       'No external APIs without config',
       'Follow project naming conventions',
+      'AVOID duplicate files - check existing files before creating new ones',
     ],
   };
 
   // Write context file
   fs.writeFileSync(CONTEXT_FILE, JSON.stringify(context, null, 2));
   console.log(`[pre-execution] Wrote context file for ${issueId} (${existingFiles.length} source files)`);
+  
+  // Detect and write drift issues
+  const driftIssues = await detectDriftIssues();
+  if (driftIssues.length > 0) {
+    const driftFile = path.join(CONTEXT_DIR, 'drift.md');
+    fs.writeFileSync(driftFile, formatDriftReport(driftIssues));
+    console.log(`[pre-execution] Wrote drift report: ${driftIssues.length} issues`);
+  }
 }
 
 function getSourceFiles(): string[] {

@@ -4,6 +4,7 @@ import { getCompanyId, getPaperclipApiUrl, getStuckRunMaxRetries, getStuckRunThr
 import { findAssignedIssues, patchIssue, postComment, wakeAgent } from './paperclip-api';
 import { createPullRequest } from './git-ops';
 import { parseRunOutput, applyFallbackWithLLM, hasErrors, extractErrors, AgentType, diagnoseStuckAgent } from './output-parser';
+import { detectDriftIssues, formatDriftReport } from './drift-detector';
 
 const STAGE_PATTERNS = ['*.ts', '*.tsx', '*.js', '*.jsx'];
 const IGNORE_PATTERNS = [
@@ -637,6 +638,31 @@ export async function monitorCompletedBuilderRuns(): Promise<void> {
         }
 
         console.log(`[guardrails] Staging ${filesToStage.length} files: ${filesToStage.slice(0, 3).join(', ')}...`);
+
+        // Check for drift issues before committing
+        const driftIssues = await detectDriftIssues();
+        
+        if (driftIssues.length > 0) {
+          console.log(`[guardrails] DRIFT DETECTED: ${driftIssues.length} issues found for ${issue.identifier}`);
+          
+          // Reject the changes - return to todo
+          await patchIssue(issue.id, { 
+            status: 'todo',
+            assigneeAgentId: AGENTS['local builder']
+          });
+          
+          const driftReport = formatDriftReport(driftIssues);
+          await postComment(issue.id, null,
+            `🚫 BLOCKED - Drift detected!\n\n` +
+            `The following drift issues were found:\n${driftReport}\n\n` +
+            `Please consolidate duplicate files before submitting for review.\n` +
+            `This ticket has been returned to todo.`
+          );
+          
+          // Switch back to main
+          execSync('git checkout main || git checkout master', { cwd: workspace, encoding: 'utf8', timeout: 10000 });
+          continue;
+        }
 
         // Create branch and commit
         execSync(`git checkout -B ${branchName}`, { cwd: workspace, encoding: 'utf8', timeout: 10000 });
