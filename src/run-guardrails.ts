@@ -103,6 +103,12 @@ async function getPrimaryAssignedIssueId(agentId: string): Promise<string | null
   return assigned[0].id;
 }
 
+async function getPrimaryReviewableIssueId(agentId: string): Promise<string | null> {
+  const assigned = await findAssignedIssues(agentId);
+  const reviewable = assigned.find((issue) => issue.status === 'in_review');
+  return reviewable?.id ?? null;
+}
+
 export async function monitorStuckRuns(): Promise<void> {
   const thresholdMs = getStuckRunThresholdMs();
   const maxRetries = getStuckRunMaxRetries();
@@ -117,11 +123,19 @@ export async function monitorStuckRuns(): Promise<void> {
     const ageMs = getAgentStaleAgeMs(agent);
     if (ageMs < thresholdMs) continue;
 
-    const issueId = await getPrimaryAssignedIssueId(agent.id);
+    const issueId =
+      agent.id === AGENTS.reviewer
+        ? await getPrimaryReviewableIssueId(agent.id)
+        : await getPrimaryAssignedIssueId(agent.id);
     const retryKey = getAgentIssueKey(agent.id, issueId);
     const retries = stallRetriesByKey.get(retryKey) || 0;
 
     await cancelRunBestEffort(agent);
+
+    if (agent.id === AGENTS.reviewer && !issueId) {
+      console.log(`[guardrails] Skipped retry for ${agent.name}: no reviewable in_review issue context`);
+      continue;
+    }
 
     if (retries < maxRetries) {
       stallRetriesByKey.set(retryKey, retries + 1);
@@ -219,4 +233,3 @@ export async function normalizeOrchestrationRecovery(): Promise<void> {
 
   console.log(`[guardrails] Recovery normalization complete (agents reset: ${resetAgents}, issues normalized: ${normalizedIssues})`);
 }
-

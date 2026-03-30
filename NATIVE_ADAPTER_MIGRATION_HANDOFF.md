@@ -11,6 +11,24 @@ Do not redesign the whole orchestration system in one pass.
 
 ---
 
+## Progress So Far
+The migration is no longer just a proposal. These items are already in place:
+1. `Epic Reviewer` is on `codex_local`.
+2. The upstream orchestration agents are being moved to `opencode_local`.
+3. Wakeup payloads now carry issue/task linkage in both `payload` and `contextSnapshot`.
+4. Wake contexts now get enriched with issue title, description, latest comment, and work product summaries.
+5. OpenCode runs now emit a non-empty fallback summary when they finish without final text.
+6. Reviewer timer/retry runs are gated so they only happen with reviewable `in_review` issue context.
+7. `Coder Remote` no longer points at an unavailable OpenCode model.
+8. Build and adapter sync tests pass after the migration updates.
+
+What still needs attention:
+1. Live UI verification for the migrated upstream agents.
+2. Watching the next few real runs for blank-output or context-loss regressions.
+3. Deciding whether any of the remaining HTTP holdouts should also move to native local execution.
+
+---
+
 ## What We Already Verified
 We already proved that a Paperclip native `opencode_local` run can:
 1. launch in the project working directory
@@ -49,6 +67,11 @@ Do not do any of the following in this migration:
 
 ## Goal
 Move `Epic Reviewer` from `http` to a Paperclip native local adapter so it can inspect the repo directly and stop depending on giant monorepo/context injection.
+
+Status:
+1. Done: `Epic Reviewer` is on `codex_local`.
+2. Done: its prompt is trimmed to a compact review contract.
+3. Remaining: verify live Paperclip runs still look healthy and useful.
 
 Prefer:
 1. native Codex CLI adapter if that is the Paperclip-supported local adapter you want
@@ -137,12 +160,23 @@ Apply the same native local repo-aware pattern to the next agents where direct w
 
 This phase is explicitly based on the `opencode_local` workspace-read verification we already completed.
 
-## Recommended Phase 2 Order
-1. `Scaffold Architect`
-2. `Reviewer`
-3. `Diff Guardian`
+Status:
+1. In progress: upstream orchestration agents are being moved to `opencode_local`.
+2. Done: the adapter sync now targets the upstream orchestration set.
+3. Remaining: validate the live runs and trim any prompt/context pieces that are no longer needed.
 
-Do not move `Tech Lead` or `Local Builder` in the same pass unless the first three migrations are stable.
+## Recommended Phase 2 Order
+1. `Complexity Router`
+2. `Strategist`
+3. `Tech Lead`
+4. `Local Builder`
+5. `Coder Remote`
+6. `Visual Reviewer`
+7. `Sentinel`
+8. `Deployer`
+9. `Epic Decoder`
+
+Keep `Scaffold Architect`, `Reviewer`, and `Diff Guardian` on the native local path as already migrated agents.
 
 ## Why These Agents
 1. They are inspection-heavy or repo-aware by nature.
@@ -151,7 +185,7 @@ Do not move `Tech Lead` or `Local Builder` in the same pass unless the first thr
 4. They are better candidates than builder agents for low-risk native-local adoption.
 
 ## Phase 2 Scope
-1. Migrate the next repo-aware agents to native local adapter execution.
+1. Migrate the upstream orchestration agents to native local adapter execution.
 2. Remove large agent-specific prompt stuffing for those agents.
 3. Keep concise policy prompts and output contracts.
 4. Remove bridge reliance for those migrated agents only.
@@ -192,7 +226,7 @@ Remove:
 1. Each migrated agent runs through Paperclip native local execution.
 2. Each run shows repo file reads in the UI.
 3. Prompt size decreases materially.
-4. Output quality does not regress into generic “need more context” replies.
+4. Output quality does not regress into generic "need more context" replies.
 5. No bridge dependency remains for those migrated agents.
 
 ## Do Not Touch Yet
@@ -241,8 +275,8 @@ The Paperclip run page for a migrated agent should show:
 1. Epic Reviewer migrated and validated
 2. Epic Reviewer no longer forced to HTTP
 3. Epic Reviewer prompt materially trimmed
-4. Scaffold Architect migrated cleanly or confirmed already-native and trimmed
-5. Reviewer migrated and trimmed
-6. Diff Guardian migrated and trimmed
-7. No migrated agent is still being pushed back to `http://127.0.0.1:3201`
+4. Upstream orchestration agents migrated to native local OpenCode
+5. Wake payloads/context snapshots carry real issue linkage
+6. OpenCode fallback summaries are visible when runs emit no text
+7. Reviewer timer/retry logic only wakes on reviewable `in_review` context
 8. Paperclip UI visibly shows native local workspace reads for migrated agents

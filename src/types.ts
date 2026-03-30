@@ -39,9 +39,20 @@ export interface OllamaRequest {
   messages: OllamaMessage[];
   context?: {
     issueId?: string;
+    issueIds?: string[];
+    issueIdentifier?: string;
+    issueTitle?: string;
+    issueDescription?: string;
+    issueStatus?: string;
+    issuePriority?: string;
     taskId?: string;
     taskKey?: string;
     wakeReason?: string;
+    latestCommentId?: string;
+    latestCommentAt?: string;
+    latestCommentBody?: string;
+    issueWorkProductSummary?: string;
+    primaryPullRequestSummary?: string;
     paperclipWorkspace?: {
       cwd: string;
     };

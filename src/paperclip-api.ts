@@ -207,6 +207,19 @@ export async function wakeAgent(
       headers['Authorization'] = `Bearer ${agentKey}`;
     }
 
+    const payload: Record<string, unknown> = {};
+    const contextSnapshot: Record<string, unknown> = {};
+    if (options.issueId) {
+      payload.issueId = options.issueId;
+      payload.taskId = options.issueId;
+      contextSnapshot.issueId = options.issueId;
+      contextSnapshot.taskId = options.issueId;
+    }
+    if (options.issueIds && options.issueIds.length > 0) {
+      payload.issueIds = options.issueIds;
+      contextSnapshot.issueIds = options.issueIds;
+    }
+
     const res = await fetch(`${getPaperclipApiUrl()}/api/agents/${agentId}/wakeup`, {
       method: 'POST',
       headers,
@@ -214,8 +227,8 @@ export async function wakeAgent(
         source,
         triggerDetail: source === 'on_demand' ? 'manual' : 'system',
         reason,
-        ...(options.issueId ? { issueId: options.issueId, taskId: options.issueId } : {}),
-        ...(options.issueIds && options.issueIds.length > 0 ? { issueIds: options.issueIds } : {}),
+        payload: Object.keys(payload).length > 0 ? payload : null,
+        contextSnapshot: Object.keys(contextSnapshot).length > 0 ? contextSnapshot : null,
       }),
     });
 

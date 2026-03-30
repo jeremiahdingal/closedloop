@@ -1421,6 +1421,10 @@ function buildHeartbeatContext(context: any): string {
   if (context.paperclipWorkspace?.cwd) {
     parts.push(`Workspace: ${context.paperclipWorkspace.cwd}`);
   }
+  if (context.issueTitle) parts.push(`Issue title: ${context.issueTitle}`);
+  if (context.issueDescription) parts.push(`Issue description: ${context.issueDescription}`);
+  if (context.latestCommentBody) parts.push(`Latest comment: ${context.latestCommentBody}`);
+  if (context.issueWorkProductSummary) parts.push(`Work products: ${context.issueWorkProductSummary}`);
   if (parts.length === 0) {
     parts.push('This is a routine heartbeat check. Report your current status briefly.');
   }
@@ -1473,6 +1477,24 @@ export async function checkAssignedIssues(): Promise<void> {
         const agentIssueIds = assignedIssues
           .filter((i: any) => i.assigneeAgentId === agentId)
           .map((i: any) => i.id);
+        const contextSnapshot = primaryIssue
+          ? {
+              triggeredBy: 'assignment',
+              source: 'scheduler',
+              reason: 'assigned_issues_pending',
+              issueId: primaryIssue.id,
+              taskId: primaryIssue.id,
+              issueIds: agentIssueIds,
+              issueIdentifier: primaryIssue.identifier || primaryIssue.id,
+              issueTitle: primaryIssue.title,
+              issueDescription: String(primaryIssue.description || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
+            }
+          : {
+              triggeredBy: 'assignment',
+              source: 'scheduler',
+              reason: 'assigned_issues_pending',
+              issueIds: agentIssueIds,
+            };
 
         const wakeRes = await fetch(`${PAPERCLIP_API}/api/agents/${agentId}/wakeup`, {
           method: 'POST',
@@ -1481,8 +1503,14 @@ export async function checkAssignedIssues(): Promise<void> {
             source: 'assignment',
             triggerDetail: 'system',
             reason: `assigned_issues_pending:${issueIds.join(',')}`,
-            ...(primaryIssue ? { issueId: primaryIssue.id, taskId: primaryIssue.id } : {}),
-            ...(agentIssueIds.length > 0 ? { issueIds: agentIssueIds } : {}),
+            payload: primaryIssue
+              ? {
+                  issueId: primaryIssue.id,
+                  taskId: primaryIssue.id,
+                  issueIds: agentIssueIds,
+                }
+              : { issueIds: agentIssueIds },
+            contextSnapshot,
           }),
         });
 
