@@ -487,39 +487,14 @@ export function createProxy(): http.Server {
       }
     }
 
-    // Hook 1b: Epic Decoder — decompose high-complexity goals using GLM-5
-    if (issueId && agentId === AGENTS['epic decoder']) {
-      console.log(`[closedloop] Epic Decoder processing goal ${await getIssueLabel(issueId)}`);
-      // Call epic-decoder module directly (uses GLM-5 via callZAI)
-      setImmediate(async () => {
-        try {
-          const { decodeEpic } = await import('./epic-decoder');
-          await decodeEpic(issueId);
-        } catch (err: any) {
-          console.error(`[closedloop] Epic Decoder failed: ${err.message}`);
-        }
-      });
-    }
+    // Hook 1b: Epic Decoder is now native opencode_local adapter - let Paperclip handle execution
+    // (Previously intercepted and called decodeEpic locally via GLM-5, now delegated to native adapter)
 
     // Hook 1c: Epic Reviewer is now native codex_local adapter - let Paperclip handle execution
     // (Previously intercepted and handled locally, now delegated to native adapter)
 
-    // Hook 1d: Epic Decoder — trigger decomposition when woken with goal context
-    if (agentId === AGENTS['epic decoder'] && parsedBody.messages?.[0]?.content?.includes('Decompose')) {
-      // Extract goal ID from wakeup reason or use auto-resolved issueId
-      const wakeupReason = parsedBody.contextSnapshot?.wakeReason || '';
-      console.log(`[closedloop] Epic Decoder woken: ${wakeupReason}`);
-      if (issueId) {
-        setImmediate(async () => {
-          try {
-            const { decodeEpic } = await import('./epic-decoder');
-            await decodeEpic(issueId);
-          } catch (err: any) {
-            console.error(`[closedloop] Epic Decoder failed: ${err.message}`);
-          }
-        });
-      }
-    }
+    // Hook 1d: Epic Decoder native adapter - let Paperclip handle execution
+    // (Previously intercepted and called decodeEpic locally, now delegated to native adapter)
 
     // Hook 2: Burst model override for greenfield scaffold issues
     // When burst model is "remote", route to the remote API (glm-5) instead of Ollama
