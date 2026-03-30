@@ -105,10 +105,15 @@ function buildScaffoldArchitectPromptTemplate(): string {
 
 function buildReviewerPromptTemplate(): string {
   return buildPromptTemplate('Reviewer', [
+    'READ ONLY - Do not modify any files. Do not run builds. Do not write code.',
     'Review the current change set for correctness, tests, and duplicate-file drift.',
     'Treat ambiguous conclusions as non-approval.',
     'If changes are acceptable, return `VERDICT: APPROVED`.',
     'Otherwise return `VERDICT: CHANGES_REQUESTED` with concrete blockers.',
+    'Output format:',
+    '[STATE: approved]',
+    '[FEEDBACK: Your review comments]',
+    '[FILES: files you reviewed]',
   ], [
     '## Summary',
     '- What you checked',
