@@ -10,7 +10,28 @@ import { getConfig } from './config';
 import { checkActiveGoalsForDecode } from './epic-decoder';
 import { reloadGoalTicketMappings } from './goal-system';
 import { ensureEpicReviewerNativeAdapter, ensureRepoAwareOpenCodeAdapters, ensureUpstreamOpenCodeAdapters } from './adapter-config';
-import { monitorStuckRuns, normalizeOrchestrationRecovery } from './run-guardrails';
+import { monitorStuckRuns, normalizeOrchestrationRecovery, monitorCompletedBuilderRuns, monitorCompletedReviewerRuns } from './run-guardrails';
+import { monitorActiveRuns, checkForErrorsInRunningRuns } from './during-execution';
+import { getPaperclipApiUrl } from './config';
+
+async function waitForPaperclip(maxRetries = 30, intervalMs = 2000): Promise<boolean> {
+  const url = `${getPaperclipApiUrl()}/api/health`;
+  for (let i = 1; i <= maxRetries; i++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      if (res.ok) {
+        console.log(`[closedloop] Paperclip ready (attempt ${i})`);
+        return true;
+      }
+    } catch {}
+    if (i < maxRetries) {
+      console.log(`[closedloop] Waiting for Paperclip... (attempt ${i}/${maxRetries})`);
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+  }
+  console.error(`[closedloop] Paperclip not reachable after ${maxRetries} attempts`);
+  return false;
+}
 
 // Load configuration
 const config = getConfig();
@@ -24,11 +45,10 @@ initializeRAG().catch((err) => {
 // Start the proxy server
 createProxy();
 
-// Run background checker every 10 minutes.
-// Startup still performs an immediate check so we don't lose newly restarted work.
+// Run background checker every 2 minutes so builder wakeups happen promptly.
 setInterval(() => {
   checkAssignedIssues().catch(() => {});
-}, 10 * 60 * 1000);
+}, 2 * 60 * 1000);
 
 // Run Epic Decoder heartbeat every 60 seconds so active goals can start the flow.
 setInterval(() => {
@@ -39,6 +59,27 @@ setInterval(() => {
 setInterval(() => {
   monitorStuckRuns().catch(() => {});
 }, 60000);
+
+// Monitor completed builder runs every 30 seconds to detect workspace changes,
+// commit them, and move tickets to in_review.
+setInterval(() => {
+  monitorCompletedBuilderRuns().catch(() => {});
+}, 30000);
+
+// During-execution monitoring: check for file changes every 30s to detect idle runs
+setInterval(() => {
+  monitorActiveRuns().catch(() => {});
+}, 30000);
+
+// Check for errors in running runs every 30 seconds
+setInterval(() => {
+  checkForErrorsInRunningRuns().catch(() => {});
+}, 30000);
+
+// Monitor completed reviewer runs - handle approved/rejected output
+setInterval(() => {
+  monitorCompletedReviewerRuns().catch(() => {});
+}, 30000);
 
 // Re-enforce native OpenCode adapters for the upstream orchestration path.
 setInterval(() => {
@@ -57,17 +98,21 @@ setInterval(() => {
   ensureEpicReviewerNativeAdapter().catch(() => {});
 }, 5 * 60 * 1000);
 
-// On startup: reload goal/ticket mappings, reset errored agents, then start
-// active-goal decomposition and assigned-issue checking.
+// On startup: wait for Paperclip, then sync adapters, reload mappings, and
+// kick off goal decomposition + assigned-issue checks.
 setTimeout(async () => {
-  await ensureRepoAwareOpenCodeAdapters();
-  await ensureEpicReviewerNativeAdapter();
-  await ensureUpstreamOpenCodeAdapters();
+  const ready = await waitForPaperclip();
+  if (!ready) {
+    console.error('[closedloop] Proceeding without Paperclip — syncs will retry on interval');
+  }
+  await ensureRepoAwareOpenCodeAdapters().catch(e => console.log(`[closedloop] Repo-aware sync: ${e.message}`));
+  await ensureEpicReviewerNativeAdapter().catch(e => console.log(`[closedloop] Epic Reviewer sync: ${e.message}`));
+  await ensureUpstreamOpenCodeAdapters().catch(e => console.log(`[closedloop] Upstream sync: ${e.message}`));
   await normalizeOrchestrationRecovery();
   await reloadGoalTicketMappings();
   await checkActiveGoalsForDecode();
   await checkAssignedIssues();
-}, 5000);
+}, 2000);
 
 // DISABLED: Old periodic epic review - now handled by Epic Reviewer agent
 // setInterval(() => {

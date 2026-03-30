@@ -382,8 +382,15 @@ async function postEpicApproval(
       `${result.feedback}\n\n` +
       `Tickets in this epic:\n${ticketList}`
     );
+    
+    // Update ticket status to done
+    await patchIssue(ticket.id, { status: 'done' });
   }
-  console.log(`[epic-reviewer] Epic "${goal.title}" APPROVED — ${tickets.length} tickets ready to merge`);
+  
+  // Also mark goal as done
+  await patchIssue(goal.id, { status: 'done' });
+  
+  console.log(`[epic-reviewer] Epic "${goal.title}" APPROVED — ${tickets.length} tickets marked done`);
 }
 
 /**

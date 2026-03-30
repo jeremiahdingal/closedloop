@@ -21,7 +21,7 @@ import { getWorkspace, getCompanyId, getPaperclipApiUrl } from './config';
 import { getIssueLabel, postComment, patchIssue } from './paperclip-api';
 import { callRemoteLLM } from './remote-ai';
 import { AGENTS } from './agent-types';
-import { decomposeGoalIntoTickets, getEpicTickets, enforceGoalOverlapSuppression, getOverlapBlockForTicket } from './goal-system';
+import { decomposeGoalIntoTickets, getEpicTickets, enforceGoalOverlapSuppression, getOverlapBlockForTicket, scoreComplexity } from './goal-system';
 
 const PAPERCLIP_API = getPaperclipApiUrl();
 const COMPANY_ID = getCompanyId();
@@ -149,8 +149,9 @@ async function runEpicDecode(goal: any): Promise<void> {
       await decomposeGoalIntoTickets(goal.id, decodeContent);
       await postComment(goal.id, null, `✅ Epic Decoder decomposed epic into tickets. Child issues created.`);
 
-      // Assign ALL tickets to Complexity Router so each decoded ticket enters
-      // the normal scaffold/classification path.
+      // Route tickets directly to execution agents using deterministic scoring.
+      // Complexity Router and Strategist are routing-only agents that can't act
+      // via native adapters, so we do the routing inline here.
       const tickets = await getEpicTickets(goal.id);
       if (tickets.length > 0) {
         await enforceGoalOverlapSuppression(goal.id, tickets);
@@ -159,11 +160,17 @@ async function runEpicDecode(goal: any): Promise<void> {
             console.log(`[epic-decoder] Ticket ${ticket.identifier} blocked by overlap; leaving unassigned`);
             continue;
           }
-          await patchIssue(ticket.id, { assigneeAgentId: AGENTS['complexity router'] });
-          console.log(`[epic-decoder] Ticket ${ticket.identifier} assigned to Complexity Router`);
+          const complexity = scoreComplexity(ticket.title || '', ticket.description || '');
+          // Route based on complexity: high -> scaffold architect, normal -> local builder
+          const targetAgent = complexity.score >= 7
+            ? AGENTS['scaffold architect']
+            : AGENTS['local builder'];
+          const targetName = complexity.score >= 7 ? 'Scaffold Architect' : 'Local Builder';
+          await patchIssue(ticket.id, { assigneeAgentId: targetAgent });
+          console.log(`[epic-decoder] Ticket ${ticket.identifier} (complexity ${complexity.score}/10) -> ${targetName}`);
         }
         const blockedCount = tickets.filter(ticket => getOverlapBlockForTicket(ticket.id)).length;
-        console.log(`[epic-decoder] Routed ${tickets.length - blockedCount} tickets to Complexity Router (${blockedCount} blocked by overlap)`);
+        console.log(`[epic-decoder] Routed ${tickets.length - blockedCount} tickets to builders (${blockedCount} blocked by overlap)`);
       }
     } catch (err: any) {
       console.error(`[epic-decoder] Failed to create tickets: ${err.message}`);

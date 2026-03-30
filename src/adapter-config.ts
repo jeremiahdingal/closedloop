@@ -27,7 +27,7 @@ const DIFF_GUARDIAN_TIMEOUT_SEC = 600;
 const UPSTREAM_TIMEOUT_SEC = 900;
 const LONG_TIMEOUT_SEC = 1800;
 
-const OPENCODE_COMPLEXITY_ROUTER_MODEL = 'ollama/qwen3:4b';
+const OPENCODE_COMPLEXITY_ROUTER_MODEL = 'ollama/qwen3:8b';
 const OPENCODE_STRATEGIST_MODEL = 'ollama/qwen3:8b';
 const OPENCODE_TECH_LEAD_MODEL = 'ollama/deepcoder:14b';
 const OPENCODE_LOCAL_BUILDER_MODEL = 'ollama/qwen2.5-coder:7b';
@@ -42,19 +42,9 @@ const DIFF_GUARDIAN_MODEL = 'ollama/qwen3:4b';
 
 function sharedIssueContextLines(): string[] {
   return [
-    'Wake reason: {{context.wakeReason}}',
-    'Wake source: {{context.wakeSource}}',
-    'Issue ID: {{context.issueId}}',
-    'Issue identifier: {{context.issueIdentifier}}',
-    'Issue title: {{context.issueTitle}}',
-    'Issue description: {{context.issueDescription}}',
-    'Issue status: {{context.issueStatus}}',
-    'Issue priority: {{context.issuePriority}}',
-    'Task ID: {{context.taskId}}',
-    'Linked issue IDs: {{context.issueIds}}',
-    'Latest comment: {{context.latestCommentBody}}',
-    'Work products: {{context.issueWorkProductSummary}}',
-    'Primary PR: {{context.primaryPullRequestSummary}}',
+    'You have been woken by the ClosedLoop orchestrator.',
+    'Your assigned issue details are in the INSTRUCTIONS.md file in your workspace root.',
+    'Read INSTRUCTIONS.md first to understand your task.',
     '',
   ];
 }
@@ -205,7 +195,7 @@ export async function ensureUpstreamOpenCodeAdapters(): Promise<void> {
         desiredAdapterConfig = {
           cwd,
           model: OPENCODE_COMPLEXITY_ROUTER_MODEL,
-          timeoutSec: 60,
+          timeoutSec: UPSTREAM_TIMEOUT_SEC,
           promptTemplate: buildPromptTemplate('Complexity Router', [
             'Route the issue to the right downstream agent based on scope, risk, and missing context.',
             'Do not implement the task yourself unless you are the only viable execution path.',

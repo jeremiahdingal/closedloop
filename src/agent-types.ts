@@ -42,6 +42,9 @@ export const AGENT_ALIASES: Record<string, string> = {
   // Keep backward compat for prompts that still say "artist"
   artist: AGENTS['visual reviewer'],
   'artist (ui/ux)': AGENTS['visual reviewer'],
+  // Complexity Router targets
+  strategist: AGENTS.strategist,
+  'epic decoder': AGENTS['epic decoder'],
 };
 
 // Bash execution is disabled for bridge-side agents.

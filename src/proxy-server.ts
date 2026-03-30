@@ -7,6 +7,8 @@
  */
 
 import * as http from 'http';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   getConfig,
   getOllamaPorts,
@@ -26,6 +28,7 @@ import { applyCodeBlocks } from './code-extractor';
 import { commitAndPush, createPullRequest, getBranchName } from './git-ops';
 import { buildIssueContext, buildLocalBuilderContext, setRAGIndexer, getRAGIndexer } from './context-builder';
 import { executeBashBlocks } from './bash-executor';
+import { writeIssueContext } from './pre-execution';
 import { detectAndDelegate } from './delegation';
 import { runArtistStage } from './artist-recorder';
 import { runDiffGuardian } from './diff-guardian';
@@ -233,6 +236,38 @@ async function wakeAgentForNextAssignedIssue(agentId: string, completedIssueId?:
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
+    // Write context file and INSTRUCTIONS.md for the follow-up issue
+    try {
+      const workspace = getWorkspace();
+      
+      // Write .closedloop/context.json with existing files
+      await writeIssueContext(nextIssue.id);
+      
+      const instructionsContent = [
+        `# Agent Instructions`,
+        ``,
+        `**Agent:** ${agentName}`,
+        `**Wake reason:** next_assigned_issue_pending`,
+        `**Timestamp:** ${new Date().toISOString()}`,
+        ``,
+        `## Assigned Issue`,
+        ``,
+        `### ${nextIssue.identifier || nextIssue.id.slice(0, 8)}: ${nextIssue.title || '(no title)'}`,
+        ``,
+        `- **ID:** ${nextIssue.id}`,
+        `- **Status:** ${nextIssue.status || 'unknown'}`,
+        `- **Priority:** ${nextIssue.priority || 'normal'}`,
+        ``,
+        String(nextIssue.description || '(no description)').trim().slice(0, 2000),
+        ``,
+        `## Instructions`,
+        ``,
+        `Process the assigned issue above. Read the workspace files directly.`,
+        `Do not ask for pasted content — use the filesystem.`,
+      ].join('\n');
+      fs.writeFileSync(path.join(workspace, 'INSTRUCTIONS.md'), instructionsContent, 'utf8');
+    } catch {}
+
     const wakeRes = await fetch(`${PAPERCLIP_API}/api/agents/${agentId}/wakeup`, {
       method: 'POST',
       headers,
@@ -242,7 +277,6 @@ async function wakeAgentForNextAssignedIssue(agentId: string, completedIssueId?:
         reason: `next_assigned_issue_pending:${nextIssue.identifier || nextIssue.id.slice(0, 8)}`,
         issueId: nextIssue.id,
         taskId: nextIssue.id,
-        issueIds: [nextIssue.id],
       }),
     });
 
@@ -780,7 +814,15 @@ export function createProxy(): http.Server {
                     }
                   }
                 }
-              } else if (agentId !== AGENTS['complexity router']) {
+              } else if (agentId === AGENTS['complexity router']) {
+                // Complexity Router: detect delegation and reassign
+                const delegated = await detectAndDelegate(issueId, agentId, content);
+                if (!delegated) {
+                  // No delegation detected - fallback to Strategist
+                  await patchIssue(issueId, { assigneeAgentId: AGENTS.strategist });
+                  console.log(`[closedloop] Complexity Router fallback -> Strategist for ${issueId.slice(0, 8)}`);
+                }
+              } else {
                 const delegated = await detectAndDelegate(issueId, agentId, content);
                 if (!delegated && agentId === AGENTS.strategist && issueId) {
                   const stratIssue = await getIssueDetails(issueId);
@@ -1411,6 +1453,27 @@ export async function checkAssignedIssues(): Promise<void> {
       const agentId = issue.assigneeAgentId;
       if (BLOCKED_AGENTS.has(agentId)) continue;
 
+      // Skip Local Builder issues that have already reached the pass cap
+      if (agentId === AGENTS['local builder']) {
+        const existingPasses = issueBuilderPasses[issue.id] || 0;
+        if (existingPasses >= MAX_BUILDER_PASSES) {
+          console.log(`[closedloop] Skipping Local Builder wakeup for ${issue.identifier || issue.id.slice(0, 8)} - pass cap already reached (${existingPasses}/${MAX_BUILDER_PASSES})`);
+          continue;
+        }
+        // Also check if issue already has pass cap comment (persists across restarts)
+        try {
+          const { getIssueComments } = await import('./paperclip-api');
+          const comments = await getIssueComments(issue.id);
+          const passCapComment = comments.find((c: any) =>
+            c.body && (c.body.includes('Pass Cap Reached') || c.body.includes('Local Builder pass cap'))
+          );
+          if (passCapComment) {
+            console.log(`[closedloop] Skipping Local Builder wakeup for ${issue.identifier || issue.id.slice(0, 8)} - pass cap already handled (found comment)`);
+            continue;
+          }
+        } catch {}
+      }
+
       const recentRunKey = `${agentId}:${issue.id}`;
       if (recentAgentRuns.has(recentRunKey)) {
         const lastRun = recentAgentRuns.get(recentRunKey)!;
@@ -1428,7 +1491,6 @@ export async function checkAssignedIssues(): Promise<void> {
       console.log(`[closedloop] Waking ${agentName} for ${issueIds.length} issues: ${issueIds.join(', ')}`);
 
       try {
-        // Use the proper Paperclip wakeup API instead of re-patching the issue
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
@@ -1436,24 +1498,46 @@ export async function checkAssignedIssues(): Promise<void> {
         const agentIssueIds = assignedIssues
           .filter((i: any) => i.assigneeAgentId === agentId)
           .map((i: any) => i.id);
-        const contextSnapshot = primaryIssue
-          ? {
-              triggeredBy: 'assignment',
-              source: 'scheduler',
-              reason: 'assigned_issues_pending',
-              issueId: primaryIssue.id,
-              taskId: primaryIssue.id,
-              issueIds: agentIssueIds,
-              issueIdentifier: primaryIssue.identifier || primaryIssue.id,
-              issueTitle: primaryIssue.title,
-              issueDescription: String(primaryIssue.description || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
-            }
-          : {
-              triggeredBy: 'assignment',
-              source: 'scheduler',
-              reason: 'assigned_issues_pending',
-              issueIds: agentIssueIds,
-            };
+
+        // Write context file and INSTRUCTIONS.md to workspace so native adapters can read context
+        if (primaryIssue) {
+          // Write .closedloop/context.json with issue context
+          await writeIssueContext(primaryIssue.id);
+          
+          const allAgentIssues = assignedIssues.filter((i: any) => i.assigneeAgentId === agentId);
+          const instructionsContent = [
+            `# Agent Instructions`,
+            ``,
+            `**Agent:** ${agentName}`,
+            `**Wake reason:** assigned_issues_pending`,
+            `**Timestamp:** ${new Date().toISOString()}`,
+            ``,
+            `## Assigned Issues`,
+            ``,
+            ...allAgentIssues.map((i: any) => [
+              `### ${i.identifier || i.id.slice(0, 8)}: ${i.title || '(no title)'}`,
+              ``,
+              `- **ID:** ${i.id}`,
+              `- **Status:** ${i.status || 'unknown'}`,
+              `- **Priority:** ${i.priority || 'normal'}`,
+              ``,
+              String(i.description || '(no description)').trim().slice(0, 2000),
+              ``,
+            ]).flat(),
+            `## Instructions`,
+            ``,
+            `Process each assigned issue above. Read the workspace files directly.`,
+            `Do not ask for pasted content — use the filesystem.`,
+          ].join('\n');
+
+          try {
+            const workspace = getWorkspace();
+            fs.writeFileSync(path.join(workspace, 'INSTRUCTIONS.md'), instructionsContent, 'utf8');
+            console.log(`[closedloop] Wrote INSTRUCTIONS.md for ${agentName} (${allAgentIssues.length} issues)`);
+          } catch (err: any) {
+            console.log(`[closedloop] Failed to write INSTRUCTIONS.md: ${err.message}`);
+          }
+        }
 
         const wakeRes = await fetch(`${PAPERCLIP_API}/api/agents/${agentId}/wakeup`, {
           method: 'POST',
@@ -1462,20 +1546,13 @@ export async function checkAssignedIssues(): Promise<void> {
             source: 'assignment',
             triggerDetail: 'system',
             reason: `assigned_issues_pending:${issueIds.join(',')}`,
-            payload: primaryIssue
-              ? {
-                  issueId: primaryIssue.id,
-                  taskId: primaryIssue.id,
-                  issueIds: agentIssueIds,
-                }
-              : { issueIds: agentIssueIds },
-            contextSnapshot,
+            issueId: primaryIssue?.id,
+            taskId: primaryIssue?.id,
           }),
         });
 
         if (wakeRes.ok) {
           const wakeData = await wakeRes.json() as any;
-          // Mark all issues for this agent as recently triggered
           for (const issue of assignedIssues.filter((i: any) => i.assigneeAgentId === agentId)) {
             recentAgentRuns.set(`${agentId}:${issue.id}`, Date.now());
           }

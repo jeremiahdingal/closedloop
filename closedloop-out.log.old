@@ -1,0 +1,18 @@
+
+> closedloop@1.0.0 start
+> node dist/index.js
+
+[config] Loaded .env file
+[config] Loaded project config: Shop Diary V3
+[closedloop] Starting ClosedLoop for Shop Diary V3
+[RAG] Creating new index
+[closedloop] ClosedLoop started.
+[closedloop] :3201 -> ollama:11434
+[closedloop] RAG index initialized
+[closedloop] Paperclip ready (attempt 1)
+[closedloop] Set Complexity Router -> opencode_local
+[guardrails] Recovery normalization complete (agents reset: 0, issues normalized: 0)
+[goal] Reloaded 13 goals with 319 tickets
+[closedloop] Skipping Local Builder wakeup for SHO-324 - pass cap already handled (found comment)
+[closedloop] Waking complexity router for 2 issues: SHO-335, SHO-336
+[closedloop] Wakeup running for complexity router (run: 380d6cdd)

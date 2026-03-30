@@ -203,8 +203,8 @@ function createDefaultConfig(): ProjectConfig {
       screenshotDir: '.screenshots',
     },
     delegationRules: {
-      'complexity router': ['strategist', 'epic decoder'],
-      strategist: ['tech lead', 'reviewer', 'sentinel', 'visual reviewer', 'epic decoder'],
+      'complexity router': ['strategist'],
+      strategist: ['tech lead', 'reviewer', 'sentinel', 'visual reviewer'],
       'epic decoder': ['tech lead'],
       'tech lead': ['local builder', 'coder remote'],
       reviewer: ['diff guardian'],

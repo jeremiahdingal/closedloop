@@ -1,6 +1,52 @@
+import { execSync } from 'child_process';
 import { AGENTS } from './agent-types';
-import { getCompanyId, getPaperclipApiUrl, getStuckRunMaxRetries, getStuckRunThresholdMs } from './config';
+import { getCompanyId, getPaperclipApiUrl, getStuckRunMaxRetries, getStuckRunThresholdMs, getWorkspace } from './config';
 import { findAssignedIssues, patchIssue, postComment, wakeAgent } from './paperclip-api';
+import { createPullRequest } from './git-ops';
+import { parseRunOutput, applyFallbackWithLLM, hasErrors, extractErrors, AgentType, diagnoseStuckAgent } from './output-parser';
+
+const STAGE_PATTERNS = ['*.ts', '*.tsx', '*.js', '*.jsx'];
+const IGNORE_PATTERNS = [
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'node_modules/**',
+  'dist/**',
+  'build/**',
+  '.next/**',
+  '.git/**',
+  '.env*',
+  '*.log',
+  'INSTRUCTIONS.md',
+  '.tickets/**',
+  '.closedloop/**',
+];
+
+function shouldStageFile(filePath: string): boolean {
+  for (const ignore of IGNORE_PATTERNS) {
+    if (filePath.startsWith(ignore.replace('**', ''))) return false;
+    if (filePath.includes(ignore.replace('*', ''))) return false;
+  }
+  for (const pattern of STAGE_PATTERNS) {
+    if (filePath.endsWith(pattern.replace('*', ''))) return true;
+  }
+  return false;
+}
+
+function getFilesToStage(workspace: string): string[] {
+  try {
+    const diff = execSync('git diff --name-only HEAD', { cwd: workspace, encoding: 'utf8', timeout: 10000 });
+    const untracked = execSync('git ls-files --others --exclude-standard', { cwd: workspace, encoding: 'utf8', timeout: 10000 });
+    
+    const changedFiles = diff.split('\n').map(f => f.trim()).filter(Boolean);
+    const newFiles = untracked.split('\n').map(f => f.trim()).filter(Boolean);
+    const allFiles = [...changedFiles, ...newFiles];
+    
+    return allFiles.filter(shouldStageFile);
+  } catch {
+    return [];
+  }
+}
 
 const PAPERCLIP_API = getPaperclipApiUrl();
 const COMPANY_ID = getCompanyId();
@@ -137,6 +183,95 @@ export async function monitorStuckRuns(): Promise<void> {
       continue;
     }
 
+    // Get issue details for diagnosis
+    let issueTitle = '';
+    let issueDescription = '';
+    let runOutput = '';
+    
+    if (issueId) {
+      try {
+        const issueRes = await fetch(`${PAPERCLIP_API}/api/companies/${COMPANY_ID}/issues/${issueId}`);
+        if (issueRes.ok) {
+          const issueData = await issueRes.json();
+          issueTitle = issueData.title || '';
+          issueDescription = issueData.description || '';
+        }
+      } catch { /* best-effort */ }
+      
+      // Get run output for diagnosis
+      const runId = agent.currentRunId;
+      if (runId) {
+        try {
+          const outputRes = await fetch(`${PAPERCLIP_API}/api/runs/${runId}/output`);
+          if (outputRes.ok) {
+            const outputData = await outputRes.json();
+            runOutput = outputData.output || outputData.text || outputData.content || '';
+          }
+        } catch { /* best-effort */ }
+      }
+    }
+
+    // Diagnose and recommend action
+    let recommendedAction: 'retry' | 'blocked' | 'todo' | 'escalate' = 'retry';
+    let diagnosis = '';
+    
+    if (runOutput && issueTitle) {
+      const agentType: AgentType = 
+        agent.id === AGENTS.reviewer || agent.id === AGENTS['epic reviewer'] 
+          ? 'reviewer' 
+          : 'builder';
+      
+      try {
+        const diag = await diagnoseStuckAgent(runOutput, issueTitle, issueDescription, agentType);
+        diagnosis = diag.diagnosis;
+        recommendedAction = diag.recommendedAction;
+        console.log(`[guardrails] Diagnosis for ${agent.name}: ${diagnosis} -> ${recommendedAction}`);
+      } catch (err) {
+        console.log(`[guardrails] Diagnosis failed for ${agent.name}, defaulting to retry`);
+      }
+    }
+
+    // Take action based on diagnosis
+    if (recommendedAction === 'blocked' && issueId) {
+      await patchIssue(issueId, { status: 'blocked' });
+      await postComment(issueId, null,
+        `🚫 Agent BLOCKED\n` +
+        `Diagnosis: ${diagnosis || 'Unable to diagnose'}\n` +
+        `Agent stalled after ${Math.round(ageMs / 1000)}s. Needs human intervention.`
+      );
+      console.log(`[guardrails] ${agent.name}: marked as blocked`);
+      escalatedByKey.add(retryKey);
+      continue;
+    }
+    
+    if (recommendedAction === 'todo' && issueId) {
+      await patchIssue(issueId, { status: 'todo', assigneeAgentId: undefined });
+      await postComment(issueId, null,
+        `🔄 Agent returned to todo\n` +
+        `Diagnosis: ${diagnosis || 'Unable to diagnose'}\n` +
+        `This task may need a different agent or approach.`
+      );
+      console.log(`[guardrails] ${agent.name}: returned to todo`);
+      escalatedByKey.add(retryKey);
+      continue;
+    }
+    
+    if (recommendedAction === 'escalate') {
+      if (!escalatedByKey.has(retryKey)) {
+        escalatedByKey.add(retryKey);
+        if (issueId) {
+          await postComment(issueId, null,
+            `⚠️ ESCALATION - Agent doctor recommended escalation\n` +
+            `Diagnosis: ${diagnosis || 'Unable to diagnose'}\n` +
+            `Please investigate manually.`
+          );
+        }
+      }
+      console.log(`[guardrails] ${agent.name}: escalated`);
+      continue;
+    }
+
+    // Default: retry
     if (retries < maxRetries) {
       stallRetriesByKey.set(retryKey, retries + 1);
       const issueIds = issueId ? [issueId] : [];
@@ -151,20 +286,22 @@ export async function monitorStuckRuns(): Promise<void> {
         await postComment(
           issueId,
           null,
-          `[AUTO-RECOVERY] Cancelled stale ${agent.name} run after ${Math.round(ageMs / 1000)}s and retried (${retries + 1}/${maxRetries}).`
+          `[AUTO-RECOVERY] Cancelled stale ${agent.name} run after ${Math.round(ageMs / 1000)}s and retried (${retries + 1}/${maxRetries}).\n` +
+          `Diagnosis: ${diagnosis || 'Unknown'}`
         );
       }
-      console.log(`[guardrails] Retried stale ${agent.name} (${retries + 1}/${maxRetries})`);
+      console.log(`[guardrails] Retried stale ${agent.name} (${retries + 1}/${maxRetries}) - diagnosis: ${diagnosis}`);
       continue;
     }
 
+    // Max retries reached
     if (!escalatedByKey.has(retryKey)) {
       escalatedByKey.add(retryKey);
       if (issueId) {
         await postComment(
           issueId,
           null,
-          `[ESCALATION] ${agent.name} run stalled again after retry. Auto-retries stopped to avoid loops. Please inspect model/runtime state before resuming.`
+          `[ESCALATION] ${agent.name} run stalled after ${maxRetries} retries. Diagnosis: ${diagnosis || 'Unknown'}. Please inspect manually.`
         );
       }
       console.log(`[guardrails] Escalated stalled ${agent.name} after ${retries} retries`);
@@ -232,4 +369,292 @@ export async function normalizeOrchestrationRecovery(): Promise<void> {
   }
 
   console.log(`[guardrails] Recovery normalization complete (agents reset: ${resetAgents}, issues normalized: ${normalizedIssues})`);
+}
+
+// ─── Builder Run Completion Monitor ────────────────────────────────
+// Checks for completed builder runs and handles post-execution lifecycle:
+// detects workspace changes, creates branches/PRs, updates ticket status.
+
+const BUILDER_AGENT_IDS = new Set<string>([
+  AGENTS['local builder'],
+  AGENTS['scaffold architect'],
+].filter(Boolean));
+
+const REVIEWER_AGENT_IDS = new Set<string>([
+  AGENTS.reviewer,
+  AGENTS['epic reviewer'],
+].filter(Boolean));
+
+const processedRuns = new Set<string>();
+
+interface ReviewResult {
+  decision: 'approved' | 'rejected' | 'unknown';
+  feedback: string;
+  files: string[];
+  usedFallback?: boolean;
+}
+
+function parseReviewOutput(output: string): ReviewResult {
+  const approved = /\[STATE:\s*approved\]/i.test(output);
+  const rejected = /\[STATE:\s*rejected\]/i.test(output);
+  
+  if (!approved && !rejected) {
+    // Fallback: reject for safety if no clear decision
+    return {
+      decision: 'rejected',
+      feedback: 'No [STATE: approved/rejected] block in output - defaulting to rejected for safety',
+      files: [],
+      usedFallback: true,
+    };
+  }
+  
+  const feedbackMatch = output.match(/\[FEEDBACK:\s*(.+?)\]/i);
+  const filesMatch = output.match(/\[FILES:\s*(.+?)\]/i);
+  
+  return {
+    decision: approved ? 'approved' : 'rejected',
+    feedback: feedbackMatch?.[1]?.trim() || '',
+    files: filesMatch?.[1]?.split(',').map(f => f.trim()).filter(Boolean) || [],
+  };
+}
+
+export async function monitorCompletedBuilderRuns(): Promise<void> {
+  try {
+    const res = await fetch(`${PAPERCLIP_API}/api/companies/${COMPANY_ID}/heartbeat-runs?limit=10`);
+    if (!res.ok) return;
+    const runs = await res.json() as any[];
+
+    for (const run of runs) {
+      if (processedRuns.has(run.id)) continue;
+      if (run.status !== 'succeeded' && run.status !== 'failed') continue;
+      if (!BUILDER_AGENT_IDS.has(run.agentId)) continue;
+
+      processedRuns.add(run.id);
+
+      // Find the issue assigned to this agent
+      const issues = await findAssignedIssues(run.agentId);
+      if (issues.length === 0) continue;
+
+      const issue = issues[0];
+      const workspace = getWorkspace();
+
+      // Fetch run output and parse for state
+      let runOutput = '';
+      try {
+        const outputRes = await fetch(`${PAPERCLIP_API}/api/runs/${run.id}/output`);
+        if (outputRes.ok) {
+          const outputData = await outputRes.json();
+          runOutput = outputData.output || outputData.text || outputData.content || '';
+        }
+      } catch { /* best-effort */ }
+
+      let result = parseRunOutput(runOutput);
+      result = await applyFallbackWithLLM(result, 'builder', runOutput);
+      
+      if (result.usedFallback) {
+        await postComment(issue.id, null,
+          `⚠️ Builder output missing [STATE:] block - ${result.reason}`
+        );
+      }
+      
+      const hasRunErrors = hasErrors(runOutput);
+
+      // Check if there are uncommitted changes or new commits
+      let hasChanges = false;
+      try {
+        const diffOutput = execSync('git diff --stat HEAD', { cwd: workspace, encoding: 'utf8', timeout: 10000 }).trim();
+        const untrackedOutput = execSync('git ls-files --others --exclude-standard', { cwd: workspace, encoding: 'utf8', timeout: 10000 }).trim();
+        hasChanges = diffOutput.length > 0 || untrackedOutput.length > 0;
+      } catch { }
+
+      // State machine based on parsed output
+      if (result.state === 'blocked') {
+        // BLOCKED: Don't commit, update status to blocked
+        console.log(`[guardrails] Builder run ${run.id.slice(0, 8)}: BLOCKED - ${result.reason || 'No reason provided'}`);
+        await patchIssue(issue.id, { status: 'blocked' });
+        await postComment(issue.id, null,
+          `🚫 Builder run BLOCKED\n` +
+          `Reason: ${result.reason || 'No reason provided'}\n` +
+          `Summary: ${result.summary || 'N/A'}`
+        );
+        continue;
+      }
+
+      if (result.state === 'todo') {
+        // TODO: Return to backlog with recommendation
+        console.log(`[guardrails] Builder run ${run.id.slice(0, 8)}: TODO - ${result.recommendation || 'Returned to backlog'}`);
+        await patchIssue(issue.id, { status: 'todo' });
+        await postComment(issue.id, null,
+          `🔄 Builder run returned to todo\n` +
+          `Reason: ${result.reason || 'Incomplete work'}\n` +
+          `Recommendation: ${result.recommendation || 'Re-run or assign to different agent'}`
+        );
+        continue;
+      }
+
+      if (!hasChanges && result.state !== 'done') {
+        // No changes and not marked done - might be stuck or needs retry
+        try {
+          const log = execSync('git log --oneline -5', { cwd: workspace, encoding: 'utf8', timeout: 10000 }).trim();
+          console.log(`[guardrails] Builder run ${run.id.slice(0, 8)} completed, no workspace changes. Recent: ${log.split('\n')[0]}`);
+        } catch {}
+        
+        if (hasRunErrors) {
+          const errors = extractErrors(runOutput);
+          await postComment(issue.id, null,
+            `⚠️ Builder run completed with errors:\n` +
+            errors.slice(0, 5).map(e => `- ${e}`).join('\n')
+          );
+        }
+        continue;
+      }
+
+      // For done/in_review/unknown - proceed with commit and status transition
+      if (!hasChanges) {
+        // Check if there are new commits since last known state
+        try {
+          const log = execSync('git log --oneline -5', { cwd: workspace, encoding: 'utf8', timeout: 10000 }).trim();
+          console.log(`[guardrails] Builder run ${run.id.slice(0, 8)} completed, no workspace changes. Recent: ${log.split('\n')[0]}`);
+        } catch {}
+        continue;
+      }
+
+      // There are changes! Stage, commit, create branch, and push
+      const branchName = `agent/${(issue.identifier || issue.id.slice(0, 8)).toLowerCase()}`;
+
+      try {
+        // Smart stage: only relevant files
+        const filesToStage = getFilesToStage(workspace);
+        
+        if (filesToStage.length === 0) {
+          console.log(`[guardrails] Builder run ${run.id.slice(0, 8)}: no relevant files to stage`);
+          continue;
+        }
+
+        console.log(`[guardrails] Staging ${filesToStage.length} files: ${filesToStage.slice(0, 3).join(', ')}...`);
+
+        // Create branch and commit
+        execSync(`git checkout -B ${branchName}`, { cwd: workspace, encoding: 'utf8', timeout: 10000 });
+        
+        // Stage only relevant files
+        for (const file of filesToStage) {
+          execSync(`git add "${file}"`, { cwd: workspace, encoding: 'utf8', timeout: 5000 });
+        }
+        
+        const commitMsg = `${issue.identifier}: ${issue.title}\n\nAutomated by Local Builder via ClosedLoop native adapter.`;
+        execSync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, { cwd: workspace, encoding: 'utf8', timeout: 10000 });
+
+        console.log(`[guardrails] Builder run ${run.id.slice(0, 8)}: committed ${filesToStage.length} files on ${branchName} for ${issue.identifier}`);
+
+        // Determine target state based on parsed output
+        const targetState = result.state === 'done' ? 'done' : 'in_review';
+        
+        // Update ticket status and assign to reviewer if in_review
+        await patchIssue(issue.id, { 
+          status: targetState,
+          assigneeAgentId: targetState === 'in_review' ? AGENTS.reviewer : undefined 
+        });
+        
+        const reviewerNote = targetState === 'in_review' ? '\nAssigned to Reviewer for code review.' : '';
+        await postComment(issue.id, null,
+          `Builder run completed. State: ${result.state}\n` +
+          `Branch: \`${branchName}\`\n` +
+          `Files: ${filesToStage.join(', ')}\n` +
+          `Summary: ${result.summary || 'N/A'}\n` +
+          `Status changed to ${targetState}.${reviewerNote}`
+        );
+
+        // Switch back to main branch
+        execSync('git checkout main || git checkout master', { cwd: workspace, encoding: 'utf8', timeout: 10000 });
+
+        console.log(`[guardrails] ${issue.identifier} moved to in_review after builder changes`);
+      } catch (err: any) {
+        console.log(`[guardrails] Failed to process builder changes for ${issue.identifier}: ${err.message}`);
+        // Switch back to main anyway
+        try { execSync('git checkout main || git checkout master', { cwd: workspace, encoding: 'utf8', timeout: 10000 }); } catch {}
+      }
+    }
+  } catch (err: any) {
+    // Silent fail — this is best-effort monitoring
+  }
+}
+
+// Monitor completed reviewer runs - handle approved/rejected output
+export async function monitorCompletedReviewerRuns(): Promise<void> {
+  try {
+    const res = await fetch(`${PAPERCLIP_API}/api/companies/${COMPANY_ID}/heartbeat-runs?limit=10`);
+    if (!res.ok) return;
+    const runs = await res.json() as any[];
+
+    for (const run of runs) {
+      if (processedRuns.has(run.id)) continue;
+      if (run.status !== 'succeeded' && run.status !== 'failed') continue;
+      if (!REVIEWER_AGENT_IDS.has(run.agentId)) continue;
+
+      processedRuns.add(run.id);
+
+      // Find the issue assigned to this reviewer
+      const issues = await findAssignedIssues(run.agentId);
+      if (issues.length === 0) continue;
+      
+      const issue = issues[0];
+      
+      // Fetch run output and parse for review decision
+      let runOutput = '';
+      try {
+        const outputRes = await fetch(`${PAPERCLIP_API}/api/runs/${run.id}/output`);
+        if (outputRes.ok) {
+          const outputData = await outputRes.json();
+          runOutput = outputData.output || outputData.text || outputData.content || '';
+        }
+      } catch { /* best-effort */ }
+
+      const review = parseReviewOutput(runOutput);
+      
+      if (review.usedFallback) {
+        await postComment(issue.id, null,
+          `⚠️ Review output missing [STATE: approved/rejected] block - ${review.feedback}`
+        );
+      }
+
+      if (review.decision === 'approved') {
+        // Approved - create PR and mark for Epic Reviewer
+        console.log(`[guardrails] Reviewer approved ${issue.identifier}`);
+        
+        // Create PR
+        try {
+          await createPullRequest(issue.id);
+          console.log(`[guardrails] PR created for ${issue.identifier}`);
+        } catch (err: any) {
+          console.log(`[guardrails] PR creation failed for ${issue.identifier}: ${err.message}`);
+        }
+        
+        await postComment(issue.id, null,
+          `✅ Review APPROVED\n` +
+          `Feedback: ${review.feedback || 'Code looks good'}\n` +
+          `Files reviewed: ${review.files.join(', ') || 'N/A'}\n` +
+          `PR created - will be reviewed by Epic Reviewer.`
+        );
+      } else if (review.decision === 'rejected') {
+        // Rejected - return to todo for builder to fix
+        console.log(`[guardrails] Reviewer rejected ${issue.identifier} - returning to todo`);
+        
+        await patchIssue(issue.id, { 
+          status: 'todo',
+          assigneeAgentId: AGENTS['local builder']
+        });
+        
+        await postComment(issue.id, null,
+          `🔄 Review REJECTED - Returned to todo\n` +
+          `Feedback: ${review.feedback || 'Please address review comments'}\n` +
+          `Files needing work: ${review.files.join(', ') || 'N/A'}\n` +
+          `Reassigned to Local Builder for fixes.`
+        );
+        
+        console.log(`[guardrails] ${issue.identifier} returned to todo after review rejection`);
+      }
+    }
+  } catch (err: any) {
+    // Silent fail — this is best-effort monitoring
+  }
 }
