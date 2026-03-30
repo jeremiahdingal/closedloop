@@ -19,6 +19,7 @@ const IGNORE_PATTERNS = [
   '.env*',
   '*.log',
   'INSTRUCTIONS.md',
+  'DRIFT_ISSUES.md',
   '.tickets/**',
   '.closedloop/**',
 ];
