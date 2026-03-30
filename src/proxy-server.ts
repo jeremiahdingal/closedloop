@@ -501,24 +501,8 @@ export function createProxy(): http.Server {
       });
     }
 
-    // Hook 1c: Epic Reviewer — review ALL epics at once and apply fixes
-    if (agentId === AGENTS['epic reviewer']) {
-      console.log(`[closedloop] Epic Reviewer build authority triggered`);
-      // Call epic-reviewer-agent module (uses GLM-5, processes all ready epics, applies fixes, and builds)
-      setImmediate(async () => {
-        try {
-          const { runEpicReviewerAgent } = await import('./epic-reviewer-agent');
-          await runEpicReviewerAgent();
-        } catch (err: any) {
-          console.error(`[closedloop] Epic Reviewer build authority failed: ${err.message}`);
-        }
-      });
-
-      // Return immediately - processing happens async
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ message: { role: 'assistant', content: '_Epic Reviewer started as the build authority for ready epics._' } }));
-      return;
-    }
+    // Hook 1c: Epic Reviewer is now native codex_local adapter - let Paperclip handle execution
+    // (Previously intercepted and handled locally, now delegated to native adapter)
 
     // Hook 1d: Epic Decoder — trigger decomposition when woken with goal context
     if (agentId === AGENTS['epic decoder'] && parsedBody.messages?.[0]?.content?.includes('Decompose')) {

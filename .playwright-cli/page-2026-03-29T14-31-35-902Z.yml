@@ -1,0 +1,174 @@
+- generic [ref=e3]:
+  - link "Skip to Main Content" [ref=e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - img [ref=e9]
+        - generic [ref=e11]:
+          - button "S" [ref=e12]:
+            - link "S" [ref=e13] [cursor=pointer]:
+              - /url: /SHO/dashboard
+              - generic [ref=e16]:
+                - img [ref=e17]
+                - generic [ref=e18]: S
+          - status [ref=e19]
+        - button "Add company" [ref=e22]:
+          - img [ref=e23]
+      - complementary [ref=e25]:
+        - generic [ref=e26]:
+          - generic [ref=e27]: Shop
+          - button [ref=e28]:
+            - img
+        - navigation [ref=e29]:
+          - generic [ref=e30]:
+            - button "New Issue" [ref=e31]:
+              - img [ref=e32]
+              - generic [ref=e35]: New Issue
+            - link "Dashboard 2 live" [ref=e36] [cursor=pointer]:
+              - /url: /SHO/dashboard
+              - img [ref=e38]
+              - generic [ref=e43]: Dashboard
+              - generic [ref=e48]: 2 live
+            - link "Inbox" [ref=e49] [cursor=pointer]:
+              - /url: /SHO/inbox
+              - img [ref=e51]
+              - generic [ref=e54]: Inbox
+          - generic [ref=e55]:
+            - generic [ref=e56]: Work
+            - generic [ref=e57]:
+              - link "Issues" [ref=e58] [cursor=pointer]:
+                - /url: /SHO/issues
+                - img [ref=e60]
+                - generic [ref=e63]: Issues
+              - link "Goals" [ref=e64] [cursor=pointer]:
+                - /url: /SHO/goals
+                - img [ref=e66]
+                - generic [ref=e70]: Goals
+          - generic [ref=e71]:
+            - generic [ref=e73]:
+              - button "Projects" [expanded] [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Projects
+              - button "New project" [ref=e78]:
+                - img [ref=e79]
+            - status [ref=e80]
+          - generic [ref=e81]:
+            - generic [ref=e83]:
+              - button "Agents" [expanded] [ref=e84]:
+                - img [ref=e85]
+                - generic [ref=e87]: Agents
+              - button "New agent" [ref=e88]:
+                - img [ref=e89]
+            - generic [ref=e91]:
+              - link "Strategist" [ref=e92] [cursor=pointer]:
+                - /url: /SHO/agents/strategist
+                - img [ref=e93]
+                - generic [ref=e101]: Strategist
+              - link "Epic Decoder" [ref=e102] [cursor=pointer]:
+                - /url: /SHO/agents/epic-decoder
+                - img [ref=e103]
+                - generic [ref=e106]: Epic Decoder
+              - link "Reviewer" [ref=e107] [cursor=pointer]:
+                - /url: /SHO/agents/reviewer
+                - img [ref=e108]
+                - generic [ref=e111]: Reviewer
+              - link "Epic Reviewer" [ref=e112] [cursor=pointer]:
+                - /url: /SHO/agents/epic-reviewer
+                - img [ref=e113]
+                - generic [ref=e116]: Epic Reviewer
+              - link "Tech Lead" [ref=e117] [cursor=pointer]:
+                - /url: /SHO/agents/tech-lead
+                - img [ref=e118]
+                - generic [ref=e122]: Tech Lead
+              - link "Complexity Router 1 live" [ref=e123] [cursor=pointer]:
+                - /url: /SHO/agents/complexity-router
+                - img [ref=e124]
+                - generic [ref=e127]: Complexity Router
+                - generic [ref=e132]: 1 live
+              - link "Sentinel" [ref=e133] [cursor=pointer]:
+                - /url: /SHO/agents/sentinel
+                - img [ref=e134]
+                - generic [ref=e136]: Sentinel
+              - link "Visual Reviewer" [ref=e137] [cursor=pointer]:
+                - /url: /SHO/agents/visual-reviewer
+                - img [ref=e138]
+                - generic [ref=e141]: Visual Reviewer
+              - link "Diff Guardian" [ref=e142] [cursor=pointer]:
+                - /url: /SHO/agents/diff-guardian
+                - img [ref=e143]
+                - generic [ref=e146]: Diff Guardian
+              - link "Scaffold Architect" [ref=e147] [cursor=pointer]:
+                - /url: /SHO/agents/scaffold-architect
+                - img [ref=e148]
+                - generic [ref=e151]: Scaffold Architect
+              - link "Coder Remote" [ref=e152] [cursor=pointer]:
+                - /url: /SHO/agents/coder-remote
+                - img [ref=e153]
+                - generic [ref=e156]: Coder Remote
+              - link "Test Writer" [ref=e157] [cursor=pointer]:
+                - /url: /SHO/agents/test-writer
+                - img [ref=e158]
+                - generic [ref=e161]: Test Writer
+              - link "Local Builder 1 live" [ref=e162] [cursor=pointer]:
+                - /url: /SHO/agents/local-builder
+                - img [ref=e163]
+                - generic [ref=e167]: Local Builder
+                - generic [ref=e172]: 1 live
+              - link "Deployer" [ref=e173] [cursor=pointer]:
+                - /url: /SHO/agents/deployer
+                - img [ref=e174]
+                - generic [ref=e179]: Deployer
+          - generic [ref=e180]:
+            - generic [ref=e181]: Company
+            - generic [ref=e182]:
+              - link "Org" [ref=e183] [cursor=pointer]:
+                - /url: /SHO/org
+                - img [ref=e185]
+                - generic [ref=e190]: Org
+              - link "Costs" [ref=e191] [cursor=pointer]:
+                - /url: /SHO/costs
+                - img [ref=e193]
+                - generic [ref=e195]: Costs
+              - link "Activity" [ref=e196] [cursor=pointer]:
+                - /url: /SHO/activity
+                - img [ref=e198]
+                - generic [ref=e202]: Activity
+              - link "Settings" [ref=e203] [cursor=pointer]:
+                - /url: /SHO/company/settings
+                - img [ref=e205]
+                - generic [ref=e208]: Settings
+    - generic [ref=e210]:
+      - link "Documentation" [ref=e211] [cursor=pointer]:
+        - /url: /docs
+        - img [ref=e213]
+        - generic [ref=e215]: Documentation
+      - link "Instance settings" [ref=e216] [cursor=pointer]:
+        - /url: /instance/settings
+        - img
+      - button "Switch to light mode" [ref=e217]:
+        - img
+  - generic [ref=e218]:
+    - navigation "breadcrumb" [ref=e221]:
+      - list [ref=e222]:
+        - listitem [ref=e223]:
+          - link "Agents" [ref=e224] [cursor=pointer]:
+            - /url: /SHO/agents
+        - listitem [ref=e225]:
+          - img [ref=e226]
+        - listitem [ref=e228]:
+          - link "local-builder" [ref=e229] [cursor=pointer]:
+            - /url: /SHO/agents/local-builder/dashboard
+        - listitem [ref=e230]:
+          - img [ref=e231]
+        - listitem [ref=e233]:
+          - link "Runs" [ref=e234] [cursor=pointer]:
+            - /url: /SHO/agents/local-builder/runs
+        - listitem [ref=e235]:
+          - img [ref=e236]
+        - listitem [ref=e238]:
+          - link "Run e1aaba55" [disabled] [ref=e239]
+    - main [ref=e241]
+  - generic [ref=e260]:
+    - heading "Command Palette" [level=2] [ref=e261]
+    - paragraph [ref=e262]: Search for a command to run...

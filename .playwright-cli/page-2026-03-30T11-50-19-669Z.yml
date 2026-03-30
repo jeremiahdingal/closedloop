@@ -1,0 +1,469 @@
+- generic [ref=e3]:
+  - link "Skip to Main Content" [ref=e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - img [ref=e9]
+        - generic [ref=e11]:
+          - button "S" [ref=e12]:
+            - link "S" [ref=e13] [cursor=pointer]:
+              - /url: /SHO/dashboard
+              - generic [ref=e16]:
+                - img [ref=e17]
+                - generic [ref=e18]: S
+          - status [ref=e19]
+        - button "Add company" [ref=e22]:
+          - img [ref=e23]
+      - complementary [ref=e25]:
+        - generic [ref=e26]:
+          - generic [ref=e27]: Shop
+          - button [ref=e28]:
+            - img
+        - navigation [ref=e29]:
+          - generic [ref=e30]:
+            - button "New Issue" [ref=e31]:
+              - img [ref=e32]
+              - generic [ref=e35]: New Issue
+            - link "Dashboard" [ref=e36] [cursor=pointer]:
+              - /url: /SHO/dashboard
+              - img [ref=e38]
+              - generic [ref=e43]: Dashboard
+            - link "Inbox 6" [ref=e168] [cursor=pointer]:
+              - /url: /SHO/inbox
+              - img [ref=e46]
+              - generic [ref=e49]: Inbox
+              - generic [ref=e170]: "6"
+          - generic [ref=e50]:
+            - generic [ref=e51]: Work
+            - generic [ref=e52]:
+              - link "Issues" [ref=e53] [cursor=pointer]:
+                - /url: /SHO/issues
+                - img [ref=e55]
+                - generic [ref=e58]: Issues
+              - link "Goals" [ref=e59] [cursor=pointer]:
+                - /url: /SHO/goals
+                - img [ref=e61]
+                - generic [ref=e65]: Goals
+          - generic [ref=e66]:
+            - generic [ref=e68]:
+              - button "Projects" [expanded] [ref=e69]:
+                - img [ref=e70]
+                - generic [ref=e72]: Projects
+              - button "New project" [ref=e73]:
+                - img [ref=e74]
+            - generic [ref=e171]:
+              - button "Shop Diary" [ref=e173]:
+                - link "Shop Diary" [ref=e174] [cursor=pointer]:
+                  - /url: /SHO/projects/shop-diary/issues
+                  - generic [ref=e176]: Shop Diary
+              - status [ref=e75]
+          - generic [ref=e76]:
+            - generic [ref=e78]:
+              - button "Agents" [expanded] [ref=e79]:
+                - img [ref=e80]
+                - generic [ref=e82]: Agents
+              - button "New agent" [ref=e83]:
+                - img [ref=e84]
+            - generic [ref=e178]:
+              - link "Epic Decoder" [ref=e179] [cursor=pointer]:
+                - /url: /SHO/agents/epic-decoder
+                - img [ref=e180]
+                - generic [ref=e183]: Epic Decoder
+              - link "Strategist" [ref=e184] [cursor=pointer]:
+                - /url: /SHO/agents/strategist
+                - img [ref=e185]
+                - generic [ref=e193]: Strategist
+              - link "Reviewer" [ref=e194] [cursor=pointer]:
+                - /url: /SHO/agents/reviewer
+                - img [ref=e195]
+                - generic [ref=e198]: Reviewer
+              - link "Epic Reviewer" [ref=e199] [cursor=pointer]:
+                - /url: /SHO/agents/epic-reviewer
+                - img [ref=e200]
+                - generic [ref=e203]: Epic Reviewer
+              - link "Tech Lead" [ref=e204] [cursor=pointer]:
+                - /url: /SHO/agents/tech-lead
+                - img [ref=e205]
+                - generic [ref=e209]: Tech Lead
+              - link "Sentinel" [ref=e210] [cursor=pointer]:
+                - /url: /SHO/agents/sentinel
+                - img [ref=e211]
+                - generic [ref=e213]: Sentinel
+              - link "Complexity Router" [ref=e214] [cursor=pointer]:
+                - /url: /SHO/agents/complexity-router
+                - img [ref=e215]
+                - generic [ref=e218]: Complexity Router
+              - link "Visual Reviewer" [ref=e219] [cursor=pointer]:
+                - /url: /SHO/agents/visual-reviewer
+                - img [ref=e220]
+                - generic [ref=e223]: Visual Reviewer
+              - link "Diff Guardian" [ref=e224] [cursor=pointer]:
+                - /url: /SHO/agents/diff-guardian
+                - img [ref=e225]
+                - generic [ref=e228]: Diff Guardian
+              - link "Coder Remote" [ref=e229] [cursor=pointer]:
+                - /url: /SHO/agents/coder-remote
+                - img [ref=e230]
+                - generic [ref=e233]: Coder Remote
+              - link "Scaffold Architect" [ref=e234] [cursor=pointer]:
+                - /url: /SHO/agents/scaffold-architect
+                - img [ref=e235]
+                - generic [ref=e238]: Scaffold Architect
+              - link "Test Writer" [ref=e239] [cursor=pointer]:
+                - /url: /SHO/agents/test-writer
+                - img [ref=e240]
+                - generic [ref=e243]: Test Writer
+              - link "Local Builder" [ref=e244] [cursor=pointer]:
+                - /url: /SHO/agents/local-builder
+                - img [ref=e245]
+                - generic [ref=e249]: Local Builder
+              - link "Deployer" [ref=e250] [cursor=pointer]:
+                - /url: /SHO/agents/deployer
+                - img [ref=e251]
+                - generic [ref=e256]: Deployer
+          - generic [ref=e85]:
+            - generic [ref=e86]: Company
+            - generic [ref=e87]:
+              - link "Org" [ref=e88] [cursor=pointer]:
+                - /url: /SHO/org
+                - img [ref=e90]
+                - generic [ref=e95]: Org
+              - link "Costs" [ref=e96] [cursor=pointer]:
+                - /url: /SHO/costs
+                - img [ref=e98]
+                - generic [ref=e100]: Costs
+              - link "Activity" [ref=e101] [cursor=pointer]:
+                - /url: /SHO/activity
+                - img [ref=e103]
+                - generic [ref=e107]: Activity
+              - link "Settings" [ref=e108] [cursor=pointer]:
+                - /url: /SHO/company/settings
+                - img [ref=e110]
+                - generic [ref=e113]: Settings
+    - generic [ref=e115]:
+      - link "Documentation" [ref=e116] [cursor=pointer]:
+        - /url: /docs
+        - img [ref=e118]
+        - generic [ref=e120]: Documentation
+      - link "Instance settings" [ref=e121] [cursor=pointer]:
+        - /url: /instance/settings
+        - img
+      - button "Switch to light mode" [ref=e122]:
+        - img
+  - generic [ref=e123]:
+    - navigation "breadcrumb" [ref=e126]:
+      - list [ref=e127]:
+        - listitem [ref=e128]:
+          - link "Agents" [ref=e129] [cursor=pointer]:
+            - /url: /SHO/agents
+        - listitem [ref=e130]:
+          - img [ref=e131]
+        - listitem [ref=e133]:
+          - link "Scaffold Architect" [ref=e257] [cursor=pointer]:
+            - /url: /SHO/agents/scaffold-architect/dashboard
+        - listitem [ref=e135]:
+          - img [ref=e136]
+        - listitem [ref=e138]:
+          - link "Runs" [ref=e139] [cursor=pointer]:
+            - /url: /SHO/agents/scaffold-architect/runs
+        - listitem [ref=e140]:
+          - img [ref=e141]
+        - listitem [ref=e143]:
+          - link "Run 982e7314" [disabled] [ref=e144]
+    - main [ref=e146]:
+      - generic [ref=e258]:
+        - generic [ref=e259]:
+          - generic [ref=e260]:
+            - button [ref=e261]:
+              - img [ref=e262]
+            - generic [ref=e265]:
+              - heading "Scaffold Architect" [level=2] [ref=e266]
+              - paragraph [ref=e267]: General
+          - generic [ref=e268]:
+            - button "Assign Task" [ref=e269]:
+              - img
+              - generic [ref=e270]: Assign Task
+            - button "Run Heartbeat" [ref=e271]:
+              - img
+              - generic [ref=e272]: Run Heartbeat
+            - button "Pause" [ref=e273]:
+              - img
+              - generic [ref=e274]: Pause
+            - generic [ref=e276]: idle
+            - button [ref=e277]:
+              - img
+        - generic:
+          - generic:
+            - button "Cancel"
+            - button "Save"
+        - generic [ref=e278]:
+          - generic [ref=e280]:
+            - link "90fbafb8 On-demand 1m ago 4.5k tok" [ref=e281] [cursor=pointer]:
+              - /url: /SHO/agents/scaffold-architect/runs/90fbafb8-dfa0-4114-893c-fb3cd89d1103
+              - generic [ref=e282]:
+                - img [ref=e283]
+                - generic [ref=e286]: 90fbafb8
+                - generic [ref=e287]: On-demand
+                - generic [ref=e288]: 1m ago
+              - generic [ref=e290]: 4.5k tok
+            - link "982e7314 Assignment 1m ago 4.6k tok" [ref=e291] [cursor=pointer]:
+              - /url: /SHO/agents/scaffold-architect/runs
+              - generic [ref=e292]:
+                - img [ref=e293]
+                - generic [ref=e296]: "982e7314"
+                - generic [ref=e297]: Assignment
+                - generic [ref=e298]: 1m ago
+              - generic [ref=e300]: 4.6k tok
+            - 'link "6eed7382 Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e301] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/6eed7382-785c-48b7-8c58-6aa8e21bb3c1
+              - generic [ref=e302]:
+                - img [ref=e303]
+                - generic [ref=e307]: 6eed7382
+                - generic [ref=e308]: Automation
+                - generic [ref=e309]: 8d ago
+              - generic [ref=e310]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "1cddd75b Assignment 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e311] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/1cddd75b-964b-4a32-bc2c-2a7a4caa04f3
+              - generic [ref=e312]:
+                - img [ref=e313]
+                - generic [ref=e317]: 1cddd75b
+                - generic [ref=e318]: Assignment
+                - generic [ref=e319]: 8d ago
+              - generic [ref=e320]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "daea1438 Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e321] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/daea1438-5d53-404d-8bdc-735538035828
+              - generic [ref=e322]:
+                - img [ref=e323]
+                - generic [ref=e327]: daea1438
+                - generic [ref=e328]: Automation
+                - generic [ref=e329]: 8d ago
+              - generic [ref=e330]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "3a4e42f1 Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e331] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/3a4e42f1-7d4d-4113-ab1f-347b782c2b4f
+              - generic [ref=e332]:
+                - img [ref=e333]
+                - generic [ref=e337]: 3a4e42f1
+                - generic [ref=e338]: Automation
+                - generic [ref=e339]: 8d ago
+              - generic [ref=e340]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "e3abdb62 Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e341] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/e3abdb62-0997-480d-8b10-72091e7a1d34
+              - generic [ref=e342]:
+                - img [ref=e343]
+                - generic [ref=e347]: e3abdb62
+                - generic [ref=e348]: Automation
+                - generic [ref=e349]: 8d ago
+              - generic [ref=e350]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "793dfb1d Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e351] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/793dfb1d-2d80-485c-85a8-b8e10722a2a2
+              - generic [ref=e352]:
+                - img [ref=e353]
+                - generic [ref=e357]: 793dfb1d
+                - generic [ref=e358]: Automation
+                - generic [ref=e359]: 8d ago
+              - generic [ref=e360]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "aa4fd938 Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e361] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/aa4fd938-f7c1-4779-98ec-1a3dca818d15
+              - generic [ref=e362]:
+                - img [ref=e363]
+                - generic [ref=e367]: aa4fd938
+                - generic [ref=e368]: Automation
+                - generic [ref=e369]: 8d ago
+              - generic [ref=e370]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "0efc8ff9 Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e371] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/0efc8ff9-f28b-4772-9dd0-80a0cd64923e
+              - generic [ref=e372]:
+                - img [ref=e373]
+                - generic [ref=e377]: 0efc8ff9
+                - generic [ref=e378]: Automation
+                - generic [ref=e379]: 8d ago
+              - generic [ref=e380]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "a5efa3ac Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e381] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/a5efa3ac-e1be-4d0e-a594-778017c4dd7f
+              - generic [ref=e382]:
+                - img [ref=e383]
+                - generic [ref=e387]: a5efa3ac
+                - generic [ref=e388]: Automation
+                - generic [ref=e389]: 8d ago
+              - generic [ref=e390]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "b6834f1b Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e391] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/b6834f1b-d632-4552-9d62-50be11c1c3b0
+              - generic [ref=e392]:
+                - img [ref=e393]
+                - generic [ref=e397]: b6834f1b
+                - generic [ref=e398]: Automation
+                - generic [ref=e399]: 8d ago
+              - generic [ref=e400]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "419b1388 Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e401] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/419b1388-693d-419c-bad4-06883dbf8c59
+              - generic [ref=e402]:
+                - img [ref=e403]
+                - generic [ref=e407]: 419b1388
+                - generic [ref=e408]: Automation
+                - generic [ref=e409]: 8d ago
+              - generic [ref=e410]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "075a49c0 Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e411] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/075a49c0-dece-4e61-81ec-958a20df5ec3
+              - generic [ref=e412]:
+                - img [ref=e413]
+                - generic [ref=e417]: 075a49c0
+                - generic [ref=e418]: Automation
+                - generic [ref=e419]: 8d ago
+              - generic [ref=e420]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "246afd0c Assignment 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e421] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/246afd0c-1d9c-4ddd-9530-422aa66cb178
+              - generic [ref=e422]:
+                - img [ref=e423]
+                - generic [ref=e427]: 246afd0c
+                - generic [ref=e428]: Assignment
+                - generic [ref=e429]: 8d ago
+              - generic [ref=e430]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "a938e1db Assignment 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e431] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/a938e1db-13e1-40e4-8f6a-25cd2e5f70e8
+              - generic [ref=e432]:
+                - img [ref=e433]
+                - generic [ref=e437]: a938e1db
+                - generic [ref=e438]: Assignment
+                - generic [ref=e439]: 8d ago
+              - generic [ref=e440]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "f89850bf Assignment 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e441] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/f89850bf-1e6e-4cb0-b8f6-3ae2f3a17d0f
+              - generic [ref=e442]:
+                - img [ref=e443]
+                - generic [ref=e447]: f89850bf
+                - generic [ref=e448]: Assignment
+                - generic [ref=e449]: 8d ago
+              - generic [ref=e450]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "524afb0f Assignment 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e451] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/524afb0f-fd63-47d0-bdea-1b633e28a943
+              - generic [ref=e452]:
+                - img [ref=e453]
+                - generic [ref=e457]: 524afb0f
+                - generic [ref=e458]: Assignment
+                - generic [ref=e459]: 8d ago
+              - generic [ref=e460]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "33313a51 Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e461] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/33313a51-97ce-4cc9-a748-d278bb643290
+              - generic [ref=e462]:
+                - img [ref=e463]
+                - generic [ref=e467]: 33313a51
+                - generic [ref=e468]: Automation
+                - generic [ref=e469]: 8d ago
+              - generic [ref=e470]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "f413f907 Automation 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e471] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/f413f907-ae96-458d-a56a-212451998da8
+              - generic [ref=e472]:
+                - img [ref=e473]
+                - generic [ref=e477]: f413f907
+                - generic [ref=e478]: Automation
+                - generic [ref=e479]: 8d ago
+              - generic [ref=e480]: "Pi requires `adapterConfig.model` in provider/model format."
+            - 'link "f239c454 Assignment 8d ago Pi requires `adapterConfig.model` in provider/model format." [ref=e481] [cursor=pointer]':
+              - /url: /SHO/agents/scaffold-architect/runs/f239c454-abbf-42f4-a082-652dc964e3b5
+              - generic [ref=e482]:
+                - img [ref=e483]
+                - generic [ref=e487]: f239c454
+                - generic [ref=e488]: Assignment
+                - generic [ref=e489]: 8d ago
+              - generic [ref=e490]: "Pi requires `adapterConfig.model` in provider/model format."
+          - generic [ref=e492]:
+            - generic [ref=e493]:
+              - generic [ref=e494]:
+                - generic [ref=e495]:
+                  - generic [ref=e497]: succeeded
+                  - generic [ref=e498]:
+                    - generic [ref=e499]: 12:49:01 → 12:49:18
+                    - generic [ref=e500]: 1m ago → 1m ago
+                    - generic [ref=e501]: "Duration: 17s"
+                - generic [ref=e502]:
+                  - generic [ref=e503]:
+                    - generic [ref=e504]: Input
+                    - generic [ref=e505]: 4.1k
+                  - generic [ref=e506]:
+                    - generic [ref=e507]: Output
+                    - generic [ref=e508]: "545"
+                  - generic [ref=e509]:
+                    - generic [ref=e510]: Cached
+                    - generic [ref=e511]: "0"
+                  - generic [ref=e512]:
+                    - generic [ref=e513]: Cost
+                    - generic [ref=e514]: "-"
+              - button "Session" [ref=e516]:
+                - img [ref=e517]
+                - text: Session
+            - generic [ref=e519]:
+              - generic [ref=e520]: Issues Touched (1)
+              - link "todo [Test] Native OpenCode workspace read verification SHO-331" [ref=e522] [cursor=pointer]:
+                - /url: /SHO/issues/SHO-331
+                - generic [ref=e523]:
+                  - generic [ref=e524]: todo
+                  - generic [ref=e525]: "[Test] Native OpenCode workspace read verification"
+                - generic [ref=e526]: SHO-331
+            - generic [ref=e527]:
+              - text: stderr
+              - generic [ref=e528]: "[paperclip] Skipping saved session resume for task \"6f4bc56e-116b-46f5-bcd1-57fc3f5cbf6d\" because wake reason is issue_assigned."
+            - generic [ref=e529]:
+              - generic [ref=e530]:
+                - generic [ref=e531]: Events (3)
+                - generic [ref=e532]:
+                  - generic [ref=e533]:
+                    - generic [ref=e534]: 12:49:01
+                    - generic [ref=e535]: "[system]"
+                    - generic [ref=e536]: run started
+                  - generic [ref=e537]:
+                    - generic [ref=e538]: 12:49:02
+                    - generic [ref=e539]: "[system]"
+                    - generic [ref=e540]: adapter invocation
+                  - generic [ref=e541]:
+                    - generic [ref=e542]: 12:49:18
+                    - generic [ref=e543]: "[system]"
+                    - generic [ref=e544]: run succeeded
+              - generic [ref=e546]:
+                - generic [ref=e549]:
+                  - img [ref=e550]
+                  - generic [ref=e554]: systemstep started (ses_2c16c8d2effeDCn3IeOV6ikAVk)
+                - generic [ref=e557]:
+                  - heading "Summary" [level=2] [ref=e558]
+                  - list [ref=e559]:
+                    - listitem [ref=e560]: Reviewed the assigned task and issue details to align with the Paperclip workflow.
+                    - listitem [ref=e561]: Confirmed the absence of specific context about "Paperclip" in the provided tools or issue data.
+                  - heading "Actions" [level=2] [ref=e562]
+                  - list [ref=e563]:
+                    - listitem [ref=e564]: Verified the task ID and linked issue IDs to ensure proper issue tracking.
+                    - listitem [ref=e565]:
+                      - text: Checked for available tools or functions that could address the Paperclip work (e.g.,
+                      - code [ref=e566]: Edit
+                      - text: ","
+                      - code [ref=e567]: Todo
+                      - text: ","
+                      - code [ref=e568]: Write
+                      - text: ), but no direct alignment was found.
+                    - listitem [ref=e569]: Documented the need for further clarification on the scope of "Paperclip" work.
+                  - heading "Next" [level=2] [ref=e570]
+                  - list [ref=e571]:
+                    - listitem [ref=e572]: "Immediate next step: Request clarification from the team or stakeholders on the definition and requirements of the \"Paperclip\" task."
+                    - listitem [ref=e573]: "Blocker: Ambiguity in the task description prevents proceeding without additional context."
+                - generic [ref=e579]: stop
+              - generic [ref=e580]:
+                - generic [ref=e581]: Transcript (4)
+                - generic [ref=e583]:
+                  - button "nice" [ref=e584]
+                  - button "raw" [ref=e585]
+              - generic [ref=e586]:
+                - generic [ref=e587]: Invocation
+                - generic [ref=e588]: "Adapter: opencode_local"
+                - generic [ref=e589]: "Working dir: C:/Users/[]/Projects/shop-diary-v3"
+                - generic [ref=e590]: "Command: opencode run --format json --model ollama/qwen3:8b <stdin prompt 552 chars>"
+                - generic [ref=e591]:
+                  - generic [ref=e592]: Prompt
+                  - generic [ref=e593]: "You are Scaffold Architect (f5366415-528e-4323-a029-8867cd47ffca). Wake reason: issue_assigned Wake source: assignment Issue ID: 6f4bc56e-116b-46f5-bcd1-57fc3f5cbf6d Task ID: 6f4bc56e-116b-46f5-bcd1-57fc3f5cbf6d Linked issue IDs: Continue your assigned Paperclip work. Always output a non-empty markdown run report, even if blocked or no task is available. Never return an empty response. Use exactly this structure: ## Summary - What you did or checked ## Actions - Concrete steps completed in this run ## Next - Immediate next step and any blocker"
+                - generic [ref=e594]:
+                  - generic [ref=e595]: Context
+                  - generic [ref=e596]: "{ \"source\": \"issue.update\", \"taskId\": \"6f4bc56e-116b-46f5-bcd1-57fc3f5cbf6d\", \"issueId\": \"6f4bc56e-116b-46f5-bcd1-57fc3f5cbf6d\", \"taskKey\": \"6f4bc56e-116b-46f5-bcd1-57fc3f5cbf6d\", \"wakeReason\": \"issue_assigned\", \"wakeSource\": \"assignment\", \"wakeTriggerDetail\": \"system\", \"paperclipWorkspace\": { \"cwd\": \"C:\\\\Users\\\\[]\\\\.paperclip\\\\instances\\\\default\\\\workspaces\\\\f5366415-528e-4323-a029-8867cd47ffca\", \"mode\": \"project_primary\", \"source\": \"agent_home\", \"repoRef\": null, \"repoUrl\": null, \"strategy\": \"project_primary\", \"projectId\": null, \"branchName\": null, \"workspaceId\": null, \"worktreePath\": null }, \"paperclipWorkspaces\": [] }"
+                - generic [ref=e597]:
+                  - generic [ref=e598]: Environment
+                  - generic [ref=e599]: PAPERCLIP_AGENT_ID=f5366415-528e-4323-a029-8867cd47ffca PAPERCLIP_API_KEY=***REDACTED*** PAPERCLIP_API_URL=http://127.0.0.1:3100 PAPERCLIP_COMPANY_ID=ac5c469b-1f81-4f1f-9061-1dd9033ec831 PAPERCLIP_RUN_ID=982e7314-512b-4350-8790-da9c84144a2e PAPERCLIP_TASK_ID=6f4bc56e-116b-46f5-bcd1-57fc3f5cbf6d PAPERCLIP_WAKE_REASON=issue_assigned PAPERCLIP_WORKSPACE_SOURCE=agent_home
+  - generic [ref=e165]:
+    - heading "Command Palette" [level=2] [ref=e166]
+    - paragraph [ref=e167]: Search for a command to run...

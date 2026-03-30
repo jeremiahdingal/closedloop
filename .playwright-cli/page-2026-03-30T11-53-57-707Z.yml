@@ -1,0 +1,363 @@
+- generic:
+  - generic:
+    - generic:
+      - link:
+        - /url: "#main-content"
+        - text: Skip to Main Content
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - img
+            - generic:
+              - button:
+                - link:
+                  - /url: /SHO/dashboard
+                  - generic:
+                    - generic:
+                      - img
+                      - generic: S
+              - status
+            - generic:
+              - button:
+                - img
+          - generic:
+            - complementary:
+              - generic:
+                - generic: Shop
+                - button:
+                  - img
+              - navigation:
+                - generic:
+                  - button:
+                    - img
+                    - generic: New Issue
+                  - link:
+                    - /url: /SHO/dashboard
+                    - generic:
+                      - img
+                    - generic: Dashboard
+                  - link:
+                    - /url: /SHO/inbox
+                    - generic:
+                      - img
+                    - generic: Inbox
+                    - generic: "6"
+                - generic:
+                  - generic: Work
+                  - generic:
+                    - link:
+                      - /url: /SHO/issues
+                      - generic:
+                        - img
+                      - generic: Issues
+                    - link:
+                      - /url: /SHO/goals
+                      - generic:
+                        - img
+                      - generic: Goals
+                - generic:
+                  - generic:
+                    - generic:
+                      - button [expanded]:
+                        - img
+                        - generic: Projects
+                      - button:
+                        - img
+                  - generic:
+                    - generic:
+                      - button:
+                        - link:
+                          - /url: /SHO/projects/shop-diary/issues
+                          - generic: Shop Diary
+                    - status
+                - generic:
+                  - generic:
+                    - generic:
+                      - button [expanded]:
+                        - img
+                        - generic: Agents
+                      - button:
+                        - img
+                  - generic:
+                    - generic:
+                      - link:
+                        - /url: /SHO/agents/epic-decoder
+                        - img
+                        - generic: Epic Decoder
+                      - link:
+                        - /url: /SHO/agents/strategist
+                        - img
+                        - generic: Strategist
+                      - link:
+                        - /url: /SHO/agents/reviewer
+                        - img
+                        - generic: Reviewer
+                      - link:
+                        - /url: /SHO/agents/epic-reviewer
+                        - img
+                        - generic: Epic Reviewer
+                      - link:
+                        - /url: /SHO/agents/tech-lead
+                        - img
+                        - generic: Tech Lead
+                      - link:
+                        - /url: /SHO/agents/sentinel
+                        - img
+                        - generic: Sentinel
+                      - link:
+                        - /url: /SHO/agents/complexity-router
+                        - img
+                        - generic: Complexity Router
+                      - link:
+                        - /url: /SHO/agents/visual-reviewer
+                        - img
+                        - generic: Visual Reviewer
+                      - link:
+                        - /url: /SHO/agents/diff-guardian
+                        - img
+                        - generic: Diff Guardian
+                      - link:
+                        - /url: /SHO/agents/coder-remote
+                        - img
+                        - generic: Coder Remote
+                      - link:
+                        - /url: /SHO/agents/scaffold-architect
+                        - img
+                        - generic: Scaffold Architect
+                      - link:
+                        - /url: /SHO/agents/test-writer
+                        - img
+                        - generic: Test Writer
+                      - link:
+                        - /url: /SHO/agents/local-builder
+                        - img
+                        - generic: Local Builder
+                      - link:
+                        - /url: /SHO/agents/deployer
+                        - img
+                        - generic: Deployer
+                - generic:
+                  - generic: Company
+                  - generic:
+                    - link:
+                      - /url: /SHO/org
+                      - generic:
+                        - img
+                      - generic: Org
+                    - link:
+                      - /url: /SHO/costs
+                      - generic:
+                        - img
+                      - generic: Costs
+                    - link:
+                      - /url: /SHO/activity
+                      - generic:
+                        - img
+                      - generic: Activity
+                    - link:
+                      - /url: /SHO/company/settings
+                      - generic:
+                        - img
+                      - generic: Settings
+        - generic:
+          - generic:
+            - link:
+              - /url: /docs
+              - generic:
+                - img
+              - generic: Documentation
+            - link:
+              - /url: /instance/settings
+              - img
+            - button:
+              - img
+      - generic:
+        - generic:
+          - generic:
+            - navigation:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /SHO/agents
+                    - text: Agents
+                - listitem:
+                  - img
+                - listitem:
+                  - link [disabled]: Scaffold Architect
+        - generic:
+          - main:
+            - generic:
+              - generic:
+                - generic:
+                  - button:
+                    - img
+                  - generic:
+                    - heading [level=2]: Scaffold Architect
+                    - paragraph: General
+                - generic:
+                  - button:
+                    - img
+                    - generic: Assign Task
+                  - button:
+                    - img
+                    - generic: Run Heartbeat
+                  - button:
+                    - img
+                    - generic: Pause
+                  - generic:
+                    - generic: idle
+                  - button:
+                    - img
+              - generic:
+                - tablist:
+                  - tab [selected]: Dashboard
+                  - tab: Configuration
+                  - tab: Runs
+              - generic:
+                - generic:
+                  - button: Cancel
+                  - button: Save
+              - generic:
+                - generic:
+                  - generic:
+                    - heading [level=3]: Latest Run
+                    - link:
+                      - /url: /SHO/agents/scaffold-architect/runs/90fbafb8-dfa0-4114-893c-fb3cd89d1103
+                      - text: View details →
+                  - link:
+                    - /url: /SHO/agents/scaffold-architect/runs/90fbafb8-dfa0-4114-893c-fb3cd89d1103
+                    - generic:
+                      - img
+                      - generic: succeeded
+                      - generic: 90fbafb8
+                      - generic: On-demand
+                      - generic: 5m ago
+                - generic:
+                  - generic:
+                    - generic:
+                      - heading [level=3]: Run Activity
+                      - text: Last 14 days
+                    - generic:
+                      - generic:
+                        - generic: 3/17
+                        - generic: 3/23
+                        - generic: 3/30
+                  - generic:
+                    - generic:
+                      - heading [level=3]: Issues by Priority
+                      - text: Last 14 days
+                    - generic:
+                      - generic:
+                        - generic: 3/17
+                        - generic: 3/23
+                        - generic: 3/30
+                      - generic:
+                        - generic: Critical
+                        - generic: High
+                        - generic: Medium
+                        - generic: Low
+                  - generic:
+                    - generic:
+                      - heading [level=3]: Issues by Status
+                      - text: Last 14 days
+                    - generic:
+                      - generic:
+                        - generic: 3/17
+                        - generic: 3/23
+                        - generic: 3/30
+                      - generic:
+                        - generic: To Do
+                  - generic:
+                    - generic:
+                      - heading [level=3]: Success Rate
+                      - text: Last 14 days
+                    - generic:
+                      - generic:
+                        - generic: 3/17
+                        - generic: 3/23
+                        - generic: 3/30
+                - generic:
+                  - generic:
+                    - heading [level=3]: Recent Issues
+                    - link:
+                      - /url: /SHO/issues?assignee=f5366415-528e-4323-a029-8867cd47ffca
+                      - text: See All →
+                  - generic:
+                    - link:
+                      - /url: /SHO/issues/SHO-331
+                      - generic:
+                        - generic:
+                          - generic: SHO-331
+                          - generic: "[Test] Native OpenCode workspace read verification"
+                      - generic:
+                        - generic: todo
+                - generic:
+                  - heading [level=3]: Costs
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: Input tokens
+                          - text: 8.2k
+                        - generic:
+                          - generic: Output tokens
+                          - text: "986"
+                        - generic:
+                          - generic: Cached tokens
+                          - text: "0"
+                        - generic:
+                          - generic: Total cost
+                          - text: $0.00
+      - generic:
+        - heading [level=2]: Command Palette
+        - paragraph: Search for a command to run...
+  - dialog [ref=e522]:
+    - generic [ref=e523]:
+      - generic [ref=e524]:
+        - button "SHO" [ref=e525] [cursor=pointer]
+        - generic [ref=e526]: ›
+        - generic [ref=e527]: New issue
+      - generic [ref=e528]:
+        - button [ref=e529]:
+          - img
+        - button "×" [ref=e530]:
+          - generic [ref=e531]: ×
+    - textbox "Issue title" [active] [ref=e533]
+    - generic [ref=e536]:
+      - generic [ref=e537]: For
+      - button "Scaffold Architect" [ref=e538]:
+        - img [ref=e539]
+        - generic [ref=e542]: Scaffold Architect
+      - generic [ref=e543]: in
+      - button "Project" [ref=e544]:
+        - generic [ref=e545]: Project
+    - button "OpenCode options" [ref=e547]:
+      - img [ref=e548]
+      - text: OpenCode options
+    - generic [ref=e553]:
+      - textbox "editable markdown" [ref=e555]:
+        - paragraph [ref=e556]
+      - generic:
+        - paragraph: Add description...
+    - generic [ref=e557]:
+      - button "Todo" [ref=e558]:
+        - img [ref=e559]
+        - text: Todo
+      - button "Priority" [ref=e562]:
+        - img [ref=e563]
+        - text: Priority
+      - button "Labels" [ref=e564]:
+        - img [ref=e565]
+        - text: Labels
+      - button "Image" [ref=e568]:
+        - img [ref=e569]
+        - text: Image
+      - button [ref=e571]:
+        - img [ref=e572]
+    - generic [ref=e576]:
+      - button "Discard Draft" [disabled]
+      - generic [ref=e577]:
+        - button "Create Issue" [disabled]:
+          - generic:
+            - generic: Create Issue

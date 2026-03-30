@@ -1,0 +1,101 @@
+- generic [ref=e3]:
+  - link "Skip to Main Content" [ref=e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - img [ref=e9]
+        - status [ref=e12]
+        - button "Add company" [ref=e15]:
+          - img [ref=e16]
+      - complementary [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20]: Select company
+          - button [ref=e21]:
+            - img
+        - navigation [ref=e22]:
+          - generic [ref=e23]:
+            - button "New Issue" [ref=e24]:
+              - img [ref=e25]
+              - generic [ref=e28]: New Issue
+            - link "Dashboard" [ref=e29] [cursor=pointer]:
+              - /url: /SHO/dashboard
+              - img [ref=e31]
+              - generic [ref=e36]: Dashboard
+            - link "Inbox" [ref=e37] [cursor=pointer]:
+              - /url: /SHO/inbox
+              - img [ref=e39]
+              - generic [ref=e42]: Inbox
+          - generic [ref=e43]:
+            - generic [ref=e44]: Work
+            - generic [ref=e45]:
+              - link "Issues" [ref=e46] [cursor=pointer]:
+                - /url: /SHO/issues
+                - img [ref=e48]
+                - generic [ref=e51]: Issues
+              - link "Goals" [ref=e52] [cursor=pointer]:
+                - /url: /SHO/goals
+                - img [ref=e54]
+                - generic [ref=e58]: Goals
+          - generic [ref=e59]:
+            - generic [ref=e61]:
+              - button "Projects" [expanded] [ref=e62]:
+                - img [ref=e63]
+                - generic [ref=e65]: Projects
+              - button "New project" [ref=e66]:
+                - img [ref=e67]
+            - status [ref=e68]
+          - generic [ref=e71]:
+            - button "Agents" [expanded] [ref=e72]:
+              - img [ref=e73]
+              - generic [ref=e75]: Agents
+            - button "New agent" [ref=e76]:
+              - img [ref=e77]
+          - generic [ref=e78]:
+            - generic [ref=e79]: Company
+            - generic [ref=e80]:
+              - link "Org" [ref=e81] [cursor=pointer]:
+                - /url: /SHO/org
+                - img [ref=e83]
+                - generic [ref=e88]: Org
+              - link "Costs" [ref=e89] [cursor=pointer]:
+                - /url: /SHO/costs
+                - img [ref=e91]
+                - generic [ref=e93]: Costs
+              - link "Activity" [ref=e94] [cursor=pointer]:
+                - /url: /SHO/activity
+                - img [ref=e96]
+                - generic [ref=e100]: Activity
+              - link "Settings" [ref=e101] [cursor=pointer]:
+                - /url: /SHO/company/settings
+                - img [ref=e103]
+                - generic [ref=e106]: Settings
+    - generic [ref=e108]:
+      - link "Documentation" [ref=e109] [cursor=pointer]:
+        - /url: /docs
+        - img [ref=e111]
+        - generic [ref=e113]: Documentation
+      - link "Instance settings" [ref=e114] [cursor=pointer]:
+        - /url: /instance/settings
+        - img
+      - button "Switch to light mode" [ref=e115]:
+        - img
+  - generic [ref=e116]:
+    - navigation "breadcrumb" [ref=e119]:
+      - list [ref=e120]:
+        - listitem [ref=e121]:
+          - link "Agents" [ref=e122] [cursor=pointer]:
+            - /url: /SHO/agents
+        - listitem [ref=e123]:
+          - img [ref=e124]
+        - listitem [ref=e126]:
+          - link "scaffold-architect" [ref=e127] [cursor=pointer]:
+            - /url: /SHO/agents/scaffold-architect/dashboard
+        - listitem [ref=e128]:
+          - img [ref=e129]
+        - listitem [ref=e131]:
+          - link "Runs" [disabled] [ref=e132]
+    - main [ref=e134]
+  - generic [ref=e135]:
+    - heading "Command Palette" [level=2] [ref=e136]
+    - paragraph [ref=e137]: Search for a command to run...

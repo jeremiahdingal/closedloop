@@ -1,0 +1,588 @@
+- generic [ref=e3]:
+  - link "Skip to Main Content" [ref=e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - img [ref=e9]
+        - generic [ref=e11]:
+          - button "S" [ref=e12]:
+            - link "S" [ref=e13] [cursor=pointer]:
+              - /url: /SHO/dashboard
+              - generic [ref=e16]:
+                - img [ref=e17]
+                - generic [ref=e18]: S
+          - status [ref=e19]
+        - button "Add company" [ref=e22]:
+          - img [ref=e23]
+      - complementary [ref=e25]:
+        - generic [ref=e26]:
+          - generic [ref=e27]: Shop
+          - button [ref=e28]:
+            - img
+        - navigation [ref=e29]:
+          - generic [ref=e30]:
+            - button "New Issue" [ref=e31]:
+              - img [ref=e32]
+              - generic [ref=e35]: New Issue
+            - link "Dashboard" [ref=e36] [cursor=pointer]:
+              - /url: /SHO/dashboard
+              - img [ref=e38]
+              - generic [ref=e43]: Dashboard
+            - link "Inbox 7" [ref=e44] [cursor=pointer]:
+              - /url: /SHO/inbox
+              - img [ref=e46]
+              - generic [ref=e50]: Inbox
+              - generic [ref=e51]: "7"
+          - generic [ref=e52]:
+            - generic [ref=e53]: Work
+            - generic [ref=e54]:
+              - link "Issues" [ref=e55] [cursor=pointer]:
+                - /url: /SHO/issues
+                - img [ref=e57]
+                - generic [ref=e60]: Issues
+              - link "Goals" [ref=e61] [cursor=pointer]:
+                - /url: /SHO/goals
+                - img [ref=e63]
+                - generic [ref=e67]: Goals
+          - generic [ref=e68]:
+            - generic [ref=e70]:
+              - button "Projects" [expanded] [ref=e71]:
+                - img [ref=e72]
+                - generic [ref=e74]: Projects
+              - button "New project" [ref=e75]:
+                - img [ref=e76]
+            - generic [ref=e77]:
+              - button "Shop Diary" [ref=e79]:
+                - link "Shop Diary" [ref=e80] [cursor=pointer]:
+                  - /url: /SHO/projects/shop-diary/issues
+                  - generic [ref=e82]: Shop Diary
+              - status [ref=e83]
+          - generic [ref=e84]:
+            - generic [ref=e86]:
+              - button "Agents" [expanded] [ref=e87]:
+                - img [ref=e88]
+                - generic [ref=e90]: Agents
+              - button "New agent" [ref=e91]:
+                - img [ref=e92]
+            - generic [ref=e94]:
+              - link "Epic Decoder" [ref=e95] [cursor=pointer]:
+                - /url: /SHO/agents/epic-decoder
+                - img [ref=e96]
+                - generic [ref=e99]: Epic Decoder
+              - link "Strategist" [ref=e100] [cursor=pointer]:
+                - /url: /SHO/agents/strategist
+                - img [ref=e101]
+                - generic [ref=e109]: Strategist
+              - link "Epic Reviewer" [ref=e110] [cursor=pointer]:
+                - /url: /SHO/agents/epic-reviewer
+                - img [ref=e111]
+                - generic [ref=e114]: Epic Reviewer
+              - link "Reviewer" [ref=e115] [cursor=pointer]:
+                - /url: /SHO/agents/reviewer
+                - img [ref=e116]
+                - generic [ref=e119]: Reviewer
+              - link "Complexity Router" [ref=e120] [cursor=pointer]:
+                - /url: /SHO/agents/complexity-router
+                - img [ref=e121]
+                - generic [ref=e124]: Complexity Router
+              - link "Tech Lead" [ref=e125] [cursor=pointer]:
+                - /url: /SHO/agents/tech-lead
+                - img [ref=e126]
+                - generic [ref=e130]: Tech Lead
+              - link "Sentinel" [ref=e131] [cursor=pointer]:
+                - /url: /SHO/agents/sentinel
+                - img [ref=e132]
+                - generic [ref=e134]: Sentinel
+              - link "Visual Reviewer" [ref=e135] [cursor=pointer]:
+                - /url: /SHO/agents/visual-reviewer
+                - img [ref=e136]
+                - generic [ref=e139]: Visual Reviewer
+              - link "Diff Guardian" [ref=e140] [cursor=pointer]:
+                - /url: /SHO/agents/diff-guardian
+                - img [ref=e141]
+                - generic [ref=e144]: Diff Guardian
+              - link "Coder Remote" [ref=e145] [cursor=pointer]:
+                - /url: /SHO/agents/coder-remote
+                - img [ref=e146]
+                - generic [ref=e149]: Coder Remote
+              - link "Test Writer" [ref=e150] [cursor=pointer]:
+                - /url: /SHO/agents/test-writer
+                - img [ref=e151]
+                - generic [ref=e154]: Test Writer
+              - link "Scaffold Architect" [ref=e155] [cursor=pointer]:
+                - /url: /SHO/agents/scaffold-architect
+                - img [ref=e156]
+                - generic [ref=e159]: Scaffold Architect
+              - link "Local Builder" [ref=e160] [cursor=pointer]:
+                - /url: /SHO/agents/local-builder
+                - img [ref=e161]
+                - generic [ref=e165]: Local Builder
+              - link "Deployer" [ref=e166] [cursor=pointer]:
+                - /url: /SHO/agents/deployer
+                - img [ref=e167]
+                - generic [ref=e172]: Deployer
+          - generic [ref=e173]:
+            - generic [ref=e174]: Company
+            - generic [ref=e175]:
+              - link "Org" [ref=e176] [cursor=pointer]:
+                - /url: /SHO/org
+                - img [ref=e178]
+                - generic [ref=e183]: Org
+              - link "Costs" [ref=e184] [cursor=pointer]:
+                - /url: /SHO/costs
+                - img [ref=e186]
+                - generic [ref=e188]: Costs
+              - link "Activity" [ref=e189] [cursor=pointer]:
+                - /url: /SHO/activity
+                - img [ref=e191]
+                - generic [ref=e195]: Activity
+              - link "Settings" [ref=e196] [cursor=pointer]:
+                - /url: /SHO/company/settings
+                - img [ref=e198]
+                - generic [ref=e201]: Settings
+    - generic [ref=e203]:
+      - link "Documentation" [ref=e204] [cursor=pointer]:
+        - /url: /docs
+        - img [ref=e206]
+        - generic [ref=e208]: Documentation
+      - link "Instance settings" [ref=e209] [cursor=pointer]:
+        - /url: /instance/settings
+        - img
+      - button "Switch to light mode" [ref=e210]:
+        - img
+  - generic [ref=e211]:
+    - heading "Dashboard" [level=1] [ref=e214]
+    - main [ref=e216]:
+      - generic [ref=e217]:
+        - generic [ref=e218]:
+          - heading "Agents" [level=3] [ref=e219]
+          - generic [ref=e220]:
+            - generic [ref=e221]:
+              - generic [ref=e222]:
+                - generic [ref=e223]:
+                  - generic [ref=e224]:
+                    - generic [ref=e227]:
+                      - generic [ref=e229]: SA
+                      - generic [ref=e230]: Scaffold Architect
+                    - generic [ref=e232]: Finished just now
+                  - link [ref=e233] [cursor=pointer]:
+                    - /url: /SHO/agents/f5366415-528e-4323-a029-8867cd47ffca/runs/f9df4c18-96bd-432b-b6e3-dff4e51e713a
+                    - img [ref=e234]
+                - link "SHO-331 - [Test] Native OpenCode workspace read verification" [ref=e239] [cursor=pointer]:
+                  - /url: /SHO/issues/SHO-331
+              - generic [ref=e241]:
+                - generic [ref=e244]:
+                  - img [ref=e245]
+                  - generic [ref=e249]: systemstep started (ses_2c1183838ffeAWcNb1ExuMWNGD)
+                - generic [ref=e252]:
+                  - heading "Summary" [level=2] [ref=e253]
+                  - list [ref=e254]:
+                    - listitem [ref=e255]: Reviewed the assigned issue SHO-331 and confirmed the workspace context is empty for specific details (title, description, status, etc.).
+                    - listitem [ref=e256]: Identified the need to initiate foundational scaffolding work for the project based on the "Paperclip" task reference.
+                  - heading "Actions" [level=2] [ref=e257]
+                  - list [ref=e258]:
+                    - listitem [ref=e259]:
+                      - text: Analyzed the wake source (
+                      - code [ref=e260]: assigned_issues_pending
+                      - text: ) to prioritize SHO-331.
+                    - listitem [ref=e261]:
+                      - text: "Established a conceptual framework for scaffolding, including:"
+                      - list [ref=e262]:
+                        - listitem [ref=e263]: Defining project structure and dependencies.
+                        - listitem [ref=e264]: Setting up initial templates or boilerplate code.
+                        - listitem [ref=e265]: Validating alignment with the "Paperclip" workflow (assumed to involve modular component assembly).
+                  - heading "Next" [level=2] [ref=e266]
+                  - list [ref=e267]:
+                    - listitem [ref=e268]: "Blocker: Missing specific details about SHO-331 (title, description, etc.)."
+                    - listitem [ref=e269]: "Immediate next step: Request clarification or context from the team to define the exact scope of SHO-331 and its integration with the Paperclip process."
+                    - listitem [ref=e270]: "Alternative: Proceed with generic scaffolding guidelines if the issue is a placeholder, ensuring modular scalability for future tasks."
+                - generic [ref=e276]: stop
+            - generic [ref=e277]:
+              - generic [ref=e278]:
+                - generic [ref=e279]:
+                  - generic [ref=e280]:
+                    - generic [ref=e283]:
+                      - generic [ref=e285]: LB
+                      - generic [ref=e286]: Local Builder
+                    - generic [ref=e288]: Finished just now
+                  - link [ref=e289] [cursor=pointer]:
+                    - /url: /SHO/agents/caf931bf-516a-409f-813e-a29e14decb10/runs/9cef0ef9-5f68-4339-9fe1-5533fbd2ec8a
+                    - img [ref=e290]
+                - link "SHO-329 - [16522a11] Fix AddCategoryDialog query invalidation after create" [ref=e295] [cursor=pointer]:
+                  - /url: /SHO/issues/SHO-329
+              - generic [ref=e297]:
+                - generic [ref=e300]:
+                  - img [ref=e301]
+                  - generic [ref=e305]: systemstep started (ses_2c0fadf8bffeu6icPMhsTSQsB9)
+                - generic [ref=e308]:
+                  - paragraph [ref=e309]: "Please provide more details about the assigned issues so I can assist you effectively. Specifically, include:"
+                  - list [ref=e310]:
+                    - listitem [ref=e311]: Issue title
+                    - listitem [ref=e312]: Issue description
+                    - listitem [ref=e313]: Issue status
+                    - listitem [ref=e314]: Issue priority
+                    - listitem [ref=e315]: Linked issue IDs (if any)
+                    - listitem [ref=e316]: Latest comment (if applicable)
+                  - paragraph [ref=e317]: Once you provide this information, I can help implement the necessary changes or checks for the assigned tickets in your project.
+                - generic [ref=e323]: stop
+            - generic [ref=e326]:
+              - generic [ref=e327]:
+                - generic [ref=e330]:
+                  - generic [ref=e332]: SE
+                  - generic [ref=e333]: Sentinel
+                - generic [ref=e335]: Finished just now
+              - link [ref=e336] [cursor=pointer]:
+                - /url: /SHO/agents/c7fb4dae-8ac3-4795-b1f6-d14db2021035/runs/25066fa7-6a63-4353-8dab-7beed5d3222c
+                - img [ref=e337]
+            - generic [ref=e344]:
+              - generic [ref=e345]:
+                - generic [ref=e348]:
+                  - generic [ref=e350]: DE
+                  - generic [ref=e351]: Deployer
+                - generic [ref=e353]: Finished just now
+              - link [ref=e354] [cursor=pointer]:
+                - /url: /SHO/agents/5e234916-47ef-41a2-8c07-e9376ee6aa9c/runs/381dffe9-6df5-49a3-8c83-a4fdd07c4783
+                - img [ref=e355]
+        - generic [ref=e360]:
+          - link "14 Agents Enabled 0 running, 0 paused, 1 errors" [ref=e361] [cursor=pointer]:
+            - /url: /SHO/agents
+            - generic [ref=e363]:
+              - generic [ref=e364]:
+                - paragraph [ref=e365]: "14"
+                - paragraph [ref=e366]: Agents Enabled
+                - generic [ref=e368]: 0 running, 0 paused, 1 errors
+              - img [ref=e369]
+          - link "0 Tasks In Progress 8 open, 0 blocked" [ref=e372] [cursor=pointer]:
+            - /url: /SHO/issues
+            - generic [ref=e374]:
+              - generic [ref=e375]:
+                - paragraph [ref=e376]: "0"
+                - paragraph [ref=e377]: Tasks In Progress
+                - generic [ref=e379]: 8 open, 0 blocked
+              - img [ref=e380]
+          - link "$0.00 Month Spend Unlimited budget" [ref=e383] [cursor=pointer]:
+            - /url: /SHO/costs
+            - generic [ref=e385]:
+              - generic [ref=e386]:
+                - paragraph [ref=e387]: $0.00
+                - paragraph [ref=e388]: Month Spend
+                - generic [ref=e389]: Unlimited budget
+              - img [ref=e390]
+          - link "0 Pending Approvals Awaiting board review" [ref=e392] [cursor=pointer]:
+            - /url: /SHO/approvals
+            - generic [ref=e394]:
+              - generic [ref=e395]:
+                - paragraph [ref=e396]: "0"
+                - paragraph [ref=e397]: Pending Approvals
+                - generic [ref=e398]: Awaiting board review
+              - img [ref=e399]
+        - generic [ref=e402]:
+          - generic [ref=e403]:
+            - generic [ref=e404]:
+              - heading "Run Activity" [level=3] [ref=e405]
+              - text: Last 14 days
+            - generic [ref=e406]:
+              - generic [ref=e407]:
+                - 'generic "2026-03-17: 396 runs" [ref=e408]'
+                - 'generic "2026-03-18: 7 runs" [ref=e412]'
+                - 'generic "2026-03-19: 19 runs" [ref=e415]'
+                - 'generic "2026-03-20: 0 runs" [ref=e419]'
+                - 'generic "2026-03-21: 155 runs" [ref=e421]'
+                - 'generic "2026-03-22: 1194 runs" [ref=e425]'
+                - 'generic "2026-03-23: 225 runs" [ref=e429]'
+                - 'generic "2026-03-24: 446 runs" [ref=e433]'
+                - 'generic "2026-03-25: 915 runs" [ref=e437]'
+                - 'generic "2026-03-26: 1193 runs" [ref=e441]'
+                - 'generic "2026-03-27: 1222 runs" [ref=e445]'
+                - 'generic "2026-03-28: 139 runs" [ref=e449]'
+                - 'generic "2026-03-29: 871 runs" [ref=e453]'
+                - 'generic "2026-03-30: 201 runs" [ref=e458]'
+              - generic [ref=e463]:
+                - generic [ref=e464]: 3/17
+                - generic [ref=e470]: 3/23
+                - generic [ref=e477]: 3/30
+          - generic [ref=e478]:
+            - generic [ref=e479]:
+              - heading "Issues by Priority" [level=3] [ref=e480]
+              - text: Last 14 days
+            - generic [ref=e481]:
+              - generic [ref=e482]:
+                - 'generic "2026-03-17: 10 issues" [ref=e483]'
+                - 'generic "2026-03-18: 0 issues" [ref=e486]'
+                - 'generic "2026-03-19: 0 issues" [ref=e488]'
+                - 'generic "2026-03-20: 0 issues" [ref=e490]'
+                - 'generic "2026-03-21: 6 issues" [ref=e492]'
+                - 'generic "2026-03-22: 24 issues" [ref=e496]'
+                - 'generic "2026-03-23: 6 issues" [ref=e500]'
+                - 'generic "2026-03-24: 27 issues" [ref=e503]'
+                - 'generic "2026-03-25: 64 issues" [ref=e507]'
+                - 'generic "2026-03-26: 135 issues" [ref=e511]'
+                - 'generic "2026-03-27: 34 issues" [ref=e515]'
+                - 'generic "2026-03-28: 0 issues" [ref=e518]'
+                - 'generic "2026-03-29: 8 issues" [ref=e520]'
+                - 'generic "2026-03-30: 4 issues" [ref=e523]'
+              - generic [ref=e528]:
+                - generic [ref=e529]: 3/17
+                - generic [ref=e535]: 3/23
+                - generic [ref=e542]: 3/30
+              - generic [ref=e543]:
+                - generic [ref=e544]: Critical
+                - generic [ref=e546]: High
+                - generic [ref=e548]: Medium
+                - generic [ref=e550]: Low
+          - generic [ref=e552]:
+            - generic [ref=e553]:
+              - heading "Issues by Status" [level=3] [ref=e554]
+              - text: Last 14 days
+            - generic [ref=e555]:
+              - generic [ref=e556]:
+                - 'generic "2026-03-17: 10 issues" [ref=e557]'
+                - 'generic "2026-03-18: 0 issues" [ref=e561]'
+                - 'generic "2026-03-19: 0 issues" [ref=e563]'
+                - 'generic "2026-03-20: 0 issues" [ref=e565]'
+                - 'generic "2026-03-21: 6 issues" [ref=e567]'
+                - 'generic "2026-03-22: 24 issues" [ref=e570]'
+                - 'generic "2026-03-23: 6 issues" [ref=e573]'
+                - 'generic "2026-03-24: 27 issues" [ref=e576]'
+                - 'generic "2026-03-25: 64 issues" [ref=e579]'
+                - 'generic "2026-03-26: 135 issues" [ref=e582]'
+                - 'generic "2026-03-27: 34 issues" [ref=e585]'
+                - 'generic "2026-03-28: 0 issues" [ref=e589]'
+                - 'generic "2026-03-29: 8 issues" [ref=e591]'
+                - 'generic "2026-03-30: 4 issues" [ref=e596]'
+              - generic [ref=e600]:
+                - generic [ref=e601]: 3/17
+                - generic [ref=e607]: 3/23
+                - generic [ref=e614]: 3/30
+              - generic [ref=e615]:
+                - generic [ref=e616]: To Do
+                - generic [ref=e618]: In Review
+                - generic [ref=e620]: Done
+                - generic [ref=e622]: Cancelled
+          - generic [ref=e624]:
+            - generic [ref=e625]:
+              - heading "Success Rate" [level=3] [ref=e626]
+              - text: Last 14 days
+            - generic [ref=e627]:
+              - generic [ref=e628]:
+                - 'generic "2026-03-17: 90% (357/396)" [ref=e629]'
+                - 'generic "2026-03-18: 0% (0/7)" [ref=e631]'
+                - 'generic "2026-03-19: 47% (9/19)" [ref=e633]'
+                - 'generic "2026-03-20: 0% (0/0)" [ref=e635]'
+                - 'generic "2026-03-21: 66% (103/155)" [ref=e637]'
+                - 'generic "2026-03-22: 31% (373/1194)" [ref=e639]'
+                - 'generic "2026-03-23: 69% (155/225)" [ref=e641]'
+                - 'generic "2026-03-24: 74% (331/446)" [ref=e643]'
+                - 'generic "2026-03-25: 70% (641/915)" [ref=e645]'
+                - 'generic "2026-03-26: 70% (832/1193)" [ref=e647]'
+                - 'generic "2026-03-27: 77% (946/1222)" [ref=e649]'
+                - 'generic "2026-03-28: 42% (59/139)" [ref=e651]'
+                - 'generic "2026-03-29: 70% (606/871)" [ref=e653]'
+                - 'generic "2026-03-30: 27% (54/201)" [ref=e655]'
+              - generic [ref=e657]:
+                - generic [ref=e658]: 3/17
+                - generic [ref=e664]: 3/23
+                - generic [ref=e671]: 3/30
+        - generic [ref=e672]:
+          - generic [ref=e673]:
+            - heading "Recent Activity" [level=3] [ref=e674]
+            - generic [ref=e675]:
+              - link "BO Board invoked heartbeat for Scaffold Architect just now" [ref=e676] [cursor=pointer]:
+                - /url: /SHO/agents/f5366415-528e-4323-a029-8867cd47ffca/runs/f9df4c18-96bd-432b-b6e3-dff4e51e713a
+                - generic [ref=e677]:
+                  - paragraph [ref=e678]:
+                    - generic [ref=e679]:
+                      - generic [ref=e681]: BO
+                      - generic [ref=e682]: Board
+                    - generic [ref=e683]: invoked heartbeat for
+                    - text: Scaffold Architect
+                  - generic [ref=e684]: just now
+              - link "LB Local Builder invoked heartbeat for Local Builder just now" [ref=e685] [cursor=pointer]:
+                - /url: /SHO/agents/caf931bf-516a-409f-813e-a29e14decb10/runs/9cef0ef9-5f68-4339-9fe1-5533fbd2ec8a
+                - generic [ref=e686]:
+                  - paragraph [ref=e687]:
+                    - generic [ref=e688]:
+                      - generic [ref=e690]: LB
+                      - generic [ref=e691]: Local Builder
+                    - generic [ref=e692]: invoked heartbeat for
+                    - text: Local Builder
+                  - generic [ref=e693]: just now
+              - link "BO Board updated Sentinel just now" [ref=e694] [cursor=pointer]:
+                - /url: /SHO/agents/c7fb4dae-8ac3-4795-b1f6-d14db2021035
+                - generic [ref=e695]:
+                  - paragraph [ref=e696]:
+                    - generic [ref=e697]:
+                      - generic [ref=e699]: BO
+                      - generic [ref=e700]: Board
+                    - generic [ref=e701]: updated
+                    - text: Sentinel
+                  - generic [ref=e702]: just now
+              - link "BO Board updated Complexity Router just now" [ref=e703] [cursor=pointer]:
+                - /url: /SHO/agents/093ee390-cfbf-4129-81d6-aeeb638c7d71
+                - generic [ref=e704]:
+                  - paragraph [ref=e705]:
+                    - generic [ref=e706]:
+                      - generic [ref=e708]: BO
+                      - generic [ref=e709]: Board
+                    - generic [ref=e710]: updated
+                    - text: Complexity Router
+                  - generic [ref=e711]: just now
+              - link "BO Board updated Local Builder just now" [ref=e712] [cursor=pointer]:
+                - /url: /SHO/agents/caf931bf-516a-409f-813e-a29e14decb10
+                - generic [ref=e713]:
+                  - paragraph [ref=e714]:
+                    - generic [ref=e715]:
+                      - generic [ref=e717]: BO
+                      - generic [ref=e718]: Board
+                    - generic [ref=e719]: updated
+                    - text: Local Builder
+                  - generic [ref=e720]: just now
+              - link "BO Board updated Deployer just now" [ref=e721] [cursor=pointer]:
+                - /url: /SHO/agents/5e234916-47ef-41a2-8c07-e9376ee6aa9c
+                - generic [ref=e722]:
+                  - paragraph [ref=e723]:
+                    - generic [ref=e724]:
+                      - generic [ref=e726]: BO
+                      - generic [ref=e727]: Board
+                    - generic [ref=e728]: updated
+                    - text: Deployer
+                  - generic [ref=e729]: just now
+              - link "BO Board updated Visual Reviewer just now" [ref=e730] [cursor=pointer]:
+                - /url: /SHO/agents/787cbd9e-d10b-4bca-b486-e7f5fd99d184
+                - generic [ref=e731]:
+                  - paragraph [ref=e732]:
+                    - generic [ref=e733]:
+                      - generic [ref=e735]: BO
+                      - generic [ref=e736]: Board
+                    - generic [ref=e737]: updated
+                    - text: Visual Reviewer
+                  - generic [ref=e738]: just now
+              - link "BO Board updated Tech Lead just now" [ref=e739] [cursor=pointer]:
+                - /url: /SHO/agents/dad994d7-5d3e-4101-ae57-82c7be9b778b
+                - generic [ref=e740]:
+                  - paragraph [ref=e741]:
+                    - generic [ref=e742]:
+                      - generic [ref=e744]: BO
+                      - generic [ref=e745]: Board
+                    - generic [ref=e746]: updated
+                    - text: Tech Lead
+                  - generic [ref=e747]: just now
+              - link "BO Board updated Strategist just now" [ref=e748] [cursor=pointer]:
+                - /url: /SHO/agents/a90b07a4-f18c-4509-9d7b-b9f16eb098d6
+                - generic [ref=e749]:
+                  - paragraph [ref=e750]:
+                    - generic [ref=e751]:
+                      - generic [ref=e753]: BO
+                      - generic [ref=e754]: Board
+                    - generic [ref=e755]: updated
+                    - text: Strategist
+                  - generic [ref=e756]: just now
+              - link "BO Board updated Sentinel just now" [ref=e757] [cursor=pointer]:
+                - /url: /SHO/agents/c7fb4dae-8ac3-4795-b1f6-d14db2021035
+                - generic [ref=e758]:
+                  - paragraph [ref=e759]:
+                    - generic [ref=e760]:
+                      - generic [ref=e762]: BO
+                      - generic [ref=e763]: Board
+                    - generic [ref=e764]: updated
+                    - text: Sentinel
+                  - generic [ref=e765]: just now
+          - generic [ref=e766]:
+            - heading "Recent Tasks" [level=3] [ref=e767]
+            - generic [ref=e768]:
+              - link "[Test] Native OpenCode workspace read verification SHO-331 SA Scaffold Architect just now" [ref=e769] [cursor=pointer]:
+                - /url: /SHO/issues/SHO-331
+                - generic [ref=e771]:
+                  - generic: "[Test] Native OpenCode workspace read verification"
+                  - generic [ref=e772]:
+                    - img [ref=e775]
+                    - generic [ref=e779]: SHO-331
+                    - generic [ref=e781]:
+                      - generic [ref=e783]: SA
+                      - generic [ref=e784]: Scaffold Architect
+                    - generic [ref=e785]: just now
+              - link "[16522a11] Fix AddCategoryDialog query invalidation after create SHO-329 LB Local Builder just now" [ref=e786] [cursor=pointer]:
+                - /url: /SHO/issues/SHO-329
+                - generic [ref=e788]:
+                  - generic [ref=e789]: "[16522a11] Fix AddCategoryDialog query invalidation after create"
+                  - generic [ref=e790]:
+                    - img [ref=e793]
+                    - generic [ref=e797]: SHO-329
+                    - generic [ref=e799]:
+                      - generic [ref=e801]: LB
+                      - generic [ref=e802]: Local Builder
+                    - generic [ref=e803]: just now
+              - link "[da7b114f] Analytics Screen with KPI Cards SHO-324 LB Local Builder 3h ago" [ref=e804] [cursor=pointer]:
+                - /url: /SHO/issues/SHO-324
+                - generic [ref=e806]:
+                  - generic [ref=e807]: "[da7b114f] Analytics Screen with KPI Cards"
+                  - generic [ref=e808]:
+                    - img [ref=e811]
+                    - generic [ref=e814]: SHO-324
+                    - generic [ref=e816]:
+                      - generic [ref=e818]: LB
+                      - generic [ref=e819]: Local Builder
+                    - generic [ref=e820]: 3h ago
+              - link "[16522a11] Fix authenticated DELETE fetcher in categories screen SHO-330 LB Local Builder 3h ago" [ref=e821] [cursor=pointer]:
+                - /url: /SHO/issues/SHO-330
+                - generic [ref=e823]:
+                  - generic [ref=e824]: "[16522a11] Fix authenticated DELETE fetcher in categories screen"
+                  - generic [ref=e825]:
+                    - img [ref=e828]
+                    - generic [ref=e832]: SHO-330
+                    - generic [ref=e834]:
+                      - generic [ref=e836]: LB
+                      - generic [ref=e837]: Local Builder
+                    - generic [ref=e838]: 3h ago
+              - link "API endpoint test SHO-328 3h ago" [ref=e839] [cursor=pointer]:
+                - /url: /SHO/issues/SHO-328
+                - generic [ref=e841]:
+                  - generic [ref=e842]: API endpoint test
+                  - generic [ref=e843]:
+                    - img [ref=e846]
+                    - generic [ref=e849]: SHO-328
+                    - generic [ref=e850]: 3h ago
+              - link "[da7b114f] Sales Trend Chart SHO-325 4h ago" [ref=e851] [cursor=pointer]:
+                - /url: /SHO/issues/SHO-325
+                - generic [ref=e853]:
+                  - generic [ref=e854]: "[da7b114f] Sales Trend Chart"
+                  - generic [ref=e855]:
+                    - img [ref=e858]
+                    - generic [ref=e861]: SHO-325
+                    - generic [ref=e862]: 4h ago
+              - link "[da7b114f] Export Reports to CSV SHO-327 4h ago" [ref=e863] [cursor=pointer]:
+                - /url: /SHO/issues/SHO-327
+                - generic [ref=e865]:
+                  - generic [ref=e866]: "[da7b114f] Export Reports to CSV"
+                  - generic [ref=e867]:
+                    - img [ref=e870]
+                    - generic [ref=e873]: SHO-327
+                    - generic [ref=e874]: 4h ago
+              - link "[da7b114f] Reports API Endpoints (Summary, Items, Categories) SHO-323 4h ago" [ref=e875] [cursor=pointer]:
+                - /url: /SHO/issues/SHO-323
+                - generic [ref=e877]:
+                  - generic [ref=e878]: "[da7b114f] Reports API Endpoints (Summary, Items, Categories)"
+                  - generic [ref=e879]:
+                    - img [ref=e882]
+                    - generic [ref=e885]: SHO-323
+                    - generic [ref=e886]: 4h ago
+              - link "[da7b114f] Top Items Table SHO-326 4h ago" [ref=e887] [cursor=pointer]:
+                - /url: /SHO/issues/SHO-326
+                - generic [ref=e889]:
+                  - generic [ref=e890]: "[da7b114f] Top Items Table"
+                  - generic [ref=e891]:
+                    - img [ref=e894]
+                    - generic [ref=e897]: SHO-326
+                    - generic [ref=e898]: 4h ago
+              - link "[a39226f4] Use Authenticated Fetcher for Categories DELETE Mutation SHO-320 22h ago" [ref=e899] [cursor=pointer]:
+                - /url: /SHO/issues/SHO-320
+                - generic [ref=e901]:
+                  - generic [ref=e902]: "[a39226f4] Use Authenticated Fetcher for Categories DELETE Mutation"
+                  - generic [ref=e903]:
+                    - img [ref=e906]
+                    - generic [ref=e909]: SHO-320
+                    - generic [ref=e910]: 22h ago
+  - generic [ref=e911]:
+    - heading "Command Palette" [level=2] [ref=e912]
+    - paragraph [ref=e913]: Search for a command to run...
