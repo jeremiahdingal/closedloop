@@ -9,7 +9,8 @@
     "dev": "tsc && node dist/index.js",
     "rag-index": "node dist/rag-indexer.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "oauth:openai": "node scripts/openai-oauth.js"
   },
   "dependencies": {
     "chromadb": "^1.9.4",

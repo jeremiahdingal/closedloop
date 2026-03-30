@@ -6,13 +6,70 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { getWorkspace } from './config';
-import { getIssueDetails, postComment } from './paperclip-api';
+import { getIssueDetails, patchIssue, postComment } from './paperclip-api';
 import { issueBuilderPasses } from './agent-types';
 import { listPngFilesRecursive } from './utils';
 
 const WORKSPACE = getWorkspace();
 const GH_CLI = 'C:\\Program Files\\GitHub CLI\\gh';
 const SCREENSHOT_BASE = path.join(__dirname, '..', '.screenshots');
+const prFailureDedupe = new Set<string>();
+
+export type PrFailureCode =
+  | 'PR_PREFLIGHT_FAILED'
+  | 'PR_CREATE_FAILED';
+
+function recordPrFailureCounter(code: PrFailureCode): void {
+  console.log(`[telemetry] ${code}`);
+}
+
+function hasBranchCommitsAhead(baseBranch: string, branchName: string): boolean {
+  try {
+    const count = execSync(`git rev-list --count ${baseBranch}..${branchName}`, {
+      cwd: WORKSPACE,
+      stdio: 'pipe',
+      timeout: 10000,
+      encoding: 'utf8',
+    }).toString().trim();
+    return Number(count) > 0;
+  } catch {
+    return false;
+  }
+}
+
+function remoteBranchExists(branchName: string): boolean {
+  try {
+    const out = execSync(`git ls-remote --heads origin ${branchName}`, {
+      cwd: WORKSPACE,
+      stdio: 'pipe',
+      timeout: 10000,
+      encoding: 'utf8',
+    }).toString().trim();
+    return Boolean(out);
+  } catch {
+    return false;
+  }
+}
+
+async function escalatePrPreflightFailure(issueId: string, branchName: string, reason: string): Promise<void> {
+  const dedupeKey = `${issueId}:${reason}`;
+  const taggedReason = `[PR_PREFLIGHT_FAILED] ${reason}`;
+  recordPrFailureCounter('PR_PREFLIGHT_FAILED');
+
+  if (!prFailureDedupe.has(dedupeKey)) {
+    prFailureDedupe.add(dedupeKey);
+    await postComment(
+      issueId,
+      null,
+      `${taggedReason}\n\nPR creation was blocked for \`${branchName}\`. Auto-retries are paused to avoid loop storms.`
+    );
+  }
+
+  const blocked = await patchIssue(issueId, { status: 'blocked', assigneeAgentId: undefined } as any);
+  if (!blocked) {
+    await patchIssue(issueId, { status: 'todo', assigneeAgentId: undefined } as any);
+  }
+}
 
 function revisionExists(revision: string): boolean {
   try {
@@ -226,6 +283,20 @@ export async function createPullRequest(issueId: string): Promise<void> {
   try {
     cleanAutomationArtifacts(opts);
 
+    // Strict PR preflight: branch exists locally, exists on origin, and is ahead of base.
+    if (!revisionExists(branchName)) {
+      await escalatePrPreflightFailure(issueId, branchName, `Local branch does not exist: ${branchName}`);
+      throw new Error(`[PR_PREFLIGHT_FAILED] Local branch does not exist: ${branchName}`);
+    }
+    if (!remoteBranchExists(branchName)) {
+      await escalatePrPreflightFailure(issueId, branchName, `Remote branch does not exist on origin: ${branchName}`);
+      throw new Error(`[PR_PREFLIGHT_FAILED] Remote branch does not exist on origin: ${branchName}`);
+    }
+    if (!hasBranchCommitsAhead(diffBaseRevision, branchName)) {
+      await escalatePrPreflightFailure(issueId, branchName, `Branch has no commits ahead of ${diffBaseRevision}: ${branchName}`);
+      throw new Error(`[PR_PREFLIGHT_FAILED] Branch has no commits ahead of ${diffBaseRevision}: ${branchName}`);
+    }
+
     let existingPr = '';
     try {
       const prState = execSync(
@@ -328,11 +399,14 @@ export async function createPullRequest(issueId: string): Promise<void> {
     );
   } catch (err: any) {
     console.error(`[git] PR creation failed:`, err.message);
-    await postComment(
-      issueId,
-      null,
-      `_Branch \`${branchName}\` pushed. PR creation failed: ${err.message}_`
-    );
+    if (!String(err.message || '').includes('[PR_PREFLIGHT_FAILED]')) {
+      recordPrFailureCounter('PR_CREATE_FAILED');
+      await postComment(
+        issueId,
+        null,
+        `[PR_CREATE_FAILED] Branch \`${branchName}\` pushed. PR creation failed: ${err.message}`
+      );
+    }
     try {
       execSync(`git checkout ${defaultBranch}`, { cwd: WORKSPACE, stdio: 'pipe' });
     } catch {}

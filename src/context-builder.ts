@@ -5,7 +5,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
-import { getWorkspace } from './config';
+import { getWorkspace, getStylingPolicy } from './config';
 import { getIssueDetails, getIssueComments } from './paperclip-api';
 import { AGENTS } from './agent-types';
 import { truncate } from './utils';
@@ -34,16 +34,24 @@ export async function collectMonorepoContext(): Promise<string> {
   const excludedPattern = 'node_modules \\.git \\.pnpm \\.qwen \\.paperclip dist packages\\\\paperclip-fork';
   
   try {
-    // Get directory tree (excluding node_modules, .git, etc.)
-    const tree = execSync(`dir /b /s /a-d ^| findstr /v "${excludedPattern}"`, {
+    // Get directory tree using Node glob (cross-platform, avoids shell quoting issues)
+    const { glob } = await import('glob');
+    const allFiles = glob.sync('**/*', {
       cwd: WORKSPACE,
-      encoding: 'utf8',
-      timeout: 30000,
-      maxBuffer: 5 * 1024 * 1024,
-    }).toString();
-    
+      nodir: true,
+      ignore: [
+        '**/node_modules/**',
+        '**/.git/**',
+        '**/.pnpm/**',
+        '**/.qwen/**',
+        '**/.paperclip/**',
+        '**/dist/**',
+        'packages/paperclip-fork/**',
+      ],
+    }).slice(0, 300);
+
     context += '```\n';
-    context += tree.split('\n').slice(0, 300).join('\n'); // First 300 files
+    context += allFiles.join('\n');
     context += '\n```\n\n';
   } catch {}
   
@@ -223,7 +231,14 @@ function getProjectConventions(): string {
   }
   
   if (sections.length > 0) {
-    return '\n\n== PROJECT CONVENTIONS (MUST FOLLOW) ==\n' + sections.join('\n\n') + '\n';
+    const stylingPolicy = getStylingPolicy();
+    const styleSection =
+      '\n\n== STYLING POLICY (FROM PROJECT CONFIG) ==\n' +
+      `Framework: ${stylingPolicy.framework}\n` +
+      `Guidance: ${stylingPolicy.guidance}\n` +
+      (stylingPolicy.required.length > 0 ? `Required: ${stylingPolicy.required.join(', ')}\n` : '') +
+      (stylingPolicy.forbidden.length > 0 ? `Forbidden: ${stylingPolicy.forbidden.join(', ')}\n` : '');
+    return '\n\n== PROJECT CONVENTIONS (MUST FOLLOW) ==\n' + sections.join('\n\n') + styleSection + '\n';
   }
   
   return '';

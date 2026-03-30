@@ -26,6 +26,13 @@ if (fs.existsSync(ENV_PATH)) {
 
 let cachedConfig: ProjectConfig | null = null;
 
+export interface StylingPolicy {
+  framework: string;
+  guidance: string;
+  required: string[];
+  forbidden: string[];
+}
+
 export function loadConfig(): ProjectConfig {
   if (cachedConfig) {
     return cachedConfig;
@@ -111,6 +118,14 @@ function createDefaultConfig(): ProjectConfig {
       components: 'React Native (View, Text, Pressable) - NO HTML',
       styling: 'Tamagui primitives/tokens with the existing theme system',
     },
+    coding: {
+      styling: {
+        framework: 'Tamagui',
+        guidance: 'Use Tamagui primitives/tokens with the existing theme system.',
+        required: ['tamagui', '@tamagui/*', '@tamagui/lucide-icons'],
+        forbidden: ['tailwind', 'css modules', 'StyleSheet.create', '@mui/*', 'react-icons/*'],
+      },
+    },
     paperclip: {
       companyId: 'ac5c469b-1f81-4f1f-9061-1dd9033ec831',
       agents: {
@@ -146,12 +161,16 @@ function createDefaultConfig(): ProjectConfig {
     ollama: {
       proxyPort: 3201,
       ollamaPort: 11434,
+      runnerBackend: 'ollama_cli',
+      runnerTimeoutMs: 600000,
+      stuckRunThresholdMs: 600000,
+      stuckRunMaxRetries: 1,
       models: {
         'complexity router': 'qwen3:4b',
         strategist: 'qwen3.5:9b',
-        'tech lead': 'deepcoder:14b',
-        'local builder': 'deepcoder:14b',
-        'local builder burst': 'qwen3-coder:30b',
+        'tech lead': 'deepcoder:latest',
+        'local builder': 'devstral-small-2:24b',
+        'local builder burst': 'remote',
         reviewer: 'deepcoder:latest',
         'diff guardian': 'qwen3:4b',
         'visual reviewer': 'qwen3-vl:8b',
@@ -171,6 +190,9 @@ function createDefaultConfig(): ProjectConfig {
         sentinel: 600,
         deployer: 600,
       },
+    },
+    epicReviewer: {
+      requireOpenPrs: true,
     },
     artist: {
       devServerPort: 3000,
@@ -256,4 +278,93 @@ export function getRemoteConfig() {
 
 export function getAgentModel(agentName: string): string | undefined {
   return loadConfig().ollama.models[agentName];
+}
+
+export function getRunnerBackend(): 'ollama_cli' | 'opencode_cli' | 'hybrid' {
+  const fromEnv = (process.env.CLOSEDLOOP_RUNNER_BACKEND || '').trim().toLowerCase();
+  if (fromEnv === 'opencode_cli' || fromEnv === 'hybrid' || fromEnv === 'ollama_cli') {
+    return fromEnv as 'ollama_cli' | 'opencode_cli' | 'hybrid';
+  }
+
+  const fromConfig = loadConfig().ollama.runnerBackend;
+  if (fromConfig === 'opencode_cli' || fromConfig === 'hybrid' || fromConfig === 'ollama_cli') {
+    return fromConfig;
+  }
+
+  return 'ollama_cli';
+}
+
+export function getRunnerTimeoutMs(): number {
+  const fromEnv = Number(process.env.CLOSEDLOOP_RUNNER_TIMEOUT_MS || '');
+  if (Number.isFinite(fromEnv) && fromEnv > 1000) return fromEnv;
+  return loadConfig().ollama.runnerTimeoutMs || 600000;
+}
+
+export function getStuckRunThresholdMs(): number {
+  const fromEnv = Number(process.env.CLOSEDLOOP_STUCK_RUN_THRESHOLD_MS || '');
+  if (Number.isFinite(fromEnv) && fromEnv > 10000) return fromEnv;
+  return loadConfig().ollama.stuckRunThresholdMs || 10 * 60 * 1000;
+}
+
+export function getStuckRunMaxRetries(): number {
+  const fromEnv = Number(process.env.CLOSEDLOOP_STUCK_RUN_MAX_RETRIES || '');
+  if (Number.isFinite(fromEnv) && fromEnv >= 0) return Math.floor(fromEnv);
+  return loadConfig().ollama.stuckRunMaxRetries ?? 1;
+}
+
+export function getEpicReviewerRequireOpenPrs(): boolean {
+  const fromEnv = (process.env.CLOSEDLOOP_EPIC_REVIEW_REQUIRE_OPEN_PRS || '').trim().toLowerCase();
+  if (fromEnv === '0' || fromEnv === 'false' || fromEnv === 'no') return false;
+  if (fromEnv === '1' || fromEnv === 'true' || fromEnv === 'yes') return true;
+  return loadConfig().epicReviewer?.requireOpenPrs ?? true;
+}
+
+function inferStylingPolicyFromTechStack(stylingText: string | undefined): StylingPolicy {
+  const raw = String(stylingText || '').trim();
+  const lower = raw.toLowerCase();
+
+  if (lower.includes('tamagui')) {
+    return {
+      framework: 'Tamagui',
+      guidance: raw || 'Use Tamagui primitives/tokens.',
+      required: ['tamagui', '@tamagui/*', '@tamagui/lucide-icons'],
+      forbidden: ['tailwind', 'css modules', 'StyleSheet.create', '@mui/*', 'react-icons/*'],
+    };
+  }
+
+  if (lower.includes('tailwind')) {
+    return {
+      framework: 'Tailwind',
+      guidance: raw || 'Use utility-first classes with project token conventions.',
+      required: ['tailwindcss'],
+      forbidden: ['styled-components', '@emotion/*'],
+    };
+  }
+
+  return {
+    framework: raw || 'Project styling system',
+    guidance: raw || 'Follow the existing styling conventions in this repository.',
+    required: [],
+    forbidden: [],
+  };
+}
+
+export function getStylingPolicy(): StylingPolicy {
+  const config = loadConfig();
+  const inferred = inferStylingPolicyFromTechStack(config.techStack?.styling);
+  const custom = config.coding?.styling;
+
+  const required = (custom?.required && custom.required.length > 0 ? custom.required : inferred.required).map((v) =>
+    String(v).trim()
+  );
+  const forbidden = (custom?.forbidden && custom.forbidden.length > 0 ? custom.forbidden : inferred.forbidden).map((v) =>
+    String(v).trim()
+  );
+
+  return {
+    framework: (custom?.framework || inferred.framework || 'Project styling system').trim(),
+    guidance: (custom?.guidance || inferred.guidance || 'Follow existing project styling conventions.').trim(),
+    required: Array.from(new Set(required.filter(Boolean))),
+    forbidden: Array.from(new Set(forbidden.filter(Boolean))),
+  };
 }

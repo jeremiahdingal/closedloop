@@ -19,6 +19,7 @@ echo    [6] Wake Agent Manually
 echo    [7] Build RAG Index
 echo    [8] Start ClosedLoop Only (npm start)
 echo    [9] Trigger Background Checker NOW
+echo    [A] Login to OpenAI (OAuth)
 echo    [0] Exit
 echo.
 set /p choice="  Select: "
@@ -32,6 +33,7 @@ if "%choice%"=="6" goto WAKE
 if "%choice%"=="7" goto RAG
 if "%choice%"=="8" goto START_CLOSEDLOOP
 if "%choice%"=="9" goto TRIGGER_CHECKER
+if /I "%choice%"=="A" goto OAUTH_OPENAI
 if "%choice%"=="0" exit
 goto MENU
 
@@ -68,7 +70,7 @@ for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr "LISTENING" ^| findstr
 if defined PPC_PID (
     echo        Already running on :3100 ^(PID %PPC_PID%^).
 ) else (
-    start "Paperclip" /MIN cmd /c paperclipai run ^>C:\Users\dinga\Projects\paperclip\paperclip-out.log 2^>^&1
+    start "Paperclip" /MIN cmd /c paperclipai run ^>C:\Users\dinga\Projects\closedloop\paperclip-out.log 2^>^&1
     timeout /t 15 /nobreak >nul
     echo        Started on :3100.
 )
@@ -227,7 +229,7 @@ echo  [*] ClosedLoop logs (press Q to return)
 echo  ============================================
 echo.
 powershell -NoLogo -NoProfile -Command ^
-  "$path='C:\Users\dinga\Projects\paperclip\closedloop-out.log';" ^
+  "$path='C:\Users\dinga\Projects\closedloop\closedloop-out.log';" ^
   "if (-not (Test-Path $path)) { New-Item -ItemType File -Path $path -Force | Out-Null };" ^
   "Write-Host 'Press Q to return to the menu.' -ForegroundColor Yellow;" ^
   "$fs=[System.IO.File]::Open($path,[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,[System.IO.FileShare]::ReadWrite);" ^
@@ -384,7 +386,7 @@ if exist "%~dp0.env" (
 if not defined LLM_MODEL set LLM_MODEL=deepcoder:14b
 if not defined LLM_MODEL_BURST set LLM_MODEL_BURST=qwen3-coder:30b
 
-start "ClosedLoop" /MIN cmd /c "cd /d C:\Users\dinga\Projects\paperclip && npm start > closedloop-out.log 2> closedloop-err.log"
+start "ClosedLoop" /MIN cmd /c "cd /d C:\Users\dinga\Projects\closedloop && npm start > closedloop-out.log 2> closedloop-err.log"
 timeout /t 5 /nobreak >nul
 
 set PROXY_PID=
@@ -460,6 +462,25 @@ echo  Reviewer woken.
 
 echo.
 echo  [OK] All key agents woken. Check logs for processing.
+echo.
+pause
+goto MENU
+
+:OAUTH_OPENAI
+cls
+echo.
+echo  ============================================
+echo    OpenAI OAuth Login
+echo  ============================================
+echo.
+echo  This will open your browser to sign in with
+echo  your ChatGPT Plus/Pro account.
+echo.
+echo  The token will be saved to .env automatically.
+echo.
+pause
+echo.
+call npm run oauth:openai
 echo.
 pause
 goto MENU

@@ -489,6 +489,32 @@ function checkoutDetachedRevision(revision: string): string {
   return resolved;
 }
 
+function pushHeadToBranch(branchName: string): void {
+  try {
+    execSync(`git push origin HEAD:${branchName}`, {
+      cwd: getEpicWorkspace(),
+      stdio: 'pipe',
+      timeout: 60000,
+    });
+    return;
+  } catch (err: any) {
+    const output = `${err.stdout?.toString() || ''}${err.stderr?.toString() || ''}`;
+    if (!/non-fast-forward|fetch first|rejected/i.test(output)) {
+      throw err;
+    }
+    console.log('[telemetry] EPIC_PUSH_RETRY reason=non_fast_forward');
+  }
+
+  // Branch is behind remote; keep automation moving while still protecting against
+  // blind overwrite of unrelated remote updates.
+  execSync(`git push --force-with-lease origin HEAD:${branchName}`, {
+    cwd: getEpicWorkspace(),
+    stdio: 'pipe',
+    timeout: 60000,
+  });
+  console.log('[telemetry] EPIC_PUSH_RETRY mode=force_with_lease');
+}
+
 async function ensureReconciliationBranch(epic: EpicWithTickets, state: EpicRetryState): Promise<string> {
   if (state.reconciliationBranchName) {
     return state.reconciliationBranchName;
@@ -545,6 +571,43 @@ async function ensureReconciliationBranch(epic: EpicWithTickets, state: EpicRetr
       tryGit(`git checkout ${defaultBranch}`, 10000);
     } catch {}
   }
+}
+
+const DUPLICATE_FAMILY_REGEX = /(components|hooks|apihooks|schemas|routes|services|screens|dialogs)\//i;
+const COMMON_DUPLICATE_BASENAMES = new Set(['index', 'types', 'utils', 'constants', 'schema', 'route', 'routes', 'screen']);
+
+interface DuplicateGroup {
+  basename: string;
+  entries: Array<{ filePath: string; ticket: string }>;
+}
+
+function duplicateCandidateBasename(filePath: string): string | null {
+  const normalized = filePath.replace(/\\/g, '/');
+  if (!DUPLICATE_FAMILY_REGEX.test(normalized)) return null;
+  const basename = path.basename(normalized, path.extname(normalized)).toLowerCase();
+  if (COMMON_DUPLICATE_BASENAMES.has(basename)) return null;
+  return basename;
+}
+
+async function detectDuplicateBasenameGroups(tickets: TicketWithBranch[]): Promise<DuplicateGroup[]> {
+  const filesByBasename = new Map<string, Array<{ filePath: string; ticket: string }>>();
+  for (const ticket of tickets) {
+    const changedFiles = await collectChangedFiles(ticket);
+    for (const filePath of changedFiles) {
+      const basename = duplicateCandidateBasename(filePath);
+      if (!basename) continue;
+      const entries = filesByBasename.get(basename) || [];
+      entries.push({ filePath, ticket: ticket.identifier });
+      filesByBasename.set(basename, entries);
+    }
+  }
+
+  return Array.from(filesByBasename.entries())
+    .map(([basename, entries]) => ({
+      basename,
+      entries: Array.from(new Map(entries.map(e => [e.filePath, e])).values()),
+    }))
+    .filter(group => group.entries.length > 1);
 }
 
 export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryState): Promise<{ prompt: string; hasDuplicateWarning: boolean }> {
@@ -612,30 +675,15 @@ export async function buildReviewPrompt(epic: EpicWithTickets, state: EpicRetryS
     prompt += '\n';
   }
 
-  // Duplicate-basename detection: find same-named files in different directories
-  const filesByBasename = new Map<string, { filePath: string; ticket: string }[]>();
-  for (const ticket of ticketInfos) {
-    const changedFiles = await collectChangedFiles(ticket);
-    for (const filePath of changedFiles) {
-      const basename = path.basename(filePath);
-      const entries = filesByBasename.get(basename) || [];
-      entries.push({ filePath, ticket: ticket.identifier });
-      filesByBasename.set(basename, entries);
-    }
-  }
-  const duplicateGroups = Array.from(filesByBasename.entries())
-    .filter(([, entries]) => {
-      const uniquePaths = new Set(entries.map(e => e.filePath));
-      return uniquePaths.size > 1;
-    });
+  // Duplicate-basename detection: find same-named files in different path families.
+  const duplicateGroups = await detectDuplicateBasenameGroups(ticketInfos);
   if (duplicateGroups.length > 0) {
     hasDuplicateWarning = true;
     prompt += '\n## Duplicate File Warning\n';
-    prompt += 'The following filenames appear in multiple locations — you MUST pick one canonical path and DELETE FILE the rest:\n';
-    for (const [basename, entries] of duplicateGroups) {
-      const uniqueEntries = Array.from(new Map(entries.map(e => [e.filePath, e])).values());
-      prompt += `- ${basename}:\n`;
-      for (const entry of uniqueEntries) {
+    prompt += 'The following filenames appear in multiple locations - you MUST pick one canonical path and DELETE FILE the rest:\n';
+    for (const group of duplicateGroups) {
+      prompt += `- ${group.basename}:\n`;
+      for (const entry of group.entries) {
         prompt += `  - ${entry.filePath} (${entry.ticket})\n`;
       }
     }
@@ -881,11 +929,7 @@ async function applyFixes(epic: EpicWithTickets, fixes: FileFix[]): Promise<stri
         }
       }
 
-      execSync(`git push origin HEAD:${ticket.branchName}`, {
-        cwd: getEpicWorkspace(),
-        stdio: 'pipe',
-        timeout: 60000,
-      });
+      pushHeadToBranch(ticket.branchName);
 
       await postComment(
         ticket.id,
@@ -1131,11 +1175,12 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
       .map(result => `${result.ticketIdentifier} (${result.branchName})\n${result.output || 'Unknown build failure'}`)
       .join('\n\n');
 
-    // Deletion audit: check if duplicates were flagged but model didn't delete any.
-    // hasDuplicateWarning covers basename collisions; driftFlagged covers [DRIFT]-tagged tickets.
-    const deleteCount = result.fixes.filter(f => f.operation === 'delete').length;
-    const driftFlagged = /## Drift-Flagged Tickets/.test(prompt);
-    const duplicatesResolved = (!hasDuplicateWarning && !driftFlagged) || deleteCount > 0;
+    // Post-fix duplicate verification: branch state must be duplicate-free before completion.
+    const duplicateGroupsRemaining = await detectDuplicateBasenameGroups(await withBranches(epic.tickets));
+    const duplicatesResolved = duplicateGroupsRemaining.length === 0;
+    if (duplicatesResolved) {
+      console.log('[telemetry] EPIC_DUPLICATE_GROUPS_RESOLVED');
+    }
     const goalMet = result.goalSatisfied;
     const buildGreen = failures.length === 0;
 
@@ -1153,9 +1198,9 @@ async function processEpic(epic: EpicWithTickets): Promise<void> {
       issues.push(`Build remained red.`);
     }
     if (!duplicatesResolved) {
-      issues.push(`Duplicate files were detected but no DELETE FILE operations were emitted. Next attempt MUST delete duplicate files.`);
+      issues.push(`Duplicate groups still remain (${duplicateGroupsRemaining.length}). Next attempt MUST consolidate and delete duplicate files.`);
       state.lastSummary = (state.lastSummary || '') +
-        '\n\n⚠ DELETION AUDIT: Duplicate files were detected but no DELETE FILE operations were emitted. Next attempt MUST address duplicate files with explicit deletions.';
+        '\n\n⚠ DELETION AUDIT: Duplicate file groups remain after fixes. Next attempt MUST address duplicate files with explicit deletions.';
     }
     if (!goalMet) {
       issues.push(`Goal is not yet satisfied. Next attempt must address gaps in epic delivery.`);

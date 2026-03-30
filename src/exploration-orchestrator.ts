@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { getWorkspace, getOllamaPorts, getAgentModel } from './config';
+import { callOpenCodeCLI } from './remote-ai';
 import { getIssueDetails, postComment, getIssueComments } from './paperclip-api';
 import { AGENTS } from './agent-types';
 import { applyCodeBlocks } from './code-extractor';
@@ -128,19 +129,8 @@ async function runBuilderInWorktree(
     console.log(`[explore] Running approach ${approach.label} in ${worktree.path}`);
     console.log(`[explore] Model: ${model}, prompt length: ${prompt.length}`);
 
-    // Call Ollama directly
-    const ollamaRes = await fetch(`http://127.0.0.1:${ollamaPort}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        stream: false,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-
-    const ollamaData = await ollamaRes.json() as any;
-    const content = ollamaData.message?.content || ollamaData.response || '';
+    // Call Ollama via OpenCode CLI
+    const content = await callOpenCodeCLI(prompt, '', model);
 
     if (!content.trim()) {
       result.buildOutput = 'Builder produced no output';

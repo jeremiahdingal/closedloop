@@ -42,6 +42,7 @@ vi.mock('./paperclip-api', () => ({
   patchIssue: patchIssueMock,
   getIssueDetails: getIssueDetailsMock,
   getIssueLabel: getIssueLabelMock,
+  wakeAgent: vi.fn(async () => true),
 }));
 
 vi.mock('./epic-reviewer-agent', () => ({

@@ -7,7 +7,16 @@
  */
 
 import * as http from 'http';
-import { getConfig, getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentModel, getAgentKeys } from './config';
+import {
+  getConfig,
+  getOllamaPorts,
+  getPaperclipApiUrl,
+  getCompanyId,
+  getAgentModel,
+  getAgentKeys,
+  getWorkspace,
+  getStylingPolicy,
+} from './config';
 import { getAgentName, getIssueDetails, patchIssue, postComment, findAssignedIssue, findAssignedIssues, getIssueLabel, wakeAgent } from './paperclip-api';
 import { AGENTS, BLOCKED_AGENTS, AGENT_NAMES, issueProcessingLock, issueBuilderPasses, issueBuilderBurstMode, issueImportFailures } from './agent-types';
 import { isGoalIssue, scoreComplexity, decomposeGoalIntoTickets, checkGoalCompletion, getEpicTickets, enforceGoalOverlapSuppression, getOverlapBlockForTicket } from './goal-system';
@@ -20,6 +29,8 @@ import { executeBashBlocks } from './bash-executor';
 import { detectAndDelegate } from './delegation';
 import { runArtistStage } from './artist-recorder';
 import { runDiffGuardian } from './diff-guardian';
+import { runDriftPrecommit } from './ticket-constraints';
+import { parseReviewVerdict } from './agent-contracts';
 import {
   runExploration,
   handleReviewerSelection,
@@ -47,6 +58,73 @@ const MAX_LOOP_PASSES = 5; // Auto-create PR after 5 passes for human interventi
 const MAX_BUILDER_PASSES = 5; // Hard-stop Local Builder drift after 5 write passes
 const MAX_BUILD_FAILURES = 4;
 const LOOP_RESET_WINDOW_MS = 60 * 60 * 1000; // Reset count after 1 hour of no activity
+const telemetryCounters = {
+  driftBlockedWrites: 0,
+};
+const LOCAL_BUILDER_CONTEXT_CHAR_LIMIT = 14000;
+
+function buildStylingInstructionSentence(): string {
+  const styling = getStylingPolicy();
+  const parts: string[] = [`Use ${styling.framework} for styling.`];
+  if (styling.guidance) parts.push(styling.guidance);
+  if (styling.required.length > 0) parts.push(`Preferred styling imports: ${styling.required.join(', ')}.`);
+  if (styling.forbidden.length > 0) parts.push(`Avoid: ${styling.forbidden.join(', ')}.`);
+  return parts.join(' ');
+}
+
+function buildImportFixGuidance(): string {
+  const styling = getStylingPolicy();
+  const requiredStylingLines =
+    styling.required.length > 0
+      ? styling.required.map((entry) => `   - ${entry}`).join('\n')
+      : `   - Follow ${styling.framework} project conventions`;
+  const forbiddenStylingLines =
+    styling.forbidden.length > 0
+      ? styling.forbidden.map((entry) => `   - ❌ ${entry}`).join('\n')
+      : '   - ❌ Do not introduce unapproved styling frameworks';
+
+  return `**💡 How to fix these import errors:**\n\n` +
+    `1. **Check package.json** - Only import packages that exist in:\n` +
+    `   - \`packages/app/package.json\` (for app code)\n` +
+    `   - \`packages/ui/package.json\` (for ui code)\n\n` +
+    `2. **Styling rules for this project (${styling.framework}):**\n` +
+    `   - ${styling.guidance}\n` +
+    `${requiredStylingLines}\n` +
+    `${forbiddenStylingLines}\n\n` +
+    `3. **Data/API patterns:**\n` +
+    `   - Fetch: Use \`fetcherWithToken\` from \`app/utils/fetcherWithToken\`\n` +
+    `   - ❌ 'ky' → ✅ Use \`fetcherWithToken\`\n` +
+    `   - ❌ 'axios' → ✅ Use native \`fetch\` or \`fetcherWithToken\`\n` +
+    `   - ❌ 'lodash' → ✅ Use native array methods (.map, .filter, etc.)\n\n` +
+    `4. **Relative imports** - For local files use \`../\` paths:\n` +
+    `   - \`import { X } from '../types/db.types'\`\n` +
+    `   - \`import { fetcherWithToken } from 'app/utils/fetcherWithToken'\`\n\n`;
+}
+
+function parseReviewerVerdictStrict(content: string): 'APPROVED' | 'CHANGES_REQUESTED' | 'AMBIGUOUS' {
+  if (/VERDICT:\s*APPROVED\b/i.test(content)) return 'APPROVED';
+  if (/VERDICT:\s*(?:CHANGES_REQUESTED|REJECTED)\b/i.test(content)) return 'CHANGES_REQUESTED';
+
+  // Allow explicit structured JSON contract, but reject free-text ambiguity.
+  if (/"decision"\s*:\s*"(approved|rejected)"/i.test(content)) {
+    const parsed = parseReviewVerdict(content);
+    if (parsed?.decision === 'approved') return 'APPROVED';
+    if (parsed?.decision === 'rejected') return 'CHANGES_REQUESTED';
+  }
+
+  return 'AMBIGUOUS';
+}
+
+function trimLocalBuilderContextIfNeeded(agentId: string | null, issueContext: string): string {
+  if (agentId !== AGENTS['local builder']) return issueContext;
+  if (issueContext.length <= LOCAL_BUILDER_CONTEXT_CHAR_LIMIT) return issueContext;
+
+  const trimmed = issueContext.slice(0, LOCAL_BUILDER_CONTEXT_CHAR_LIMIT);
+  const note =
+    `\n\n[closedloop] Context truncated to ${LOCAL_BUILDER_CONTEXT_CHAR_LIMIT} chars for Local Builder to avoid adapter timeout.` +
+    `\nAsk for specific file context if more detail is needed.`;
+  return `${trimmed}${note}`;
+}
 
 /**
  * Track and detect Reviewer ↔ Local Builder loops
@@ -202,7 +280,9 @@ async function stopOnBuilderPassCap(issueId: string, passCount: number): Promise
     console.log(`[closedloop] PR created after Local Builder pass cap (${passCount}/${MAX_BUILDER_PASSES})`);
   } catch (prErr: any) {
     console.error(`[closedloop] Failed to create PR after Local Builder pass cap:`, prErr.message);
-    await postComment(issueId, null, `_Local Builder pass cap reached but PR creation failed: ${prErr.message}_`);
+    if (!String(prErr.message || '').includes('[PR_PREFLIGHT_FAILED]')) {
+      await postComment(issueId, null, `_Local Builder pass cap reached but PR creation failed: ${prErr.message}_`);
+    }
   }
 }
 
@@ -497,7 +577,8 @@ export function createProxy(): http.Server {
           fullPrompt,
           'You are a senior full-stack engineer working on a TypeScript monorepo (Next.js + React Native + Cloudflare Workers). ' +
           'Write production-quality code. Output file contents using FILE: path/to/file.ext format followed by code blocks. ' +
-          'Use Tamagui for styling (NO Tailwind, NO StyleSheet.create). Use fetcherWithToken from app/utils/fetcherWithToken for API calls.'
+          `${buildStylingInstructionSentence()} ` +
+          'Use fetcherWithToken from app/utils/fetcherWithToken for API calls.'
         );
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ message: { role: 'assistant', content: remoteResult } }));
@@ -644,9 +725,15 @@ export function createProxy(): http.Server {
           ? await buildLocalBuilderContext(issueId, agentId)
           : await buildIssueContext(issueId, agentId || '');
       if (issueContext) {
+        const finalIssueContext = trimLocalBuilderContextIfNeeded(agentId || null, issueContext);
+        if (finalIssueContext.length !== issueContext.length) {
+          console.log(
+            `[closedloop] Local Builder context trimmed ${issueContext.length} -> ${finalIssueContext.length} chars to prevent timeout`
+          );
+        }
         ollamaPayload.messages.push({
           role: 'user',
-          content: issueContext,
+          content: finalIssueContext,
         });
       }
     } else if (parsedBody.context) {
@@ -796,6 +883,26 @@ export function createProxy(): http.Server {
                 try {
                   const { written: writtenFiles, fileContents } = applyCodeBlocks(content);
                   if (writtenFiles.length > 0) {
+                    const issue = await getIssueDetails(issueId);
+                    if (issue) {
+                      const driftPrecommit = runDriftPrecommit(issue, writtenFiles, getWorkspace());
+                      if (!driftPrecommit.ok) {
+                        telemetryCounters.driftBlockedWrites += 1;
+                        console.log(
+                          `[telemetry] DRIFT_BLOCKED_WRITES count=${telemetryCounters.driftBlockedWrites} code=${driftPrecommit.code || 'UNKNOWN'}`
+                        );
+                        await postComment(
+                          issueId,
+                          AGENTS['local builder'],
+                          `[${driftPrecommit.code || 'DRIFT_BLOCKED'}] Local Builder write blocked before commit.\n\n` +
+                          `Details:\n${driftPrecommit.details.map(detail => `- ${detail}`).join('\n')}\n\n` +
+                          `Ticket was reassigned for correction. No commit/push was performed.`
+                        );
+                        await patchIssue(issueId, { assigneeAgentId: AGENTS['tech lead'] });
+                        return;
+                      }
+                    }
+
                     // Track pass count
                     if (!issueBuilderPasses[issueId]) {
                       try {
@@ -844,25 +951,7 @@ export function createProxy(): http.Server {
                             `⚠️ **Import Validation Failed - Requesting Reviewer Assistance**\n\n` +
                             `Import validation has failed ${issueImportFailures[issueId]} times. Sending to Reviewer for help.\n\n` +
                             formatValidationResult(validation) +
-                            `\n\n**💡 How to fix these import errors:**\n\n` +
-                            `1. **Check package.json** - Only import packages that exist in:\n` +
-                            `   - \`packages/app/package.json\` (for app code)\n` +
-                            `   - \`packages/ui/package.json\` (for ui code)\n\n` +
-                            `2. **Common valid imports in this project:**\n` +
-                            `   - Tamagui: \`import { Button, Label, Input } from 'tamagui'\` or \`@tamagui/*\`\n` +
-                            `   - Icons: \`import { X, Plus, Settings } from '@tamagui/lucide-icons'\`\n` +
-                            `   - React Query: \`import { useQuery, useMutation } from '@tanstack/react-query'\`\n` +
-                            `   - React Hook Form: \`import { useForm } from 'react-hook-form'\`\n` +
-                            `   - Fetch: Use \`fetcherWithToken\` from \`app/utils/fetcherWithToken\`\n\n` +
-                            `3. **DO NOT use these (not installed):**\n` +
-                            `   - ❌ 'ky' → ✅ Use \`fetcherWithToken\`\n` +
-                            `   - ❌ 'axios' → ✅ Use native \`fetch\` or \`fetcherWithToken\`\n` +
-                            `   - ❌ 'lodash' → ✅ Use native array methods (.map, .filter, etc.)\n` +
-                            `   - ❌ '@mui/*' → ✅ Use Tamagui components\n` +
-                            `   - ❌ 'react-icons/*' → ✅ Use \`@tamagui/lucide-icons\`\n\n` +
-                            `4. **Relative imports** - For local files use \`../\` paths:\n` +
-                            `   - \`import { X } from '../types/db.types'\`\n` +
-                            `   - \`import { fetcherWithToken } from 'app/utils/fetcherWithToken'\`\n\n` +
+                            `\n\n${buildImportFixGuidance()}` +
                             `**Reviewer:** Please help fix these import errors. The Local Builder has been unable to resolve them.`
                           );
                           await patchIssue(issueId, { assigneeAgentId: AGENTS.reviewer });
@@ -873,25 +962,7 @@ export function createProxy(): http.Server {
                             AGENTS['local builder'],
                             `⚠️ **Import Validation Failed**\n\n` +
                             formatValidationResult(validation) +
-                            `\n\n**💡 How to fix these import errors:**\n\n` +
-                            `1. **Check package.json** - Only import packages that exist in:\n` +
-                            `   - \`packages/app/package.json\` (for app code)\n` +
-                            `   - \`packages/ui/package.json\` (for ui code)\n\n` +
-                            `2. **Common valid imports in this project:**\n` +
-                            `   - Tamagui: \`import { Button, Label, Input } from 'tamagui'\` or \`@tamagui/*\`\n` +
-                            `   - Icons: \`import { X, Plus, Settings } from '@tamagui/lucide-icons'\`\n` +
-                            `   - React Query: \`import { useQuery, useMutation } from '@tanstack/react-query'\`\n` +
-                            `   - React Hook Form: \`import { useForm } from 'react-hook-form'\`\n` +
-                            `   - Fetch: Use \`fetcherWithToken\` from \`app/utils/fetcherWithToken\`\n\n` +
-                            `3. **DO NOT use these (not installed):**\n` +
-                            `   - ❌ 'ky' → ✅ Use \`fetcherWithToken\`\n` +
-                            `   - ❌ 'axios' → ✅ Use native \`fetch\` or \`fetcherWithToken\`\n` +
-                            `   - ❌ 'lodash' → ✅ Use native array methods (.map, .filter, etc.)\n` +
-                            `   - ❌ '@mui/*' → ✅ Use Tamagui components\n` +
-                            `   - ❌ 'react-icons/*' → ✅ Use \`@tamagui/lucide-icons\`\n\n` +
-                            `4. **Relative imports** - For local files use \`../\` paths:\n` +
-                            `   - \`import { X } from '../types/db.types'\`\n` +
-                            `   - \`import { fetcherWithToken } from 'app/utils/fetcherWithToken'\`\n\n` +
+                            `\n\n${buildImportFixGuidance()}` +
                             `**Fix the imports above and try again.**`
                           );
                           await patchIssue(issueId, { assigneeAgentId: AGENTS['local builder'] });
@@ -993,6 +1064,9 @@ export function createProxy(): http.Server {
                           console.log(`[closedloop] PR created after build failures exceeded`);
                         } catch (prErr: any) {
                           console.error(`[closedloop] Failed to create PR after build failures:`, prErr.message);
+                          if (String(prErr.message || '').includes('[PR_PREFLIGHT_FAILED]')) {
+                            console.log('[closedloop] PR preflight blocked; issue parked to avoid retry storm.');
+                          }
                         }
                       } else if (buildFailureStatus.count >= 2) {
                         // After 2 build failures, send to Reviewer for help instead of self-assigning
@@ -1085,6 +1159,9 @@ export function createProxy(): http.Server {
                           console.log(`[closedloop] PR created for human intervention`);
                         } catch (prErr: any) {
                           console.error(`[closedloop] Failed to create PR:`, prErr.message);
+                          if (String(prErr.message || '').includes('[PR_PREFLIGHT_FAILED]')) {
+                            console.log('[closedloop] PR preflight blocked; issue parked to avoid retry storm.');
+                          }
                         }
                         // Skip normal flow - PR already created
                       } else {
@@ -1145,14 +1222,9 @@ export function createProxy(): http.Server {
 
             // Reviewer: validate changes and approve/reject before PR creation
             if (agentId === AGENTS.reviewer && !isExploring(issueId)) {
-              const reviewApproved =
-                content.toLowerCase().includes('approved') ||
-                content.toLowerCase().includes('looks good') ||
-                content.toLowerCase().includes('lgtm') ||
-                content.toLowerCase().includes('no issues') ||
-                content.toLowerCase().includes('ready for pr');
+              const verdict = parseReviewerVerdictStrict(content);
 
-              if (reviewApproved) {
+              if (verdict === 'APPROVED') {
                 console.log(`[closedloop] Reviewer APPROVED changes for ${issueId.slice(0, 8)}`);
 
                 // Reset loop counter on successful approval
@@ -1177,6 +1249,14 @@ export function createProxy(): http.Server {
                   }
                 }
               } else {
+                if (verdict === 'AMBIGUOUS') {
+                  await postComment(
+                    issueId,
+                    AGENTS.reviewer,
+                    `[REVIEW_VERDICT_AMBIGUOUS] Reviewer output did not include a structured verdict. ` +
+                    `Expected \`VERDICT: APPROVED\` or \`VERDICT: CHANGES_REQUESTED\`. Treating as non-approval.`
+                  );
+                }
                 // Reviewer rejected - send back to Local Builder
                 console.log(`[closedloop] Reviewer found issues - saving to reflection memory`);
 
@@ -1223,6 +1303,9 @@ export function createProxy(): http.Server {
                     console.log(`[closedloop] PR created after loop cap`);
                   } catch (prErr: any) {
                     console.error(`[closedloop] Failed to create PR after loop cap:`, prErr.message);
+                    if (String(prErr.message || '').includes('[PR_PREFLIGHT_FAILED]')) {
+                      console.log('[closedloop] PR preflight blocked; issue parked to avoid retry storm.');
+                    }
                   }
                 } else {
                   try {
@@ -1256,7 +1339,9 @@ export function createProxy(): http.Server {
                   await checkGoalCompletion(issueId);
                 } catch (prErr: any) {
                   console.error(`[closedloop] Failed to create PR:`, prErr.message);
-                  await postComment(issueId, null, `_DiffGuardian approved but PR creation failed: ${prErr.message}_`);
+                  if (!String(prErr.message || '').includes('[PR_PREFLIGHT_FAILED]')) {
+                    await postComment(issueId, null, `_DiffGuardian approved but PR creation failed: ${prErr.message}_`);
+                  }
                 }
               } else {
                 // Diff Guardian rejected - send back to Local Builder
@@ -1281,6 +1366,9 @@ export function createProxy(): http.Server {
                     console.log(`[closedloop] PR created after loop cap`);
                   } catch (prErr: any) {
                     console.error(`[closedloop] Failed to create PR after loop cap:`, prErr.message);
+                    if (String(prErr.message || '').includes('[PR_PREFLIGHT_FAILED]')) {
+                      console.log('[closedloop] PR preflight blocked; issue parked to avoid retry storm.');
+                    }
                   }
                 } else {
                   // Diff Guardian sends back to Local Builder

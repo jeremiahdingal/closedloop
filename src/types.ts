@@ -86,6 +86,14 @@ export interface ProjectConfig {
   };
   commands: Record<string, string>;
   patterns: Record<string, string>;
+  coding?: {
+    styling?: {
+      framework?: string;
+      guidance?: string;
+      required?: string[];
+      forbidden?: string[];
+    };
+  };
   paperclip: {
     companyId: string;
     agents: Record<string, string>;
@@ -98,6 +106,10 @@ export interface ProjectConfig {
     ollamaPort: number;
     models: Record<string, string>;
     timeouts: Record<string, number>;
+    runnerBackend?: 'ollama_cli' | 'opencode_cli' | 'hybrid';
+    runnerTimeoutMs?: number;
+    stuckRunThresholdMs?: number;
+    stuckRunMaxRetries?: number;
   };
   artist: {
     devServerPort: number;
@@ -118,6 +130,9 @@ export interface ProjectConfig {
       model: string;
       threshold: number;
     };
+  };
+  epicReviewer?: {
+    requireOpenPrs?: boolean;
   };
 }
 

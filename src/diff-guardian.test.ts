@@ -24,6 +24,7 @@ vi.mock('./config', () => ({
 
 vi.mock('./paperclip-api', () => ({
   postComment: postCommentMock,
+  getIssueLabel: vi.fn(async (id: string) => id),
 }));
 
 vi.mock('./git-ops', () => ({
@@ -60,6 +61,8 @@ describe('runDiffGuardian', () => {
     expect(result.approved).toBe(false);
     expect(result.issues.some(issue => issue.type === 'DUPLICATE_STORE')).toBe(true);
     expect(postCommentMock).toHaveBeenCalledTimes(1);
+    const reportComment = (postCommentMock.mock.calls[0] as unknown[])[2] as string;
+    expect(reportComment).toContain('[DRIFT]');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

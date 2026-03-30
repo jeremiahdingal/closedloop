@@ -3,8 +3,8 @@
  *
  * Triggered when a high-complexity goal is assigned or when the active-goal
  * heartbeat finds an undecomposed epic.
- * Uses the shared remote z.ai GLM-5 adapter to break down broad epics into
- * narrow, buildable tickets.
+ * Uses the shared remote LLM adapter (Codex CLI / OpenAI / z.ai) to break
+ * down broad epics into narrow, buildable tickets.
  *
  * Output format:
  *   ## Ticket: <title>
@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspace, getCompanyId, getPaperclipApiUrl } from './config';
 import { getIssueLabel, postComment, patchIssue } from './paperclip-api';
-import { callZAI } from './remote-ai';
+import { callRemoteLLM } from './remote-ai';
 import { AGENTS } from './agent-types';
 import { decomposeGoalIntoTickets, getEpicTickets, enforceGoalOverlapSuppression, getOverlapBlockForTicket } from './goal-system';
 
@@ -131,13 +131,14 @@ async function runEpicDecode(goal: any): Promise<void> {
   const prompt = buildDecodePrompt(goal, projectStructure, commonPatterns);
 
   // 4. Call remote LLM
-  console.log(`[epic-decoder] Sending to glm-5 (${prompt.length} chars)`);
+  const provider = process.env.REMOTE_LLM_PROVIDER || 'codex';
+  console.log(`[epic-decoder] Sending to ${provider} (${prompt.length} chars)`);
   let decodeContent: string;
   try {
-    decodeContent = await callZAI(prompt, buildSystemPrompt());
+    decodeContent = await callRemoteLLM(prompt, buildSystemPrompt());
   } catch (err: any) {
     console.error(`[epic-decoder] Remote LLM failed: ${err.message}`);
-    await postComment(goal.id, null, `_Epic Decoder (GLM-5) failed: ${err.message}_`);
+    await postComment(goal.id, null, `_Epic Decoder failed: ${err.message}_`);
     return;
   }
 
@@ -146,7 +147,7 @@ async function runEpicDecode(goal: any): Promise<void> {
     console.log(`[epic-decoder] Ticket decomposition received`);
     try {
       await decomposeGoalIntoTickets(goal.id, decodeContent);
-      await postComment(goal.id, null, `✅ Epic Decoder (GLM-5) decomposed epic into tickets. Child issues created.`);
+      await postComment(goal.id, null, `✅ Epic Decoder decomposed epic into tickets. Child issues created.`);
 
       // Assign ALL tickets to Complexity Router so each decoded ticket enters
       // the normal scaffold/classification path.

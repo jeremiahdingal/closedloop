@@ -15,7 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspace, getCompanyId, getPaperclipApiUrl } from './config';
 import { getIssueDetails, postComment, patchIssue } from './paperclip-api';
-import { callZAI } from './remote-ai';
+import { callRemoteLLM } from './remote-ai';
 import { AGENTS } from './agent-types';
 import { getBranchName, getDefaultBranch, commitAndPush } from './git-ops';
 import { applyCodeBlocks } from './code-extractor';
@@ -114,7 +114,7 @@ async function runEpicReview(
   console.log(`[epic-reviewer] Sending to glm-5 (${prompt.length} chars, ${ticketsWithContent.length} tickets)`);
   let reviewContent: string;
   try {
-    reviewContent = await callZAI(prompt, buildSystemPrompt());
+    reviewContent = await callRemoteLLM(prompt, buildSystemPrompt());
   } catch (err: any) {
     console.error(`[epic-reviewer] Remote LLM failed: ${err.message}`);
     return;

@@ -197,7 +197,8 @@ export async function postComment(
 export async function wakeAgent(
   agentId: string,
   reason: string,
-  source: 'automation' | 'manual' | 'callback' = 'automation'
+  source: 'automation' | 'on_demand' | 'assignment' | 'timer' = 'automation',
+  options: { issueId?: string; issueIds?: string[] } = {}
 ): Promise<boolean> {
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -211,8 +212,10 @@ export async function wakeAgent(
       headers,
       body: JSON.stringify({
         source,
-        triggerDetail: source === 'manual' ? 'manual' : 'system',
+        triggerDetail: source === 'on_demand' ? 'manual' : 'system',
         reason,
+        ...(options.issueId ? { issueId: options.issueId, taskId: options.issueId } : {}),
+        ...(options.issueIds && options.issueIds.length > 0 ? { issueIds: options.issueIds } : {}),
       }),
     });
 

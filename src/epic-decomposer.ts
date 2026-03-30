@@ -13,6 +13,7 @@
 
 import { getOllamaPorts, getPaperclipApiUrl, getCompanyId, getAgentModel, loadConfig } from './config';
 import { AGENTS } from './agent-types';
+import { callOpenCodeCLI } from './remote-ai';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -90,27 +91,8 @@ async function decomposeEpic(epic: Goal): Promise<void> {
 
   try {
     const timeoutSec = loadConfig().ollama.timeouts?.strategist || 900;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutSec * 1000);
 
-    const ollamaRes = await fetch(`http://127.0.0.1:${ollamaPort}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        stream: false,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
-      signal: controller.signal,
-    });
-
-    const data = await ollamaRes.json() as any;
-    clearTimeout(timeoutId);
-
-    const content = data.message?.content || data.response || '';
+    const content = await callOpenCodeCLI(userPrompt, systemPrompt, model, timeoutSec * 1000);
     console.log(`[epic-decomposer] LLM response: ${content.length} chars`);
 
     // Parse sub-tickets from response

@@ -73,6 +73,15 @@
     "styling": "Tamagui primitives/tokens with the existing theme system"
   },
   
+  "coding": {
+    "styling": {
+      "framework": "Tamagui",
+      "guidance": "Use Tamagui primitives/tokens with the existing theme system.",
+      "required": ["tamagui", "@tamagui/*", "@tamagui/lucide-icons"],
+      "forbidden": ["tailwind", "css modules", "StyleSheet.create", "@mui/*", "react-icons/*"]
+    }
+  },
+  
   "paperclip": {
     "companyId": "ac5c469b-1f81-4f1f-9061-1dd9033ec831",
     "agents": {
@@ -110,11 +119,15 @@
   "ollama": {
     "proxyPort": 3201,
     "ollamaPort": 11434,
+    "runnerBackend": "ollama_cli",
+    "runnerTimeoutMs": 600000,
+    "stuckRunThresholdMs": 600000,
+    "stuckRunMaxRetries": 1,
     "models": {
       "complexity router": "qwen3:4b",
       "strategist": "qwen3.5:9b",
       "tech lead": "deepcoder:latest",
-      "local builder": "qwen3-coder:30b",
+      "local builder": "devstral-small-2:24b",
       "local builder burst": "remote",
       "reviewer": "deepcoder:latest",
       "diff guardian": "qwen3:4b",
@@ -164,6 +177,10 @@
       "model": "glm-5",
       "threshold": 3
     }
+  },
+
+  "epicReviewer": {
+    "requireOpenPrs": true
   }
 }
 

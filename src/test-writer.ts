@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspace, getOllamaPorts, getAgentModel } from './config';
+import { callOpenCodeCLI } from './remote-ai';
 
 export interface TestWriterResult {
   filesWritten: string[];
@@ -94,24 +95,7 @@ RULES:
   const userPrompt = `Generate a Vitest test for this file at ${filePath}:\n\n\`\`\`typescript\n${sourceCode}\n\`\`\``;
 
   try {
-    const res = await fetch(`http://127.0.0.1:${ollamaPort}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        stream: false,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
-      signal: AbortSignal.timeout(120000),
-    } as any);
-
-    if (!res.ok) return null;
-
-    const data = await res.json() as any;
-    let content = data.message?.content || '';
+    let content = await callOpenCodeCLI(userPrompt, systemPrompt, model, 120000);
 
     // Extract code block if wrapped in markdown
     const codeBlockMatch = content.match(/```(?:typescript|ts)?\n([\s\S]*?)```/);

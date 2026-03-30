@@ -15,7 +15,7 @@ import { getDefaultBranch, getBranchName } from './git-ops';
 const WORKSPACE = getWorkspace();
 
 export interface DiffIssue {
-  type: 'PARALLEL_FILE' | 'EXPORT_REMOVAL' | 'EXCESSIVE_DELETION' | 'DUPLICATE_STORE' | 'DUPLICATE_TYPE';
+  type: 'PARALLEL_FILE' | 'EXPORT_REMOVAL' | 'EXCESSIVE_DELETION' | 'DUPLICATE_STORE' | 'DUPLICATE_TYPE' | 'RUNTIME_ERROR';
   severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   description: string;
   files?: string[];
@@ -132,12 +132,77 @@ export async function runDiffGuardian(issueId: string): Promise<DiffGuardianResu
     return { approved: false, issues };
   } catch (err: any) {
     console.error('[DiffGuardian] Error:', err.message);
-    return { approved: true, issues: [] };
+    const issue: DiffIssue = {
+      type: 'RUNTIME_ERROR',
+      severity: 'CRITICAL',
+      description: `Diff Guardian runtime error: ${String(err.message || 'unknown')}`,
+      autoFixable: false,
+    };
+    await postComment(
+      issueId,
+      null,
+      `[DIFF_GUARDIAN_RUNTIME_ERROR] Diff Guardian failed closed and rejected this run.\n\n${String(err.message || 'unknown error')}`
+    );
+    return { approved: false, issues: [issue] };
   }
 }
 
 function detectParallelFiles(changedFiles: string[]): string[] {
   const parallelFiles: string[] = [];
+  const familyRegex = /(components|hooks|apihooks|schemas|routes|services|screens|dialogs)\//i;
+  const common = new Set(['index', 'types', 'utils', 'constants', 'schema', 'route', 'routes', 'screen']);
+  const changedByBasename = new Map<string, string[]>();
+  for (const changed of changedFiles) {
+    const normalized = changed.replace(/\\/g, '/');
+    if (!familyRegex.test(normalized)) continue;
+    const basename = path.basename(normalized, path.extname(normalized)).toLowerCase();
+    if (common.has(basename)) continue;
+    const list = changedByBasename.get(basename) || [];
+    list.push(normalized);
+    changedByBasename.set(basename, list);
+  }
+
+  for (const files of changedByBasename.values()) {
+    if (files.length > 1) {
+      parallelFiles.push(...files);
+    }
+  }
+
+  try {
+    const tracked = execSync('git ls-files', {
+      cwd: WORKSPACE,
+      encoding: 'utf8',
+      timeout: 10000,
+    })
+      .split('\n')
+      .map(f => f.trim())
+      .filter(Boolean);
+
+    const trackedByBasename = new Map<string, string[]>();
+    for (const trackedFile of tracked) {
+      const normalized = trackedFile.replace(/\\/g, '/');
+      if (!familyRegex.test(normalized)) continue;
+      const basename = path.basename(normalized, path.extname(normalized)).toLowerCase();
+      if (common.has(basename)) continue;
+      const list = trackedByBasename.get(basename) || [];
+      list.push(normalized);
+      trackedByBasename.set(basename, list);
+    }
+
+    for (const [basename, files] of changedByBasename.entries()) {
+      const existing = trackedByBasename.get(basename) || [];
+      for (const file of files) {
+        const isExistingPath = fs.existsSync(path.join(WORKSPACE, file));
+        if (isExistingPath) continue;
+        if (existing.some(existingFile => existingFile !== file)) {
+          parallelFiles.push(file);
+        }
+      }
+    }
+  } catch {
+    // best effort only
+  }
+
   const patterns = [
     { new: /\.store\.ts$/, existing: /store.*\.ts$/ },
     { new: /\.types\.ts$/, existing: /types.*\.ts$/ },
@@ -163,7 +228,7 @@ function detectParallelFiles(changedFiles: string[]): string[] {
     }
   }
 
-  return parallelFiles;
+  return Array.from(new Set(parallelFiles));
 }
 
 function detectRemovedExports(changedFiles: string[], defaultBranch: string): string[] {
@@ -288,11 +353,21 @@ function buildDiffGuardianReport(
   fixesApplied: Array<{ issue: DiffIssue; action: string; result: string }>,
   approved: boolean
 ): string {
-  let report = '## Diff Guardian Report\n\n';
+  const driftTypes: DiffIssue['type'][] = ['PARALLEL_FILE', 'DUPLICATE_STORE', 'DUPLICATE_TYPE'];
+  const hasDrift = issues.some(i => driftTypes.includes(i.type));
+  let report = hasDrift
+    ? '## [DRIFT] Diff Guardian Report\n\n'
+    : '## Diff Guardian Report\n\n';
 
   if (issues.length === 0) {
     report += 'No destructive changes detected. Changes approved.\n';
     return report;
+  }
+
+  if (hasDrift) {
+    const driftIssues = issues.filter(i => driftTypes.includes(i.type));
+    report += `**[DRIFT:${driftIssues.map(i => i.type).join(',')}]** `;
+    report += `Duplicate/parallel file drift detected. Epic Reviewer should prioritize deletion-focused review for this ticket.\n\n`;
   }
 
   report += `Detected ${issues.length} destructive pattern(s).\n\n`;

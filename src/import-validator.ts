@@ -10,7 +10,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getWorkspace } from './config';
+import { getWorkspace, getStylingPolicy } from './config';
 
 const WORKSPACE = getWorkspace();
 
@@ -80,6 +80,7 @@ function loadPackageJsonPaths(): string[] {
  */
 function getInstalledPackages(): Set<string> {
   const packages = new Set<string>();
+  const stylingPolicy = getStylingPolicy();
   const pkgPaths = loadPackageJsonPaths();
   
   for (const pkgPath of pkgPaths) {
@@ -114,12 +115,15 @@ function getInstalledPackages(): Set<string> {
   const commonEcosystem = [
     'react', 'react-native', 'react-dom',
     '@tanstack/react-query', '@tanstack/react-table',
-    'tamagui', '@tamagui/core', '@tamagui/web',
     'expo', 'expo-router', 'expo-constants', 'expo-linking', 'expo-image-picker', 'expo-linear-gradient',
     'solito', 'next', 'next/router',
     '@babel/runtime',
   ];
   commonEcosystem.forEach(name => packages.add(name));
+  stylingPolicy.required.forEach((name) => {
+    if (name.includes('*')) return;
+    packages.add(name);
+  });
 
   return packages;
 }
@@ -209,6 +213,7 @@ function validateFileImports(
  */
 export function validateImports(files: Array<{ path: string; content: string }>): ValidationResult {
   const installedPackages = getInstalledPackages();
+  const stylingPolicy = getStylingPolicy();
   const errors: ValidationResult['errors'] = [];
   const warnings: ValidationResult['warnings'] = [];
   
@@ -232,8 +237,25 @@ export function validateImports(files: Array<{ path: string; content: string }>)
       { pattern: /ky/i, suggestion: 'Use fetcherWithToken from app/utils/fetcherWithToken instead' },
       { pattern: /axios/i, suggestion: 'Use native fetch or fetcherWithToken instead' },
       { pattern: /lodash/i, suggestion: 'Use native array methods or @radix-ui utilities instead' },
-      { pattern: /styled-components|emotion|@emotion/i, suggestion: 'Use Tamagui components/tokens instead' },
+      {
+        pattern: /styled-components|emotion|@emotion/i,
+        suggestion: `Use ${stylingPolicy.framework} conventions instead${stylingPolicy.guidance ? ` (${stylingPolicy.guidance})` : ''}`,
+      },
     ];
+
+    const forbiddenStyling = stylingPolicy.forbidden.map((v) => v.toLowerCase());
+    if (forbiddenStyling.some((v) => v.includes('stylesheet.create'))) {
+      hallucinationPatterns.push({
+        pattern: /StyleSheet\.create/i,
+        suggestion: `Avoid StyleSheet.create in this project. ${stylingPolicy.guidance}`,
+      });
+    }
+    if (forbiddenStyling.some((v) => v.includes('tailwind'))) {
+      hallucinationPatterns.push({
+        pattern: /tailwind|className\s*=|tw`/i,
+        suggestion: `Avoid Tailwind patterns in this project. Use ${stylingPolicy.framework} instead.`,
+      });
+    }
     
     const content = file.content;
     for (const { pattern, suggestion } of hallucinationPatterns) {
