@@ -12,7 +12,10 @@ vi.mock('./config', () => ({
 
 vi.mock('./agent-types', () => ({
   AGENTS: {
+    'scaffold architect': 'scaffold-architect-id',
     strategist: 'strategist-id',
+    reviewer: 'reviewer-id',
+    'diff guardian': 'diff-guardian-id',
     'epic reviewer': 'epic-reviewer-id',
   },
 }));
@@ -33,6 +36,18 @@ describe('adapter-config', () => {
               name: 'Strategist',
               adapterType: 'http',
               adapterConfig: { url: 'http://bad.local' },
+            },
+            {
+              id: 'reviewer-id',
+              name: 'Reviewer',
+              adapterType: 'http',
+              adapterConfig: { url: 'http://127.0.0.1:3201' },
+            },
+            {
+              id: 'diff-guardian-id',
+              name: 'Diff Guardian',
+              adapterType: 'http',
+              adapterConfig: { url: 'http://127.0.0.1:3201' },
             },
             {
               id: 'epic-reviewer-id',
@@ -61,6 +76,18 @@ describe('adapter-config', () => {
         ([url, init]) => String(url).includes('/api/agents/strategist-id') && (init as any)?.method === 'PATCH'
       )
     ).toBe(true);
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) => String(url).includes('/api/agents/reviewer-id') && (init as any)?.method === 'PATCH'
+      )
+    ).toBe(false);
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) => String(url).includes('/api/agents/diff-guardian-id') && (init as any)?.method === 'PATCH'
+      )
+    ).toBe(false);
   });
 
   it('syncs Epic Reviewer to the native local adapter with a compact prompt', async () => {
@@ -98,5 +125,71 @@ describe('adapter-config', () => {
     expect(body.adapterConfig.model).toBeUndefined();
     expect(body.adapterConfig.promptTemplate).toContain('Read the workspace directly');
     expect(body.adapterConfig.promptTemplate).toContain('PR-first');
+  });
+
+  it('syncs scaffold architect, reviewer, and diff guardian to the native OpenCode adapter with trimmed prompts', async () => {
+    fetchMock.mockImplementation(async (url: string, init?: any) => {
+      if (String(url).includes('/api/companies/company-1/agents') && (!init || init.method !== 'PATCH')) {
+        return {
+          ok: true,
+          json: async () => ([
+            {
+              id: 'scaffold-architect-id',
+              name: 'Scaffold Architect',
+              adapterType: 'http',
+              adapterConfig: { url: 'http://127.0.0.1:3201' },
+            },
+            {
+              id: 'reviewer-id',
+              name: 'Reviewer',
+              adapterType: 'http',
+              adapterConfig: { url: 'http://127.0.0.1:3201' },
+            },
+            {
+              id: 'diff-guardian-id',
+              name: 'Diff Guardian',
+              adapterType: 'http',
+              adapterConfig: { url: 'http://127.0.0.1:3201' },
+            },
+          ]),
+        };
+      }
+
+      return { ok: true, text: async () => '' };
+    });
+
+    const { ensureRepoAwareOpenCodeAdapters } = await import('./adapter-config');
+    await ensureRepoAwareOpenCodeAdapters();
+
+    const patchBodies = fetchMock.mock.calls
+      .filter(([url, init]) => String(url).includes('/api/agents/') && (init as any)?.method === 'PATCH')
+      .map(([, init]) => JSON.parse((init as any).body));
+
+    expect(patchBodies).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        adapterType: 'opencode_local',
+        adapterConfig: expect.objectContaining({
+          cwd: 'C:\\workspace',
+          model: 'ollama/qwen3:8b',
+          promptTemplate: expect.stringContaining('Read the workspace directly'),
+        }),
+      }),
+      expect.objectContaining({
+        adapterType: 'opencode_local',
+        adapterConfig: expect.objectContaining({
+          cwd: 'C:\\workspace',
+          model: 'ollama/qwen3:8b',
+          promptTemplate: expect.stringContaining('VERDICT: APPROVED'),
+        }),
+      }),
+      expect.objectContaining({
+        adapterType: 'opencode_local',
+        adapterConfig: expect.objectContaining({
+          cwd: 'C:\\workspace',
+          model: 'ollama/qwen3:4b',
+          promptTemplate: expect.stringContaining('Fail closed'),
+        }),
+      }),
+    ]));
   });
 });

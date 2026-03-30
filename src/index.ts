@@ -9,7 +9,7 @@ import { createProxy, checkAssignedIssues, initializeRAG } from './proxy-server'
 import { getConfig } from './config';
 import { checkActiveGoalsForDecode } from './epic-decoder';
 import { reloadGoalTicketMappings } from './goal-system';
-import { ensureEpicReviewerNativeAdapter, ensureOrchestrationHttpAdapters } from './adapter-config';
+import { ensureEpicReviewerNativeAdapter, ensureOrchestrationHttpAdapters, ensureRepoAwareOpenCodeAdapters } from './adapter-config';
 import { monitorStuckRuns, normalizeOrchestrationRecovery } from './run-guardrails';
 
 // Load configuration
@@ -45,6 +45,12 @@ setInterval(() => {
   ensureOrchestrationHttpAdapters().catch(() => {});
 }, 5 * 60 * 1000);
 
+// Keep repo-aware agents on native local adapters so they can inspect the
+// workspace directly and keep the run UI visible without the bridge path.
+setInterval(() => {
+  ensureRepoAwareOpenCodeAdapters().catch(() => {});
+}, 5 * 60 * 1000);
+
 // Keep Epic Reviewer on the native local adapter so it can inspect the workspace
 // directly and keep the run UI visible without the bridge path.
 setInterval(() => {
@@ -54,6 +60,7 @@ setInterval(() => {
 // On startup: reload goal/ticket mappings, reset errored agents, then start
 // active-goal decomposition and assigned-issue checking.
 setTimeout(async () => {
+  await ensureRepoAwareOpenCodeAdapters();
   await ensureEpicReviewerNativeAdapter();
   await ensureOrchestrationHttpAdapters();
   await normalizeOrchestrationRecovery();
