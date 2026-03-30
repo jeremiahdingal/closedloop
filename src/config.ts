@@ -169,7 +169,7 @@ function createDefaultConfig(): ProjectConfig {
         'complexity router': 'ollama/qwen3:4b',
         strategist: 'ollama/qwen3:8b',
         'tech lead': 'ollama/deepcoder:14b',
-        'local builder': 'ollama/qwen2.5-coder:7b',
+        'local builder': 'ollama/devstal:8b-small',
         'local builder burst': 'remote',
         reviewer: 'ollama/qwen3:8b',
         'diff guardian': 'ollama/qwen3:4b',
