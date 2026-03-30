@@ -387,6 +387,103 @@ const REVIEWER_AGENT_IDS = new Set<string>([
 
 const processedRuns = new Set<string>();
 
+async function handleInterruptedRun(run: any): Promise<void> {
+  const workspace = getWorkspace();
+  
+  // Find the issue assigned to this agent
+  const issues = await findAssignedIssues(run.agentId);
+  if (issues.length === 0) return;
+  const issue = issues[0];
+  
+  // Check for any uncommitted changes
+  let hasChanges = false;
+  let changedFiles: string[] = [];
+  
+  try {
+    const diffOutput = execSync('git diff --name-only HEAD', { cwd: workspace, encoding: 'utf8', timeout: 10000 }).trim();
+    const untrackedOutput = execSync('git ls-files --others --exclude-standard', { cwd: workspace, encoding: 'utf8', timeout: 10000 }).trim();
+    changedFiles = [...diffOutput.split('\n'), ...untrackedOutput.split('\n')]
+      .map(f => f.trim())
+      .filter(Boolean);
+    hasChanges = changedFiles.length > 0;
+  } catch { }
+  
+  if (!hasChanges) {
+    // No changes made - just retry
+    console.log(`[guardrails] Run ${run.id.slice(0, 8)} interrupted with no changes - will retry`);
+    await postComment(issue.id, null,
+      `⚠️ Run interrupted/cancelled with no changes. Will retry automatically.`
+    );
+    return;
+  }
+  
+  // There are partial changes - commit them and let reviewer decide
+  console.log(`[guardrails] Run ${run.id.slice(0, 8)} interrupted with ${changedFiles.length} files changed`);
+  
+  const branchName = `agent/${(issue.identifier || issue.id.slice(0, 8)).toLowerCase()}`;
+  
+  try {
+    const filesToStage = getFilesToStage(workspace);
+    
+    if (filesToStage.length > 0) {
+      execSync(`git checkout -B ${branchName}`, { cwd: workspace, encoding: 'utf8', timeout: 10000 });
+      
+      for (const file of filesToStage) {
+        execSync(`git add "${file}"`, { cwd: workspace, encoding: 'utf8', timeout: 5000 });
+      }
+      
+      const commitMsg = `${issue.identifier}: Partial work (interrupted)\n\nAutomated commit of interrupted run.`;
+      execSync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, { cwd: workspace, encoding: 'utf8', timeout: 10000 });
+      
+      console.log(`[guardrails] Committed partial work for ${issue.identifier}`);
+      
+      await postComment(issue.id, null,
+        `⚠️ Run interrupted with partial work committed.\n` +
+        `Files: ${filesToStage.join(', ')}\n` +
+        `Status changed to in_review for review.`
+      );
+      
+      // Move to in_review for reviewer to check
+      await patchIssue(issue.id, { 
+        status: 'in_review',
+        assigneeAgentId: AGENTS.reviewer
+      });
+      
+      execSync('git checkout main || git checkout master', { cwd: workspace, encoding: 'utf8', timeout: 10000 });
+    } else {
+      // No relevant files to stage
+      await postComment(issue.id, null,
+        `⚠️ Run interrupted. No relevant code changes detected.`
+      );
+    }
+  } catch (err: any) {
+    console.log(`[guardrails] Failed to handle interrupted run: ${err.message}`);
+    await postComment(issue.id, null,
+      `⚠️ Run interrupted. Failed to commit partial work: ${err.message}`
+    );
+    try { execSync('git checkout main || git checkout master', { cwd: workspace, encoding: 'utf8', timeout: 10000 }); } catch {}
+  }
+}
+
+async function handleInterruptedReviewerRun(run: any): Promise<void> {
+  // Find the issue assigned to this reviewer
+  const issues = await findAssignedIssues(run.agentId);
+  if (issues.length === 0) return;
+  const issue = issues[0];
+  
+  // Reviewer interrupted - the code is already committed, just re-assign for review
+  console.log(`[guardrails] Reviewer run ${run.id.slice(0, 8)} interrupted - re-assigning for review`);
+  
+  await postComment(issue.id, null,
+    `⚠️ Review run interrupted. Re-assigning to reviewer for completion.`
+  );
+  
+  // Re-assign to reviewer
+  await patchIssue(issue.id, { 
+    assigneeAgentId: AGENTS.reviewer
+  });
+}
+
 interface ReviewResult {
   decision: 'approved' | 'rejected' | 'unknown';
   feedback: string;
@@ -426,6 +523,14 @@ export async function monitorCompletedBuilderRuns(): Promise<void> {
 
     for (const run of runs) {
       if (processedRuns.has(run.id)) continue;
+      
+      // Handle interrupted/cancelled runs
+      if (run.status === 'cancelled' || run.status === 'interrupted') {
+        processedRuns.add(run.id);
+        await handleInterruptedRun(run);
+        continue;
+      }
+      
       if (run.status !== 'succeeded' && run.status !== 'failed') continue;
       if (!BUILDER_AGENT_IDS.has(run.agentId)) continue;
 
@@ -588,6 +693,14 @@ export async function monitorCompletedReviewerRuns(): Promise<void> {
 
     for (const run of runs) {
       if (processedRuns.has(run.id)) continue;
+      
+      // Handle interrupted/cancelled runs
+      if (run.status === 'cancelled' || run.status === 'interrupted') {
+        processedRuns.add(run.id);
+        await handleInterruptedReviewerRun(run);
+        continue;
+      }
+      
       if (run.status !== 'succeeded' && run.status !== 'failed') continue;
       if (!REVIEWER_AGENT_IDS.has(run.agentId)) continue;
 
