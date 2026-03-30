@@ -24,17 +24,30 @@ This is a simplified version that focuses on native adapters with intelligent gu
 ## Architecture
 
 ```
-Goal → Epic Decoder → Local Builder → Reviewer → Epic Reviewer → PR → Done
-         (Direct CLI)    (Native)       (Native)     (Native)
+Goal → Epic Decoder → Local Builder → Reviewer → PR → Epic Reviewer → Done
+         (Direct CLI)    (Native)       (Native)    ↑        (Native)
+                               (PR created)   ↓
+                          (when all tickets have PRs)
 ```
 
-### Simplified Agent Flow
+### Agent Flow
 
 1. **Epic Decoder** - Decomposes goals into tickets (Direct CLI)
 2. **Local Builder / Scaffold Architect** - Writes code (Native adapter)
-3. **Reviewer** - Reviews per-ticket (Native adapter)
-4. **Epic Reviewer** - Reviews entire epic holistically (Native adapter)
-5. **PR Creation** - After approval
+3. **Reviewer** - Per-ticket review (Native adapter)
+4. **PR Created** - Immediately after Reviewer approves
+5. **Epic Reviewer** - Runs when ALL tickets have PRs, reconciles across the epic
+6. **Done** - After Epic Reviewer approval
+
+### Epic Reviewer (Reconciliation)
+
+Epic Reviewer reviews ALL PRs together to catch:
+- Cross-ticket issues (type mismatches, import conflicts)
+- Duplicate code across tickets
+- Architecture drift
+- Integration gaps
+
+This is why PRs are created immediately after per-ticket review — Epic Reviewer needs them to do reconciliation.
 
 ---
 

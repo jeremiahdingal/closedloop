@@ -229,13 +229,15 @@ Goal → Epic Decoder → (complexity >= 7) → Scaffold Architect
          Reviewer runs → outputs [STATE: approved/rejected]
                 ↓
          Guardrails parses:
-           - [approved] → stays in in_review
+           - [approved] → PR created immediately + stays in in_review
            - [rejected] → status = todo, assignee = Local Builder
                 ↓
-         Epic Reviewer (when all tickets in in_review)
+         Epic Reviewer (when ALL tickets have PRs - reconciliation)
                 ↓
-         PR creation → status = done
+          Approved → status = done
 ```
+
+**Key: PR created immediately after per-ticket review. Epic Reviewer runs AFTER to reconcile across all PRs.**
 
 ---
 
