@@ -81,6 +81,8 @@ const BUILD_FLOW_AGENT_IDS = new Set<string>([
 
 const stallRetriesByKey = new Map<string, number>();
 const escalatedByKey = new Set<string>();
+const rejectionCountByIssue = new Map<string, number>();
+const MAX_REVIEW_REJECTIONS = 3;
 
 interface PaperclipAgent {
   id: string;
@@ -776,8 +778,26 @@ export async function monitorCompletedReviewerRuns(): Promise<void> {
           `PR created - will be reviewed by Epic Reviewer.`
         );
       } else if (review.decision === 'rejected') {
+        // Check rejection count
+        const rejectionCount = (rejectionCountByIssue.get(issue.id) || 0) + 1;
+        
+        if (rejectionCount > MAX_REVIEW_REJECTIONS) {
+          // Too many rejections - escalate to human
+          console.log(`[guardrails] ${issue.identifier} rejected ${rejectionCount} times - escalating to human`);
+          
+          await postComment(issue.id, null,
+            `⚠️ ESCALATION - Issue rejected ${rejectionCount} times by reviewer.\n` +
+            `Latest feedback: ${review.feedback || 'No feedback provided'}\n` +
+            `This issue needs human attention.`
+          );
+          
+          rejectionCountByIssue.delete(issue.id);
+          continue;
+        }
+        
         // Rejected - return to todo for builder to fix
-        console.log(`[guardrails] Reviewer rejected ${issue.identifier} - returning to todo`);
+        rejectionCountByIssue.set(issue.id, rejectionCount);
+        console.log(`[guardrails] Reviewer rejected ${issue.identifier} (${rejectionCount}/${MAX_REVIEW_REJECTIONS}) - returning to todo`);
         
         await patchIssue(issue.id, { 
           status: 'todo',
@@ -785,7 +805,7 @@ export async function monitorCompletedReviewerRuns(): Promise<void> {
         });
         
         await postComment(issue.id, null,
-          `🔄 Review REJECTED - Returned to todo\n` +
+          `🔄 Review REJECTED (${rejectionCount}/${MAX_REVIEW_REJECTIONS}) - Returned to todo\n` +
           `Feedback: ${review.feedback || 'Please address review comments'}\n` +
           `Files needing work: ${review.files.join(', ') || 'N/A'}\n` +
           `Reassigned to Local Builder for fixes.`
