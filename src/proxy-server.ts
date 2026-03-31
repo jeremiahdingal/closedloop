@@ -67,6 +67,36 @@ const telemetryCounters = {
 };
 const LOCAL_BUILDER_CONTEXT_CHAR_LIMIT = 14000;
 
+const TOOL_SCHEMAS = `## Available Tools — EXACT parameter names required
+
+- read(filePath: string) → reads a file. Use filePath, NOT path.
+- write(filePath: string, content: string) → writes/creates a file.
+- edit(filePath: string, oldString: string, newString: string) → replaces text in a file.
+- bash(description: string, command: string) → runs a shell command. description is REQUIRED.
+- glob(pattern: string, path?: string) → finds files by pattern.
+- grep(pattern: string, path?: string) → searches file content.
+
+CRITICAL: Always include every required parameter. Missing params cause tool call failures.`;
+
+function buildInlinePrompt(instructionsContent: string): string {
+  return [
+    'You are a Local Builder agent. Your task is fully described below — no need to read any files first.',
+    '',
+    TOOL_SCHEMAS,
+    '',
+    '---',
+    instructionsContent.slice(0, 8000),
+    '---',
+    '',
+    'Implement the changes described above. Use write() or edit() to modify files.',
+    'Prefer editing existing files over creating new ones.',
+    'When done, output:',
+    '[STATE: done]',
+    '[SUMMARY: What was implemented]',
+    '[FILES: file1.ts, file2.ts]',
+  ].join('\n');
+}
+
 function buildStylingInstructionSentence(): string {
   const styling = getStylingPolicy();
   const parts: string[] = [`Use ${styling.framework} for styling.`];
@@ -265,16 +295,76 @@ async function wakeAgentForNextAssignedIssue(agentId: string, completedIssueId?:
         ``,
         `Process the assigned issue above. Read the workspace files directly.`,
         `Do not ask for pasted content — use the filesystem.`,
+        ``,
+        `## Output Format (REQUIRED)`,
+        ``,
+        `When done, output EXACTLY one of these state blocks:`,
+        ``,
+        `[STATE: done]`,
+        `[SUMMARY: What was implemented]`,
+        `[FILES: file1.ts, file2.ts]`,
+        ``,
+        `Or if blocked:`,
+        `[STATE: blocked]`,
+        `[REASON: Why blocked]`,
       ].join('\n');
       
+      // Extract and inject target file content
+      let fileContext = '';
+      const desc = String(nextIssue.description || '');
+      const filesMatch = desc.match(/\*\*Files:\*\*\s*(.+)/);
+      if (filesMatch) {
+        const filePaths = filesMatch[1].split(',').map((f: string) => f.trim()).filter(Boolean);
+        if (filePaths.length > 0) {
+          fileContext = '\n\n## Current File Contents\n\nThese are the files you need to modify. Output the COMPLETE modified file content.\n\n';
+          for (const filePath of filePaths) {
+            const fullPath = path.join(workspace, filePath);
+            try {
+              if (fs.existsSync(fullPath)) {
+                const content = fs.readFileSync(fullPath, 'utf8');
+                const truncated = content.length > 4000 ? content.slice(0, 4000) + '\n... (truncated)' : content;
+                fileContext += `### ${filePath}\n\`\`\`tsx\n${truncated}\n\`\`\`\n\n`;
+              } else {
+                fileContext += `### ${filePath}\n*(File does not exist yet - create it)*\n\n`;
+              }
+            } catch {
+              fileContext += `### ${filePath}\n*(Could not read file)*\n\n`;
+            }
+          }
+        }
+      }
+
       // Detect and inject drift warnings
       const driftIssues = await detectDriftIssues();
       let driftWarning = '';
       if (driftIssues.length > 0) {
-        driftWarning = `\n\n## ⚠️ EXISTING DRIFT ISSUES\n\n` + formatDriftReport(driftIssues) + 
+        driftWarning = `\n\n## ⚠️ EXISTING DRIFT ISSUES\n\n` + formatDriftReport(driftIssues) +
           `\nDO NOT create files that add to these drift issues.`;
       }
-      fs.writeFileSync(path.join(workspace, 'INSTRUCTIONS.md'), instructionsContent + driftWarning, 'utf8');
+      const fullInstructions = instructionsContent + fileContext + driftWarning;
+      // Use agent-scoped filename to prevent conflicts in multi-ticket epics
+      const agentFileName = `INSTRUCTIONS.${agentId}.md`;
+      fs.writeFileSync(path.join(workspace, agentFileName), fullInstructions, 'utf8');
+      console.log(`[wakeup] Wrote ${agentFileName} for agent ${agentName}`);
+
+      // Inject instructions directly into the agent's promptTemplate so the model
+      // never needs to read any file - it gets full context on first message.
+      // Include full adapterConfig to avoid wiping model/cwd/timeoutSec on PATCH.
+      try {
+        const agentRes = await fetch(`${PAPERCLIP_API}/api/agents/${agentId}`);
+        const agentData = agentRes.ok ? await agentRes.json() : {};
+        const existingConfig = agentData.adapterConfig || {};
+        await fetch(`${PAPERCLIP_API}/api/agents/${agentId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            adapterConfig: {
+              ...existingConfig,
+              promptTemplate: buildInlinePrompt(fullInstructions),
+            },
+          }),
+        });
+      } catch { /* best-effort */ }
     } catch {}
 
     const wakeRes = await fetch(`${PAPERCLIP_API}/api/agents/${agentId}/wakeup`, {
@@ -1453,7 +1543,7 @@ export async function checkAssignedIssues(): Promise<void> {
     const issues = Array.isArray(data) ? data : data.issues || data.data || [];
 
     const assignedIssues = issues.filter(
-      (i: any) => (i.status === 'todo' || i.status === 'in_progress') && i.assigneeAgentId
+      (i: any) => (i.status === 'todo' || i.status === 'in_progress' || i.status === 'in_review') && i.assigneeAgentId
     );
 
     // Group issues by agent — one wakeup per agent, not per issue
@@ -1514,6 +1604,27 @@ export async function checkAssignedIssues(): Promise<void> {
           await writeIssueContext(primaryIssue.id);
           
           const allAgentIssues = assignedIssues.filter((i: any) => i.assigneeAgentId === agentId);
+
+          // Fetch reviewer feedback for each issue (latest rejection comments)
+          const reviewerFeedback = new Map<string, string>();
+          for (const issue of allAgentIssues) {
+            try {
+              const commentsRes = await fetch(`${PAPERCLIP_API}/api/issues/${issue.id}/comments`);
+              if (commentsRes.ok) {
+                const comments: any[] = await commentsRes.json();
+                const rejectionComments = comments
+                  .filter((c: any) => {
+                    const body = String(c.body || '').toLowerCase();
+                    return body.includes('rejected') || body.includes('review') || body.includes('?') || body.includes('??');
+                  })
+                  .slice(-2);
+                if (rejectionComments.length > 0) {
+                  reviewerFeedback.set(issue.id, rejectionComments.map((c: any) => c.body).join('\n\n'));
+                }
+              }
+            } catch { /* ignore */ }
+          }
+
           const instructionsContent = [
             `# Agent Instructions`,
             ``,
@@ -1533,25 +1644,109 @@ export async function checkAssignedIssues(): Promise<void> {
               String(i.description || '(no description)').trim().slice(0, 2000),
               ``,
             ]).flat(),
+            ...allAgentIssues.flatMap((i: any) => {
+              const feedback = reviewerFeedback.get(i.id);
+              if (!feedback) return [];
+              return [
+                `### ?? Reviewer Feedback for ${i.identifier || i.id.slice(0, 8)}`,
+                ``,
+                `The reviewer previously rejected this ticket. Address these issues:`,
+                ``,
+                `\`\`\``,
+                feedback,
+                `\`\`\``,
+                ``,
+              ];
+            }),
             `## Instructions`,
             ``,
             `Process each assigned issue above. Read the workspace files directly.`,
             `Do not ask for pasted content — use the filesystem.`,
+            ``,
+            `## Output Format (REQUIRED)`,
+            ``,
+            `When done, output EXACTLY one of these state blocks:`,
+            ``,
+            `[STATE: done]`,
+            `[SUMMARY: What was implemented]`,
+            `[FILES: file1.ts, file2.ts]`,
+            ``,
+            `Or if blocked:`,
+            `[STATE: blocked]`,
+            `[REASON: Why blocked]`,
+            ``,
+            `Or if returning to backlog:`,
+            `[STATE: todo]`,
+            `[REASON: Why not complete]`,
           ].join('\n');
 
           try {
             const workspace = getWorkspace();
-            
+
+            // Extract file paths mentioned in issue descriptions and inject their content
+            let fileContext = '';
+            const mentionedFiles = new Set<string>();
+            for (const issue of allAgentIssues) {
+              const desc = String(issue.description || '');
+              // Match **Files:** lines and extract paths
+              const filesMatch = desc.match(/\*\*Files:\*\*\s*(.+)/);
+              if (filesMatch) {
+                const filePaths = filesMatch[1].split(',').map((f: string) => f.trim()).filter(Boolean);
+                filePaths.forEach((f: string) => mentionedFiles.add(f));
+              }
+            }
+
+            if (mentionedFiles.size > 0) {
+              fileContext = '\n\n## Current File Contents\n\n';
+              fileContext += 'These are the files you need to modify. Output the COMPLETE modified file content.\n\n';
+              for (const filePath of mentionedFiles) {
+                const fullPath = path.join(workspace, filePath);
+                try {
+                  if (fs.existsSync(fullPath)) {
+                    const content = fs.readFileSync(fullPath, 'utf8');
+                    // Limit to 4000 chars per file to avoid blowing up context
+                    const truncated = content.length > 4000 ? content.slice(0, 4000) + '\n... (truncated)' : content;
+                    fileContext += `### ${filePath}\n\`\`\`tsx\n${truncated}\n\`\`\`\n\n`;
+                  } else {
+                    fileContext += `### ${filePath}\n*(File does not exist yet - create it)*\n\n`;
+                  }
+                } catch {
+                  fileContext += `### ${filePath}\n*(Could not read file)*\n\n`;
+                }
+              }
+            }
+
             // Detect and inject drift warnings
             const driftIssues = await detectDriftIssues();
             let driftWarning = '';
             if (driftIssues.length > 0) {
-              driftWarning = `\n\n## ⚠️ EXISTING DRIFT ISSUES\n\n` + formatDriftReport(driftIssues) + 
+              driftWarning = `\n\n## ⚠️ EXISTING DRIFT ISSUES\n\n` + formatDriftReport(driftIssues) +
                 `\nDO NOT create files that add to these drift issues.`;
             }
-            
-            fs.writeFileSync(path.join(workspace, 'INSTRUCTIONS.md'), instructionsContent + driftWarning, 'utf8');
-            console.log(`[closedloop] Wrote INSTRUCTIONS.md for ${agentName} (${allAgentIssues.length} issues)${driftIssues.length > 0 ? `, ${driftIssues.length} drift issues` : ''}`);
+
+            const fullInstructions = instructionsContent + fileContext + driftWarning;
+            // Use agent-scoped filename to prevent conflicts in multi-ticket epics
+            const agentFileName = `INSTRUCTIONS.${agentId}.md`;
+            fs.writeFileSync(path.join(workspace, agentFileName), fullInstructions, 'utf8');
+            console.log(`[closedloop] Wrote ${agentFileName} for ${agentName} (${allAgentIssues.length} issues, ${mentionedFiles.size} file contexts)${driftIssues.length > 0 ? `, ${driftIssues.length} drift issues` : ''}`);
+
+            // Inject instructions directly into promptTemplate - model gets full context without needing to read files.
+            // Fetch existing config first to avoid wiping model/cwd/timeoutSec on PATCH.
+            try {
+              const agentRes = await fetch(`${PAPERCLIP_API}/api/agents/${agentId}`);
+              const agentData = agentRes.ok ? await agentRes.json() : {};
+              const existingConfig = agentData.adapterConfig || {};
+              await fetch(`${PAPERCLIP_API}/api/agents/${agentId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  adapterConfig: {
+                    ...existingConfig,
+                    promptTemplate: buildInlinePrompt(fullInstructions),
+                  },
+                }),
+              });
+            } catch { /* best-effort */ }
           } catch (err: any) {
             console.log(`[closedloop] Failed to write INSTRUCTIONS.md: ${err.message}`);
           }
